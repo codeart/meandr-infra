@@ -1,0 +1,17 @@
+# Terraform local state — bootstrap/ uses local state, everything else uses S3 backend.
+# We intentionally do NOT commit bootstrap's state file. It lives on the human's
+# laptop who ran the bootstrap (typically alex's). Loss of this file is recoverable
+# (terraform import on the existing resources), just inconvenient.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl.bak
+
+# tfvars containing secrets or env-specific values that shouldn't be committed
+*.auto.tfvars
+terraform.tfvars
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
