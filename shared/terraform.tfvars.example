@@ -1,0 +1,14 @@
+# Copy this to `terraform.tfvars` (gitignored) and fill in.
+#
+# Only one value is mandatory: github_org. Everything else has sensible defaults.
+
+# GitHub organization or user that owns the meandr repos.
+# Used to scope OIDC trust: CI in `<github_org>/<repo>` can assume the
+# ECR push role.
+github_org = "codeart"
+
+# Optional: override the default repo list if your repos are named differently.
+# image_pusher_repos = ["meandr-mcp", "meandr-api"]
+
+# Optional: override ECR repos if you need a different set.
+# ecr_repos = ["meandr-mcp", "meandr-api"]
