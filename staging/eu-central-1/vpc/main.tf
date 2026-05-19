@@ -18,10 +18,13 @@ resource "null_resource" "account_guard" {
 module "vpc" {
   source = "../../../modules/vpc"
 
+  # Different /16 from production to keep VPC-peering safe in the future.
   cidr_block = "10.10.0.0/16"
-  azs        = ["eu-central-1a"] # single AZ for cost-sensitive staging; HA comes later if needed
 
-  enable_nat        = true # staging has running workloads → NAT for egress / ECR pulls from private subnet
+  # Two AZs
+  azs = ["eu-central-1a", "eu-central-1b"]
+
+  enable_nat        = true
   internal_dns_zone = "staging.meandr.local"
 
   tags = {
@@ -33,10 +36,10 @@ module "vpc" {
 
 # --- Outputs (passthrough so downstream modules in this dir tree can read state) ---
 
-output "vpc_id"               { value = module.vpc.vpc_id }
-output "vpc_cidr_block"       { value = module.vpc.vpc_cidr_block }
-output "public_subnet_ids"    { value = module.vpc.public_subnet_ids }
-output "private_subnet_ids"   { value = module.vpc.private_subnet_ids }
-output "internal_dns_zone_id" { value = module.vpc.internal_dns_zone_id }
+output "vpc_id"                 { value = module.vpc.vpc_id }
+output "vpc_cidr_block"         { value = module.vpc.vpc_cidr_block }
+output "public_subnet_ids"      { value = module.vpc.public_subnet_ids }
+output "private_subnet_ids"     { value = module.vpc.private_subnet_ids }
+output "internal_dns_zone_id"   { value = module.vpc.internal_dns_zone_id }
 output "internal_dns_zone_name" { value = module.vpc.internal_dns_zone_name }
-output "azs"                  { value = module.vpc.azs }
+output "azs"                    { value = module.vpc.azs }

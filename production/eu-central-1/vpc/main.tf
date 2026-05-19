@@ -21,15 +21,10 @@ module "vpc" {
   # Different /16 from staging to keep VPC-peering safe in the future.
   cidr_block = "10.20.0.0/16"
 
-  # Two AZs for production — one replica is enough to validate cross-AZ
-  # behavior + survive a single-AZ outage. More AZs later if traffic warrants.
+  # Two AZs
   azs = ["eu-central-1a", "eu-central-1b"]
 
-  # NAT Gateway disabled for now. Production has no workloads yet → no need
-  # for egress → no point paying ~$32/month. Flip this to `true` when we're
-  # ready to deploy real services in production. VPC itself costs $0 until then.
-  enable_nat = false
-
+  enable_nat        = false # disabled for now
   internal_dns_zone = "production.meandr.local"
 
   tags = {
