@@ -18,6 +18,13 @@ data "aws_caller_identity" "current" {}
 
 locals {
   shared_account_id = "303529433558"
+
+  # Display names for ECR repos (the Name tag, shown in the AWS console).
+  # Repo names themselves stay as canonical service identifiers.
+  ecr_display_names = {
+    "meandr-mcp" = "MCP Proxy Image"
+    "meandr-api" = "API Image"
+  }
 }
 
 resource "null_resource" "account_guard" {

@@ -11,7 +11,10 @@ resource "aws_ecr_repository" "service" {
 
   name                 = each.key
   image_tag_mutability = "MUTABLE" # allow re-pushing :latest during dev; CI uses immutable SHAs for prod
-  tags                 = merge(var.tags, { "meandr:service" = each.key })
+  tags = merge(var.tags, {
+    "meandr:service" = each.key
+    Name             = local.ecr_display_names[each.key]
+  })
 
   image_scanning_configuration {
     scan_on_push = true

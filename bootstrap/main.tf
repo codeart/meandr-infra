@@ -34,7 +34,9 @@ resource "aws_kms_key" "tfstate" {
   description             = "Encrypts Terraform state at rest in S3 + DynamoDB"
   deletion_window_in_days = 30
   enable_key_rotation     = true
-  tags                    = var.tags
+  tags = merge(var.tags, {
+    Name = "Terraform State KMS"
+  })
 }
 
 resource "aws_kms_alias" "tfstate" {
@@ -45,7 +47,9 @@ resource "aws_kms_alias" "tfstate" {
 # --- Access-log bucket. State bucket logs land here for audit.
 resource "aws_s3_bucket" "logs" {
   bucket = var.log_bucket_name
-  tags   = var.tags
+  tags = merge(var.tags, {
+    Name = "Terraform State Access Logs"
+  })
 }
 
 resource "aws_s3_bucket_ownership_controls" "logs" {
@@ -94,7 +98,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "logs" {
 # --- Terraform state bucket.
 resource "aws_s3_bucket" "tfstate" {
   bucket = var.state_bucket_name
-  tags   = var.tags
+  tags = merge(var.tags, {
+    Name = "Terraform State"
+  })
 
   # Prevent accidental destruction. Removing this requires a deliberate
   # `terraform state rm` first.
@@ -164,5 +170,7 @@ resource "aws_dynamodb_table" "tfstate_locks" {
     enabled = true
   }
 
-  tags = var.tags
+  tags = merge(var.tags, {
+    Name = "Terraform State Locks"
+  })
 }

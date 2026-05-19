@@ -7,7 +7,9 @@ resource "aws_iam_openid_connect_provider" "github" {
     "1c58a3a8518e8759bf075b76b750d4f2df264fcd",
   ]
 
-  tags = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions OIDC"
+  })
 }
 
 # --- Trust policy subs ----------------------------------------------------
@@ -34,7 +36,9 @@ locals {
 
 resource "aws_iam_role" "gh_actions_deploy" {
   name = "gh-actions-deploy"
-  tags = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions Deploy"
+  })
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -123,7 +127,9 @@ resource "aws_iam_policy" "ecs_deploy" {
   name        = "gh-actions-deploy"
   description = "ECS service deploys from GitHub Actions (image promotion + rollout)"
   policy      = data.aws_iam_policy_document.ecs_deploy.json
-  tags        = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions Deploy Policy"
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_deploy" {

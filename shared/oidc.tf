@@ -21,7 +21,9 @@ resource "aws_iam_openid_connect_provider" "github" {
     "1c58a3a8518e8759bf075b76b750d4f2df264fcd",
   ]
 
-  tags = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions OIDC"
+  })
 }
 
 # --- Trust policy subs -----------------------------------------------------
@@ -43,7 +45,9 @@ locals {
 
 resource "aws_iam_role" "gh_actions_ecr_push" {
   name = "gh-actions-ecr-push"
-  tags = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push"
+  })
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -95,7 +99,9 @@ resource "aws_iam_policy" "ecr_push" {
   name        = "gh-actions-ecr-push"
   description = "Push container images to meandr ECR repos"
   policy      = data.aws_iam_policy_document.ecr_push.json
-  tags        = var.tags
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push Policy"
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "ecr_push" {
