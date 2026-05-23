@@ -15,12 +15,17 @@ module "account_bootstrap" {
   github_org = var.github_org
 
   # Staging trusts develop + main from image-pushing repos.
-  # No GH-environment gating — staging deploys are auto on push.
+  # `staging` GH Environment is also trusted — workflow jobs use it to scope
+  # secrets/vars and (optionally) add reviewer gates. When a job sets
+  # `environment: staging`, GitHub OIDC sends an environment-based subject
+  # claim instead of a ref-based one; both forms must be in the allow list.
   allowed_refs = [
     "refs/heads/main",
     "refs/heads/develop",
   ]
-  allowed_gh_environments = []
+  allowed_gh_environments = [
+    "staging",
+  ]
 
   tags = {
     "meandr:env"        = "staging"
