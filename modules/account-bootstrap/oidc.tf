@@ -97,6 +97,29 @@ data "aws_iam_policy_document" "ecs_deploy" {
     ]
   }
 
+  # Run one-off tasks (migrations, seeds). Scoped to meandr-prefixed
+  # task-definition families AND meandr-prefixed clusters via the
+  # ecs:cluster condition key — prevents the role from launching one-off
+  # tasks in any other cluster that lands in this account.
+  statement {
+    sid    = "RunOneOffTasks"
+    effect = "Allow"
+    actions = [
+      "ecs:RunTask",
+      "ecs:StopTask",
+    ]
+    resources = [
+      "arn:aws:ecs:*:${var.account_id}:task-definition/${var.ecs_cluster_name_prefix}*:*",
+    ]
+    condition {
+      test     = "ArnLike"
+      variable = "ecs:cluster"
+      values = [
+        "arn:aws:ecs:*:${var.account_id}:cluster/${var.ecs_cluster_name_prefix}*",
+      ]
+    }
+  }
+
   # iam:PassRole — required for task-definition registration. Scoped to
   # meandr-prefixed roles (task execution role + task role), so this role
   # can't be used to escalate by passing arbitrary roles.
