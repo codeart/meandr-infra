@@ -78,6 +78,13 @@ locals {
   app_secrets = {
     MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
     SECRET_KEY_BASE     = aws_secretsmanager_secret.secret_key_base.arn
+
+    MEANDR_ENC_PRIMARY_KEY         = "${aws_secretsmanager_secret.encryption.arn}:primary_key::"
+    MEANDR_ENC_DETERMINISTIC_KEY   = "${aws_secretsmanager_secret.encryption.arn}:deterministic_key::"
+    MEANDR_ENC_KEY_DERIVATION_SALT = "${aws_secretsmanager_secret.encryption.arn}:key_derivation_salt::"
+
+    MEANDR_OPS_USER     = "${aws_secretsmanager_secret.ops.arn}:user::"
+    MEANDR_OPS_PASSWORD = "${aws_secretsmanager_secret.ops.arn}:password::"
   }
 }
 
@@ -239,6 +246,8 @@ resource "aws_iam_role_policy" "execution_secrets" {
       Resource = [
         module.rds.secret_arn,
         aws_secretsmanager_secret.secret_key_base.arn,
+        aws_secretsmanager_secret.encryption.arn,
+        aws_secretsmanager_secret.ops.arn,
       ]
     }]
   })
@@ -344,6 +353,79 @@ resource "aws_secretsmanager_secret" "secret_key_base" {
 resource "aws_secretsmanager_secret_version" "secret_key_base" {
   secret_id     = aws_secretsmanager_secret.secret_key_base.id
   secret_string = random_password.secret_key_base.result
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# --- Active Record encryption keys --------------------------------------
+#
+# Rails 7+ `bin/rails db:encryption:init` generates three hex strings
+# (16 bytes each). We replicate that with `random_id.hex`. Stored as one
+# JSON secret with three keys so the ARN list stays compact.
+#
+# Rotating ANY of these invalidates all encrypted records — hence
+# ignore_changes on the secret version. For production, generate values
+# with `bin/rails db:encryption:init` and `put-secret-value` directly;
+# Terraform won't overwrite.
+
+resource "random_id" "enc_primary_key" {
+  byte_length = 16
+}
+
+resource "random_id" "enc_deterministic_key" {
+  byte_length = 16
+}
+
+resource "random_id" "enc_key_derivation_salt" {
+  byte_length = 16
+}
+
+resource "aws_secretsmanager_secret" "encryption" {
+  name        = "meandr/api/${var.env}/encryption"
+  description = "Active Record encryption keys (primary, deterministic, salt). Rotation invalidates encrypted data."
+
+  tags = merge(local.base_tags, { Name = "meandr-api encryption keys" })
+}
+
+resource "aws_secretsmanager_secret_version" "encryption" {
+  secret_id = aws_secretsmanager_secret.encryption.id
+  secret_string = jsonencode({
+    primary_key         = random_id.enc_primary_key.hex
+    deterministic_key   = random_id.enc_deterministic_key.hex
+    key_derivation_salt = random_id.enc_key_derivation_salt.hex
+  })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# --- Ops dashboards basic-auth ------------------------------------------
+#
+# HTTP basic auth credentials for Sidekiq::Web and GoodJob::Engine mounts
+# (per Rails-side `config/initializers/ops_dashboards.rb`). Single secret
+# with user + password JSON keys.
+
+resource "random_password" "ops_password" {
+  length  = 32
+  special = false # avoid URL/header-quoting surprises in basic auth
+}
+
+resource "aws_secretsmanager_secret" "ops" {
+  name        = "meandr/api/${var.env}/ops"
+  description = "HTTP basic-auth credentials for the ops dashboards (Sidekiq::Web, GoodJob::Engine)."
+
+  tags = merge(local.base_tags, { Name = "meandr-api ops basic auth" })
+}
+
+resource "aws_secretsmanager_secret_version" "ops" {
+  secret_id = aws_secretsmanager_secret.ops.id
+  secret_string = jsonencode({
+    user     = "ops"
+    password = random_password.ops_password.result
+  })
 
   lifecycle {
     ignore_changes = [secret_string]
