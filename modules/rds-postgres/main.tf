@@ -20,8 +20,9 @@
 resource "random_password" "master" {
   length  = 32
   special = true
-  # exclude characters that need shell-escaping in connection strings
-  override_special = "_!@#-=+"
+  # RDS disallows `/`, `@`, `"`, ` `. We also drop `!` and `#` (shell-quoting
+  # surprises in connection strings even though RDS itself allows them).
+  override_special = "_-=+"
 }
 
 resource "aws_secretsmanager_secret" "master" {
