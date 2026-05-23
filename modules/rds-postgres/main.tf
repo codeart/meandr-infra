@@ -43,6 +43,13 @@ resource "aws_secretsmanager_secret_version" "master" {
     host     = aws_db_instance.main.address
     port     = aws_db_instance.main.port
     dbname   = var.db_name
+
+    # Pre-assembled connection URL — apps can inject this directly via
+    # ECS task `secrets` instead of composing from parts. Uses the internal
+    # CNAME (`pg.<env>.meandr.local`) so the URL survives RDS instance
+    # replacements. `sslmode=require` opportunistically encrypts the
+    # in-VPC link; defense in depth at no cost.
+    url = "postgres://${var.master_username}:${urlencode(random_password.master.result)}@pg.${var.internal_dns_zone_name}:${aws_db_instance.main.port}/${var.db_name}?sslmode=require"
   })
 }
 

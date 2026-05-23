@@ -50,10 +50,16 @@ locals {
   # Shared container env. Every service / task uses the same set; the Rails
   # CMD chooses what to read.
   #
-  # REDIS_READER_URL — `rediss://` (TLS) — reader is GD-replicated, always TLS-on.
-  # REDIS_WRITER_URL — `rediss://` (TLS) — writer is per-region; only present
-  #   when meandr-mcp is deployed in this region. Until then the env var is
-  #   omitted and BE must tolerate its absence.
+  # Convention: app-internal env vars are prefixed `MEANDR_` so they never
+  # collide with what gems / libraries read. The exceptions are:
+  #   - RAILS_ENV / RAILS_*    — Rails reads these by name
+  #   - AWS_REGION             — AWS SDK reads this by name
+  #   - SECRET_KEY_BASE        — Rails reads this by name; injected as secret
+  #
+  # MEANDR_REDIS_READER_URL — `rediss://` (TLS) — reader is GD-replicated.
+  # MEANDR_REDIS_WRITER_URL — `rediss://` (TLS) — writer is per-region; only
+  #   present when meandr-mcp is deployed in this region. Until then the env
+  #   var is omitted and BE must tolerate its absence.
   app_environment = merge({
     RAILS_ENV                = var.env
     MEANDR_ENV               = local.meandr_env
@@ -61,19 +67,17 @@ locals {
     RAILS_LOG_TO_STDOUT      = "true"
     RAILS_SERVE_STATIC_FILES = "true"
 
-    DATABASE_HOST = "pg.${var.internal_dns_zone_name}"
-    DATABASE_PORT = "5432"
-    DATABASE_NAME = local.db_name
-
-    REDIS_READER_URL = "rediss://${var.reader_internal_dns_name}:6379"
+    MEANDR_REDIS_READER_URL = "rediss://${var.reader_internal_dns_name}:6379"
     }, var.writer_internal_dns_name != null ? {
-    REDIS_WRITER_URL = "rediss://${var.writer_internal_dns_name}:6379"
+    MEANDR_REDIS_WRITER_URL = "rediss://${var.writer_internal_dns_name}:6379"
   } : {})
 
+  # MEANDR_DATABASE_URL — pre-assembled connection string from the master
+  # credential secret (see rds-postgres module). Hostname is the internal
+  # CNAME, not the RDS endpoint, so it survives instance replacements.
   app_secrets = {
-    DATABASE_USERNAME = "${module.rds.secret_arn}:username::"
-    DATABASE_PASSWORD = "${module.rds.secret_arn}:password::"
-    SECRET_KEY_BASE   = aws_secretsmanager_secret.secret_key_base.arn
+    MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
+    SECRET_KEY_BASE     = aws_secretsmanager_secret.secret_key_base.arn
   }
 }
 
