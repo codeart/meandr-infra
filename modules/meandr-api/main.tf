@@ -62,10 +62,15 @@ locals {
   #   var is omitted and BE must tolerate its absence.
   app_environment = merge({
     RAILS_ENV                = var.env
-    MEANDR_ENV               = local.meandr_env
-    AWS_REGION               = local.region
+    RAILS_LOG_LEVEL          = var.log_level
     RAILS_LOG_TO_STDOUT      = "true"
     RAILS_SERVE_STATIC_FILES = "true"
+
+    MEANDR_ENV          = local.meandr_env
+    MEANDR_APP_HOST     = var.hostname        # API's own public hostname; used in absolute URLs
+    MEANDR_FRONTEND_URL = var.frontend_url    # dashboard origin (Heroku) — for CORS + mailer links
+
+    AWS_REGION = local.region
 
     MEANDR_REDIS_READER_URL = "rediss://${var.reader_internal_dns_name}:6379"
     }, var.writer_internal_dns_name != null ? {

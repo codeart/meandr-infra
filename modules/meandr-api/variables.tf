@@ -194,6 +194,18 @@ variable "jobs" {
   }
 }
 
+variable "frontend_url" {
+  description = "Public URL of the dashboard SPA (where the React app lives — Heroku, etc.). Used by Rails for absolute-URL emission in mailers / OAuth callbacks / CORS allowlist."
+  type        = string
+  default     = "https://console.meandr.com"
+}
+
+variable "log_level" {
+  description = "Rails log level. `info` for staging + production; `debug` only for active triage."
+  type        = string
+  default     = "info"
+}
+
 variable "migrate" {
   description = "CPU/memory for the one-off migrate task. Bigger than runtime services — schema loads can be heavy."
   type = object({
