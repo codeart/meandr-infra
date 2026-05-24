@@ -144,6 +144,26 @@ data "aws_iam_policy_document" "ecs_deploy" {
     actions = ["ecr:GetAuthorizationToken", "ecr:DescribeImages", "ecr:BatchGetImage"]
     resources = ["*"]
   }
+
+  # Read CloudWatch Logs for meandr-prefixed log groups. Lets CI surface
+  # migration logs in the GH Actions console when a one-off task fails
+  # (or succeeds, when debugging). Scoped to /aws/ecs/meandr-* so we can't
+  # poke at unrelated log groups that may land in the account later.
+  statement {
+    sid     = "ReadMeandrLogs"
+    effect  = "Allow"
+    actions = [
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams",
+      "logs:FilterLogEvents",
+      "logs:GetLogEvents",
+    ]
+    resources = [
+      "arn:aws:logs:*:${var.account_id}:log-group:/aws/ecs/${var.ecs_cluster_name_prefix}*",
+      "arn:aws:logs:*:${var.account_id}:log-group:/aws/ecs/${var.ecs_cluster_name_prefix}*:*",
+      "arn:aws:logs:*:${var.account_id}:log-group:/aws/ecs/${var.ecs_cluster_name_prefix}*:log-stream:*",
+    ]
+  }
 }
 
 resource "aws_iam_policy" "ecs_deploy" {
