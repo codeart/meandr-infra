@@ -7,12 +7,12 @@
 #   - Migration back to Redis OSS is mechanical via snapshot restore — see
 #     docs/deployment_strategy.md for the conversion path
 #
-# Two operating modes via `role`:
-#   - reader: TLS in-transit ON (Global Datastore prerequisite), regional cache
-#     of config records served to the proxy. Production will eventually upgrade
-#     to GD-eligible node family (R/M series) and replicate cross-region.
-#   - writer: TLS off (single-region, no GD), source of truth for writes coming
-#     from meandr-api. Streams invalidations on `inv` to the reader replicas.
+# This module creates the cluster + SG + subnet group only. DNS records
+# are caller-owned — each consumer app should have its own prefix
+# (mcp-redis-in/out for the proxy, be-redis-in/out for BE) pointing at
+# the cluster's exposed `reader_endpoint_address` / `primary_endpoint_address`.
+# Direction (-in/-out) is named from the consumer's perspective: -in is
+# "data flowing into me" (read), -out is "data flowing out of me" (write).
 #
 # AUTH tokens are NOT used. SG + private-subnet placement is the trust boundary.
 # This matches deployment_strategy.md §6: "in-VPC isolation is the trust model;
@@ -24,7 +24,7 @@
 resource "aws_elasticache_subnet_group" "main" {
   name       = var.name
   subnet_ids = var.private_subnet_ids
-  description = "Subnets for ${var.name} (${var.role})"
+  description = "Subnets for ${var.name}"
 
   tags = merge(var.tags, {
     Name = "${var.name} subnets"
@@ -33,12 +33,21 @@ resource "aws_elasticache_subnet_group" "main" {
 
 resource "aws_security_group" "main" {
   name        = "${var.name}-cache"
-  description = "Valkey access for ${var.name} (${var.role})"
+  description = "Valkey access for ${var.name}"
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
     Name = "${var.name} cache SG"
   })
+
+  # AWS marks aws_security_group.description as ForceNew, so any tweak
+  # to the description string (e.g. dropping the old `(reader)` suffix
+  # during the in/out rename) would replace the SG — which in turn
+  # forces the cluster to swap its SG attachment. Description is purely
+  # cosmetic console metadata; ignore changes to avoid that churn.
+  lifecycle {
+    ignore_changes = [description]
+  }
 }
 
 resource "aws_security_group_rule" "ingress_vpc" {
@@ -92,16 +101,8 @@ resource "aws_elasticache_replication_group" "main" {
   apply_immediately          = true
 
   tags = merge(var.tags, {
-    Name = "${var.name} ${var.role}"
+    Name = var.name
   })
 }
 
-# --- Internal DNS --------------------------------------------------------
-
-resource "aws_route53_record" "primary" {
-  zone_id = var.internal_dns_zone_id
-  name    = "redis-${var.role}.${var.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [aws_elasticache_replication_group.main.primary_endpoint_address]
-}
+# DNS is caller-owned — no Route53 resources here. See file header.

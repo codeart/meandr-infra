@@ -18,6 +18,7 @@ provider "aws" {
 
 locals {
   env        = "production"
+  region     = "us-east-1"
   account_id = "393686273464"
 
   tags = {
@@ -38,20 +39,25 @@ module "vpc" {
   tags = local.tags
 }
 
-# --- Reader Valkey -----------------------------------------------------
+# --- Config-plane Valkey -----------------------------------------------
 #
-# GD-eligible node family (r-series) so we can attach secondaries later without
-# rebuild. Multi-AZ replication with auto failover. TLS-on (required for GD).
+# GD-eligible node family (r-series) so we can attach secondaries later
+# without rebuild. Multi-AZ replication with auto failover. TLS-on
+# (required for GD). When the second proxy region comes online, this
+# becomes the GD primary; secondaries reference its global RG ID via
+# remote state. For now, standalone.
 #
-# When the second proxy region comes online, this becomes the GD primary;
-# secondaries reference its global RG ID via remote state. For now, standalone.
+# Two DNS records (created by the module):
+#   mcp-redis-in.<region>.production.meandr.local  → reader endpoint
+#   mcp-redis-out.production.meandr.local          → primary endpoint
 
-module "reader" {
+module "config_valkey" {
   source = "../../modules/elasticache-valkey"
 
+  # Keep AWS replication_group_id at "meandr-reader" to avoid a destroy
+  # on rename. The customer-visible naming is in the DNS records below.
   name        = "meandr-reader"
-  description = "Reader Valkey production - proxy reads config, BE writes config"
-  role        = "reader"
+  description = "Config Valkey production - BE writes config, proxy reads config"
 
   engine_version = "8.1"
   node_type      = "cache.r7g.large"
@@ -65,13 +71,55 @@ module "reader" {
 
   snapshot_retention_days = 7
 
-  vpc_id                 = module.vpc.vpc_id
-  vpc_cidr_block         = module.vpc.vpc_cidr_block
-  private_subnet_ids     = module.vpc.private_subnet_ids
-  internal_dns_zone_id   = module.vpc.internal_dns_zone_id
-  internal_dns_zone_name = module.vpc.internal_dns_zone_name
+  vpc_id             = module.vpc.vpc_id
+  vpc_cidr_block     = module.vpc.vpc_cidr_block
+  private_subnet_ids = module.vpc.private_subnet_ids
 
-  tags = merge(local.tags, { "meandr:role" = "reader" })
+  tags = merge(local.tags, { "meandr:plane" = "config" })
+}
+
+# Local-module rename in state. The underlying AWS resource ID is
+# unchanged (still "meandr-reader") so no resource churn.
+moved {
+  from = module.reader
+  to   = module.config_valkey
+}
+
+# --- Config-plane DNS --------------------------------------------------
+#
+# Each consumer app gets its own prefix. See the staging caller for the
+# rationale; same pattern here.
+
+resource "aws_route53_record" "mcp_redis_in" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "mcp-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.reader_endpoint_address]
+}
+
+resource "aws_route53_record" "mcp_redis_out" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "mcp-redis-out.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.primary_endpoint_address]
+}
+
+resource "aws_route53_record" "be_redis_in" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "be-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.reader_endpoint_address]
+}
+
+resource "aws_route53_record" "be_redis_out" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "be-redis-out.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.primary_endpoint_address]
 }
 
 # --- meandr-api --------------------------------------------------------
@@ -97,9 +145,9 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  reader_internal_dns_name = module.reader.internal_dns_name
-  reader_security_group_id = module.reader.security_group_id
-  # writer_internal_dns_name wired in from module.mcp once mcp is uncommented.
+  reader_internal_dns_name = aws_route53_record.be_redis_in.fqdn
+  writer_internal_dns_name = aws_route53_record.be_redis_out.fqdn
+  reader_security_group_id = module.config_valkey.security_group_id
 
   # Production sizing — conservative starting point; revisit after first weeks of real traffic.
   db_instance_class           = "db.t4g.medium"
@@ -142,7 +190,7 @@ module "api" {
 #   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
 #   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 #
-#   reader_internal_dns_name = module.reader.internal_dns_name
+#   reader_internal_dns_name = aws_route53_record.mcp_redis_in.fqdn
 #
 #   writer_node_type             = "cache.t4g.small"  # bump above staging; writer can take more load
 #   writer_snapshot_retention_days = 7
@@ -156,8 +204,12 @@ output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "reader_internal_dns_name" { value = module.reader.internal_dns_name }
-output "reader_endpoint"          { value = module.reader.primary_endpoint_address }
+output "mcp_redis_in_dns"  { value = aws_route53_record.mcp_redis_in.fqdn }
+output "mcp_redis_out_dns" { value = aws_route53_record.mcp_redis_out.fqdn }
+output "be_redis_in_dns"   { value = aws_route53_record.be_redis_in.fqdn }
+output "be_redis_out_dns"  { value = aws_route53_record.be_redis_out.fqdn }
+output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
+output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
 
 output "hostname"             { value = module.api.hostname }
 output "alb_dns_name"         { value = module.api.alb_dns_name }

@@ -13,15 +13,13 @@ variable "description" {
   type        = string
 }
 
-variable "role" {
-  description = "Either `reader` or `writer`. Drives the DNS record name (`redis-reader.<env>.meandr.local` vs `redis-writer.<env>.meandr.local`)."
-  type        = string
-
-  validation {
-    condition     = contains(["reader", "writer"], var.role)
-    error_message = "role must be `reader` or `writer`."
-  }
-}
+# NB: This module deliberately does NOT create any DNS records. The caller
+# owns Route 53 records pointing at the cluster's `primary_endpoint_address`
+# (writes) and `reader_endpoint_address` (reads). Each consumer app uses
+# its own prefix (e.g. `mcp-redis-in/out` for the proxy, `be-redis-in/out`
+# for BE) even when the underlying cluster is shared, which keeps each
+# app's connection string app-local and lets us split clusters later
+# without touching app config.
 
 variable "engine_version" {
   description = "Valkey engine version. `8.1` is the current default — has per-field hash TTL (HEXPIRE) which meandr's rate-limit + cache layers will eventually use. AWS supports 7.2 / 8.0 / 8.1 as of 2025."
@@ -90,15 +88,7 @@ variable "private_subnet_ids" {
   }
 }
 
-variable "internal_dns_zone_id" {
-  description = "Route 53 private hosted zone ID. CNAME `redis-<role>.<env>.meandr.local` → primary endpoint."
-  type        = string
-}
-
-variable "internal_dns_zone_name" {
-  description = "Internal DNS zone name (e.g. `staging.meandr.local`)."
-  type        = string
-}
+# internal_dns_zone_id / internal_dns_zone_name removed — DNS is caller-owned.
 
 variable "tags" {
   description = "Common tags applied to every resource."

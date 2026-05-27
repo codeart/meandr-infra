@@ -12,22 +12,32 @@ output "nlb_dns_name"     { value = aws_lb.main.dns_name }
 output "nlb_zone_id"      { value = aws_lb.main.zone_id }
 output "target_group_arn" { value = aws_lb_target_group.proxy.arn }
 
-# --- Writer Valkey -----------------------------------------------------
+# --- State-plane Valkey ------------------------------------------------
 #
-# Exported so other regions / the BE can reach this region's writer.
-# (BE in primary region subscribes to streams on each region's local writer.)
+# Exposed so the BE in the primary region can subscribe to this region's
+# state-plane streams (audit, events) via the be-state-in.<region> name.
 
-output "writer_internal_dns_name" {
-  description = "Writer Valkey internal DNS name in this region (e.g. `redis-writer.staging.meandr.local`)."
-  value       = module.writer.internal_dns_name
+output "mcp_state_in_dns" {
+  description = "Per-region state-plane reader DNS (e.g. `mcp-state-in.eu-central-1.staging.meandr.local`). Proxy reads counters from this."
+  value       = aws_route53_record.mcp_state_in.fqdn
 }
 
-output "writer_endpoint" {
-  description = "Writer Valkey primary endpoint address."
-  value       = module.writer.primary_endpoint_address
+output "mcp_state_out_dns" {
+  description = "Per-region state-plane writer DNS. Proxy writes counters/streams/locks to this."
+  value       = aws_route53_record.mcp_state_out.fqdn
 }
 
-output "writer_security_group_id" {
-  description = "Writer Valkey SG ID — needed by cross-region peers if VPC peering is set up later."
-  value       = module.writer.security_group_id
+output "be_state_in_dns" {
+  description = "Per-region state-plane reader for BE (XREAD stream consumers)."
+  value       = aws_route53_record.be_state_in.fqdn
+}
+
+output "state_endpoint" {
+  description = "State-plane primary endpoint address (raw ElastiCache hostname)."
+  value       = module.state_valkey.primary_endpoint_address
+}
+
+output "state_security_group_id" {
+  description = "State-plane SG ID — needed by cross-region peers if VPC peering is set up later."
+  value       = module.state_valkey.security_group_id
 }

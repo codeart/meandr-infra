@@ -67,22 +67,35 @@ locals {
 
     MEANDR_CONFIG_SOURCE = "redis"
 
+    # Proxy reads config records from the shared config plane (caller
+    # passes its mcp-redis-in.<region> FQDN) and writes counters/streams
+    # to the per-region state plane (built locally in this module).
     MEANDR_REDIS_READER_ADDR    = "${var.reader_internal_dns_name}:6379"
     MEANDR_REDIS_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_WRITER_ADDR    = "${module.writer.internal_dns_name}:6379"
+    MEANDR_REDIS_WRITER_ADDR    = "${aws_route53_record.mcp_state_out.fqdn}:6379"
     MEANDR_REDIS_WRITER_USE_TLS = "true"
   }
 }
 
-# --- Writer Valkey (standalone, TLS-on, no replication) ----------------
+# --- State-plane Valkey (per-region, no replication) ------------------
+#
+# The proxy's state plane: counters (rl: hash), audit stream, dedup
+# locks, output streams. Never GD-replicated — each region has its own
+# state cluster.
+#
+# DNS records are created at the meandr-mcp module level (this file,
+# below) since they're per-region and the caller doesn't need to know
+# the names. Each app uses its own prefix:
+#   mcp-state-in.<region>.<env>.meandr.local  → reader endpoint  (proxy reads counters)
+#   mcp-state-out.<region>.<env>.meandr.local → primary endpoint (proxy writes everything here)
+#   be-state-in.<region>.<env>.meandr.local   → reader endpoint  (BE consumes audit/events streams)
 
-module "writer" {
+module "state_valkey" {
   source = "../elasticache-valkey"
 
   name        = "meandr-writer"
-  description = "Writer Valkey - proxy writes telemetry + dedup locks here, BE consumes via streams"
-  role        = "writer"
+  description = "State Valkey - proxy writes counters/streams/locks, BE consumes streams"
 
   engine_version = "8.1"
   node_type      = var.writer_node_type
@@ -98,14 +111,43 @@ module "writer" {
 
   snapshot_retention_days = var.writer_snapshot_retention_days
 
-  vpc_id                 = var.vpc_id
-  vpc_cidr_block         = var.vpc_cidr_block
-  private_subnet_ids     = var.private_subnet_ids
-  internal_dns_zone_id   = var.internal_dns_zone_id
-  internal_dns_zone_name = var.internal_dns_zone_name
+  vpc_id             = var.vpc_id
+  vpc_cidr_block     = var.vpc_cidr_block
+  private_subnet_ids = var.private_subnet_ids
 
-  tags = merge(local.base_tags, { "meandr:role" = "writer" })
+  tags = merge(local.base_tags, { "meandr:plane" = "state" })
 }
+
+moved {
+  from = module.writer
+  to   = module.state_valkey
+}
+
+resource "aws_route53_record" "mcp_state_in" {
+  zone_id = var.internal_dns_zone_id
+  name    = "mcp-state-in.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.state_valkey.reader_endpoint_address]
+}
+
+resource "aws_route53_record" "mcp_state_out" {
+  zone_id = var.internal_dns_zone_id
+  name    = "mcp-state-out.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.state_valkey.primary_endpoint_address]
+}
+
+resource "aws_route53_record" "be_state_in" {
+  zone_id = var.internal_dns_zone_id
+  name    = "be-state-in.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.state_valkey.reader_endpoint_address]
+}
+
+data "aws_region" "current" {}
 
 # --- NLB (network load balancer) ---------------------------------------
 #

@@ -17,6 +17,7 @@ provider "aws" {
 
 locals {
   env        = "staging"
+  region     = "eu-central-1"
   account_id = "259534890849"
 
   tags = {
@@ -37,19 +38,32 @@ module "vpc" {
   tags = local.tags
 }
 
-# --- Reader Valkey -----------------------------------------------------
+# --- Config-plane Valkey -----------------------------------------------
 #
-# Region-level resource (not inside meandr-api or meandr-mcp) because both
-# apps consume it. Standalone today; promotes to gd_primary when production
-# launches a second region. TLS-on from day 1 — required for Global Datastore
-# eligibility, can't be toggled in place.
+# The shared Redis where the BE writes config records (projects, servers,
+# agents, policies, tokens, hosts, tools) and the proxy reads them. Lives
+# at region level (not inside an app module) because both meandr-api and
+# meandr-mcp consume it. Standalone today; promotes to gd_primary when
+# production launches a second region. TLS-on from day 1 — required for
+# Global Datastore eligibility, can't be toggled in place.
+#
+# Two DNS records are created by the module:
+#   - mcp-redis-in.<region>.staging.meandr.local  → reader endpoint
+#   - mcp-redis-out.staging.meandr.local          → writable primary
+#
+# Read endpoint includes the region because each region's secondary
+# cluster has its own replica endpoint. Write endpoint omits region
+# because there is only one global GD primary.
 
-module "reader" {
+module "config_valkey" {
   source = "../../modules/elasticache-valkey"
 
+  # AWS replication_group_id intentionally kept at "meandr-reader" — the
+  # legacy name in the AWS console — to avoid a destroy/recreate of the
+  # cluster. The customer-visible naming change is in the DNS records
+  # below, which is what apps actually connect to.
   name        = "meandr-reader"
-  description = "Reader Valkey staging - proxy reads config, BE writes config"
-  role        = "reader"
+  description = "Config Valkey staging - BE writes config, proxy reads config"
 
   engine_version = "8.1"
   node_type      = "cache.t4g.micro"
@@ -63,13 +77,67 @@ module "reader" {
 
   snapshot_retention_days = 1
 
-  vpc_id                 = module.vpc.vpc_id
-  vpc_cidr_block         = module.vpc.vpc_cidr_block
-  private_subnet_ids     = module.vpc.private_subnet_ids
-  internal_dns_zone_id   = module.vpc.internal_dns_zone_id
-  internal_dns_zone_name = module.vpc.internal_dns_zone_name
+  vpc_id             = module.vpc.vpc_id
+  vpc_cidr_block     = module.vpc.vpc_cidr_block
+  private_subnet_ids = module.vpc.private_subnet_ids
 
-  tags = merge(local.tags, { "meandr:role" = "reader" })
+  tags = merge(local.tags, { "meandr:plane" = "config" })
+}
+
+# Local-module rename in state. The underlying AWS resource ID is
+# unchanged (still "meandr-reader") so no resource churn — Terraform
+# just updates its state-tree addressing.
+moved {
+  from = module.reader
+  to   = module.config_valkey
+}
+
+# --- Config-plane DNS --------------------------------------------------
+#
+# Each consumer app gets its own prefix even when pointing at the same
+# physical cluster. Today both prefixes resolve to the shared config
+# Valkey; when BE eventually gets its own queue/cache Redis we point
+# be-redis-* at the new cluster and proxy is unaffected.
+#
+#   mcp-redis-in.<region>.<env>.meandr.local  → reader endpoint  (proxy reads)
+#   mcp-redis-out.<env>.meandr.local          → primary endpoint (proxy writes, ie. counters/streams once mcp is online)
+#   be-redis-in.<region>.<env>.meandr.local   → reader endpoint  (BE reads back its writes for the dashboard)
+#   be-redis-out.<env>.meandr.local           → primary endpoint (BE writes config records)
+#
+# Read records carry the region because each region's GD secondary has
+# its own replica endpoint. Write records omit region because there is
+# only one global GD primary.
+
+resource "aws_route53_record" "mcp_redis_in" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "mcp-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.reader_endpoint_address]
+}
+
+resource "aws_route53_record" "mcp_redis_out" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "mcp-redis-out.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.primary_endpoint_address]
+}
+
+resource "aws_route53_record" "be_redis_in" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "be-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.reader_endpoint_address]
+}
+
+resource "aws_route53_record" "be_redis_out" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = "be-redis-out.${module.vpc.internal_dns_zone_name}"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.config_valkey.primary_endpoint_address]
 }
 
 # --- meandr-api --------------------------------------------------------
@@ -95,9 +163,9 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  reader_internal_dns_name = module.reader.internal_dns_name
-  reader_security_group_id = module.reader.security_group_id
-  # writer_internal_dns_name wired in from module.mcp once mcp is uncommented.
+  reader_internal_dns_name = aws_route53_record.be_redis_in.fqdn
+  writer_internal_dns_name = aws_route53_record.be_redis_out.fqdn
+  reader_security_group_id = module.config_valkey.security_group_id
 
   db_instance_class = "db.t4g.micro"
   puma    = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -147,8 +215,12 @@ output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "reader_internal_dns_name" { value = module.reader.internal_dns_name }
-output "reader_endpoint"          { value = module.reader.primary_endpoint_address }
+output "mcp_redis_in_dns"  { value = aws_route53_record.mcp_redis_in.fqdn }
+output "mcp_redis_out_dns" { value = aws_route53_record.mcp_redis_out.fqdn }
+output "be_redis_in_dns"   { value = aws_route53_record.be_redis_in.fqdn }
+output "be_redis_out_dns"  { value = aws_route53_record.be_redis_out.fqdn }
+output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
+output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
 
 output "hostname"             { value = module.api.hostname }
 output "alb_dns_name"         { value = module.api.alb_dns_name }

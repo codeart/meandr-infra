@@ -18,10 +18,9 @@ output "port" {
   value       = aws_elasticache_replication_group.main.port
 }
 
-output "internal_dns_name" {
-  description = "Internal DNS hostname (e.g. `redis-reader.staging.meandr.local`). Use this in app config."
-  value       = aws_route53_record.primary.fqdn
-}
+# DNS hostnames are caller-owned (each app uses its own prefix). The
+# raw endpoint outputs above are what the caller uses to point Route53
+# CNAMEs at.
 
 output "security_group_id" {
   description = "SG attached to the cluster. Workloads needing cache access can reference this in their own SG ingress rules."
