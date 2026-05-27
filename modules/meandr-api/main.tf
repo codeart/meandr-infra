@@ -54,6 +54,9 @@ locals {
     RAILS_LOG_TO_STDOUT      = "true"
     RAILS_SERVE_STATIC_FILES = "true"
 
+    # CloudWatch Logs doesn't render ANSI.
+    NO_COLOR = "1"
+
     MEANDR_ENV = local.meandr_env
     AWS_REGION = local.region
 

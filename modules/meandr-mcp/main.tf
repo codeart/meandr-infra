@@ -63,6 +63,9 @@ locals {
     MEANDR_ENV       = local.meandr_env
     MEANDR_LOG_LEVEL = var.log_level
 
+    # CloudWatch Logs doesn't render ANSI.
+    NO_COLOR = "1"
+
     MEANDR_LISTEN_ADDR = ":${var.proxy_port}"
 
     MEANDR_CONFIG_SOURCE = "redis"
