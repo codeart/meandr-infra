@@ -85,10 +85,11 @@ moved {
   to   = module.config_valkey
 }
 
-# --- Config-plane DNS --------------------------------------------------
+# --- Reader-cluster DNS ------------------------------------------------
 #
-# Each consumer app gets its own prefix. See the staging caller for the
-# rationale; same pattern here.
+# See the staging caller for the full naming rationale. Reader cluster
+# holds config records (BE writes, proxy reads); writer-cluster records
+# live inside module.mcp.
 
 resource "aws_route53_record" "mcp_redis_in" {
   zone_id = module.vpc.internal_dns_zone_id
@@ -98,25 +99,9 @@ resource "aws_route53_record" "mcp_redis_in" {
   records = [module.config_valkey.reader_endpoint_address]
 }
 
-resource "aws_route53_record" "mcp_redis_out" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = "mcp-redis-out.${module.vpc.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.config_valkey.primary_endpoint_address]
-}
-
-resource "aws_route53_record" "be_redis_in" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = "be-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.config_valkey.reader_endpoint_address]
-}
-
 resource "aws_route53_record" "be_redis_out" {
   zone_id = module.vpc.internal_dns_zone_id
-  name    = "be-redis-out.${module.vpc.internal_dns_zone_name}"
+  name    = "be-redis-out.${local.region}.${module.vpc.internal_dns_zone_name}"
   type    = "CNAME"
   ttl     = 60
   records = [module.config_valkey.primary_endpoint_address]
@@ -208,10 +193,10 @@ output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "mcp_redis_in_dns"  { value = aws_route53_record.mcp_redis_in.fqdn }
-output "mcp_redis_out_dns" { value = aws_route53_record.mcp_redis_out.fqdn }
-output "be_redis_in_dns"   { value = aws_route53_record.be_redis_in.fqdn }
-output "be_redis_out_dns"  { value = aws_route53_record.be_redis_out.fqdn }
+output "mcp_redis_in_dns" { value = aws_route53_record.mcp_redis_in.fqdn }
+output "be_redis_out_dns" { value = aws_route53_record.be_redis_out.fqdn }
+# mcp_redis_out / be_redis_in records are created inside module.mcp
+# (writer cluster); not exposed here until that module is uncommented.
 output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
 output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
 

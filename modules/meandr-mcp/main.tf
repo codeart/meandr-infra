@@ -70,35 +70,39 @@ locals {
 
     MEANDR_CONFIG_SOURCE = "redis"
 
-    # Proxy reads config records from the shared config plane (caller
-    # passes its mcp-redis-in.<region> FQDN) and writes counters/streams
-    # to the per-region state plane (built locally in this module).
+    # Proxy reads config records from the reader cluster (caller passes
+    # the mcp-redis-in.<region> FQDN) and writes counters/streams to the
+    # per-region writer cluster created by this module.
     MEANDR_REDIS_READER_ADDR    = "${var.reader_internal_dns_name}:6379"
     MEANDR_REDIS_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_WRITER_ADDR    = "${aws_route53_record.mcp_state_out.fqdn}:6379"
+    MEANDR_REDIS_WRITER_ADDR    = "${aws_route53_record.mcp_redis_out.fqdn}:6379"
     MEANDR_REDIS_WRITER_USE_TLS = "true"
   }
 }
 
-# --- State-plane Valkey (per-region, no replication) ------------------
+# --- Writer Valkey (per-region, no replication) -----------------------
 #
-# The proxy's state plane: counters (rl: hash), audit stream, dedup
-# locks, output streams. Never GD-replicated — each region has its own
-# state cluster.
+# The "writer" half of the proxy/BE Redis topology: counters (rl: hash),
+# audit / events streams, dedup locks. Per-region, never GD-replicated —
+# each region has its own writer cluster. Proxy writes everything here;
+# BE consumes the streams.
 #
-# DNS records are created at the meandr-mcp module level (this file,
-# below) since they're per-region and the caller doesn't need to know
-# the names. Each app uses its own prefix:
-#   mcp-state-in.<region>.<env>.meandr.local  → reader endpoint  (proxy reads counters)
-#   mcp-state-out.<region>.<env>.meandr.local → primary endpoint (proxy writes everything here)
-#   be-state-in.<region>.<env>.meandr.local   → reader endpoint  (BE consumes audit/events streams)
+# DNS records (in/out from each app's perspective):
+#   mcp-redis-out.<region>.<env>.meandr.local → master  (proxy writes telemetry)
+#   be-redis-in.<region>.<env>.meandr.local   → replica (BE consumes streams)
+#
+# No need for a proxy-side reader of this cluster today — the proxy
+# reads its own counters from the master to avoid replica lag inside
+# the rate-limit Lua. If that ever changes, add `mcp-redis-out-replica`
+# or similar; don't reuse `mcp-redis-in.<region>` (which is the
+# reader-cluster prefix).
 
-module "state_valkey" {
+module "writer_valkey" {
   source = "../elasticache-valkey"
 
   name        = "meandr-writer"
-  description = "State Valkey - proxy writes counters/streams/locks, BE consumes streams"
+  description = "Writer Valkey - proxy writes counters/streams/locks, BE consumes streams"
 
   engine_version = "8.1"
   node_type      = var.writer_node_type
@@ -118,39 +122,24 @@ module "state_valkey" {
   vpc_cidr_block     = var.vpc_cidr_block
   private_subnet_ids = var.private_subnet_ids
 
-  tags = merge(local.base_tags, { "meandr:plane" = "state" })
+  tags = merge(local.base_tags, { "meandr:cluster" = "writer" })
 }
 
-moved {
-  from = module.writer
-  to   = module.state_valkey
-}
-
-resource "aws_route53_record" "mcp_state_in" {
+resource "aws_route53_record" "mcp_redis_out" {
   zone_id = var.internal_dns_zone_id
-  name    = "mcp-state-in.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
+  name    = "mcp-redis-out.${local.region}.${var.internal_dns_zone_name}"
   type    = "CNAME"
   ttl     = 60
-  records = [module.state_valkey.reader_endpoint_address]
+  records = [module.writer_valkey.primary_endpoint_address]
 }
 
-resource "aws_route53_record" "mcp_state_out" {
+resource "aws_route53_record" "be_redis_in" {
   zone_id = var.internal_dns_zone_id
-  name    = "mcp-state-out.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
+  name    = "be-redis-in.${local.region}.${var.internal_dns_zone_name}"
   type    = "CNAME"
   ttl     = 60
-  records = [module.state_valkey.primary_endpoint_address]
+  records = [module.writer_valkey.reader_endpoint_address]
 }
-
-resource "aws_route53_record" "be_state_in" {
-  zone_id = var.internal_dns_zone_id
-  name    = "be-state-in.${data.aws_region.current.name}.${var.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.state_valkey.reader_endpoint_address]
-}
-
-data "aws_region" "current" {}
 
 # --- NLB (network load balancer) ---------------------------------------
 #

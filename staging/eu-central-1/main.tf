@@ -92,21 +92,26 @@ moved {
   to   = module.config_valkey
 }
 
-# --- Config-plane DNS --------------------------------------------------
+# --- Reader-cluster DNS ------------------------------------------------
 #
-# Each consumer app gets its own prefix even when pointing at the same
-# physical cluster. Today both prefixes resolve to the shared config
-# Valkey; when BE eventually gets its own queue/cache Redis we point
-# be-redis-* at the new cluster and proxy is unaffected.
+# Direction (-in/-out) is named from the *consumer's* perspective:
+#   -in  = data flowing INTO the app (read)
+#   -out = data flowing OUT of the app (write)
 #
-#   mcp-redis-in.<region>.<env>.meandr.local  → reader endpoint  (proxy reads)
-#   mcp-redis-out.<env>.meandr.local          → primary endpoint (proxy writes, ie. counters/streams once mcp is online)
-#   be-redis-in.<region>.<env>.meandr.local   → reader endpoint  (BE reads back its writes for the dashboard)
-#   be-redis-out.<env>.meandr.local           → primary endpoint (BE writes config records)
+# Each app gets one of each; the underlying cluster is determined by
+# what the operation does:
 #
-# Read records carry the region because each region's GD secondary has
-# its own replica endpoint. Write records omit region because there is
-# only one global GD primary.
+#   Reader cluster (this file): config records — BE writes, proxy reads.
+#     mcp-redis-in.<region>  → reader endpoint  (proxy reads config)
+#     be-redis-out.<region>  → primary endpoint (BE writes config)
+#
+#   Writer cluster (created inside module.mcp when re-enabled):
+#     counters / streams — proxy writes, BE reads.
+#     mcp-redis-out.<region> → primary endpoint (proxy writes telemetry)
+#     be-redis-in.<region>   → reader endpoint  (BE consumes streams)
+#
+# Today only the reader cluster exists, so only these two records are
+# created here. The other two come up when module.mcp is uncommented.
 
 resource "aws_route53_record" "mcp_redis_in" {
   zone_id = module.vpc.internal_dns_zone_id
@@ -116,25 +121,9 @@ resource "aws_route53_record" "mcp_redis_in" {
   records = [module.config_valkey.reader_endpoint_address]
 }
 
-resource "aws_route53_record" "mcp_redis_out" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = "mcp-redis-out.${module.vpc.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.config_valkey.primary_endpoint_address]
-}
-
-resource "aws_route53_record" "be_redis_in" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = "be-redis-in.${local.region}.${module.vpc.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.config_valkey.reader_endpoint_address]
-}
-
 resource "aws_route53_record" "be_redis_out" {
   zone_id = module.vpc.internal_dns_zone_id
-  name    = "be-redis-out.${module.vpc.internal_dns_zone_name}"
+  name    = "be-redis-out.${local.region}.${module.vpc.internal_dns_zone_name}"
   type    = "CNAME"
   ttl     = 60
   records = [module.config_valkey.primary_endpoint_address]
@@ -218,10 +207,10 @@ output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "mcp_redis_in_dns"  { value = aws_route53_record.mcp_redis_in.fqdn }
-output "mcp_redis_out_dns" { value = aws_route53_record.mcp_redis_out.fqdn }
-output "be_redis_in_dns"   { value = aws_route53_record.be_redis_in.fqdn }
-output "be_redis_out_dns"  { value = aws_route53_record.be_redis_out.fqdn }
+output "mcp_redis_in_dns" { value = aws_route53_record.mcp_redis_in.fqdn }
+output "be_redis_out_dns" { value = aws_route53_record.be_redis_out.fqdn }
+# mcp_redis_out / be_redis_in records are created inside module.mcp
+# (writer cluster); not exposed here until that module is uncommented.
 output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
 output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
 
