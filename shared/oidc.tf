@@ -90,6 +90,12 @@ data "aws_iam_policy_document" "ecr_push" {
       "ecr:BatchGetImage",
       "ecr:DescribeImages",
       "ecr:DescribeRepositories",
+      # Promote step removes the `unstable-<branch>-<sha>` tag once the
+      # `<branch>` / `<sha>` tags are in place. ECR IAM can't scope this
+      # by tag pattern — the workflow script is responsible for not
+      # touching release tags. Belt-and-suspenders: the lifecycle policy
+      # in ecr.tf also expires stray `unstable-*` images on a schedule.
+      "ecr:BatchDeleteImage",
     ]
     resources = [for r in var.ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
   }

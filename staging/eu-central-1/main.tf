@@ -97,8 +97,7 @@ module "api" {
 
   reader_internal_dns_name = module.reader.internal_dns_name
   reader_security_group_id = module.reader.security_group_id
-  # writer_internal_dns_name omitted — meandr-mcp not deployed yet in staging,
-  # so the writer Valkey doesn't exist. BE skips the REDIS_WRITER_URL env var.
+  # writer_internal_dns_name wired in from module.mcp once mcp is uncommented.
 
   db_instance_class = "db.t4g.micro"
   puma    = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -106,13 +105,15 @@ module "api" {
   migrate = { cpu = 512, memory = 1024 }
 }
 
-# --- meandr-mcp (not deployed yet — definitions only) ------------------
+# --- meandr-mcp --------------------------------------------------------
 #
-# Module exists in modules/meandr-mcp/ but is not invoked here. When the proxy
-# is ready to deploy, uncomment this block. Once applied, also wire
-# `writer_internal_dns_name = module.mcp.writer_internal_dns_name` into the
-# meandr-api module call above so BE picks up the local writer endpoint.
-#
+# Proxy stack: writer Valkey + NLB + ECS cluster + proxy service. NLB has
+# two plain TCP listeners (80 + 443) forwarding to proxy:8080; proxy
+# terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
+# Customer HTTPS traffic won't work end-to-end until then — expected v0.
+
+# Temporarily disabled while AWS Support processes the NLB account-level
+# limit increase. Uncomment to re-provision once the limit is in place.
 # module "mcp" {
 #   source = "../../modules/meandr-mcp"
 #
@@ -136,7 +137,7 @@ module "api" {
 #   reader_internal_dns_name = module.reader.internal_dns_name
 #
 #   writer_node_type = "cache.t4g.micro"
-#   proxy = { cpu = 256, memory = 512, desired_count = 0, min_replicas = 0, max_replicas = 4, target_cpu_utilization = 60 }
+#   proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 # }
 
 # --- Outputs -----------------------------------------------------------
@@ -157,3 +158,6 @@ output "jobs_service_name"    { value = module.api.jobs_service_name }
 output "migrate_task_family"  { value = module.api.migrate_task_family }
 output "worker_sg_id"         { value = module.api.worker_security_group_id }
 output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
+
+# mcp_* outputs and writer_internal_dns_name omitted while module.mcp is disabled.
+# Re-add once the NLB account-level limit is in place and module.mcp is uncommented.

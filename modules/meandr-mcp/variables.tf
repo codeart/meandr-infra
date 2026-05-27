@@ -62,25 +62,20 @@ variable "reader_internal_dns_name" {
   type        = string
 }
 
-# --- Public DNS + cert --------------------------------------------------
+# --- Public DNS ---------------------------------------------------------
 
 variable "dns_zone_name" {
-  description = "Public Route 53 hosted zone name (in Shared account). Used for cert validation + wildcard record."
+  description = "Public Route 53 hosted zone name (in Shared account). Wildcard `*.<zone>` A-alias points at the NLB."
   type        = string
   default     = "meandr.io"
 }
 
-variable "cert_domain" {
-  description = "Cert primary domain. Wildcard `*.meandr.io` covers all tenant slugs."
-  type        = string
-  default     = "*.meandr.io"
-}
-
-variable "cert_subject_alternative_names" {
-  description = "Extra SANs."
-  type        = list(string)
-  default     = ["meandr.io"]
-}
+# TLS termination is deferred — the proxy will eventually terminate TLS
+# itself using a cert acquired via Let's Encrypt DNS-01 (BE-side job
+# orders + renews, uploads to Secrets Manager, emits a config event the
+# proxy listens for). Until that pipeline lands, NLB exposes two plain
+# TCP listeners (80 + 443); HTTPS clients see a handshake failure, which
+# is the expected v0 state.
 
 # --- Image --------------------------------------------------------------
 
@@ -151,6 +146,12 @@ variable "proxy_port" {
 }
 
 # --- Logging ------------------------------------------------------------
+
+variable "log_level" {
+  description = "Proxy log level. `info` for staging/production; `debug` only for active triage. The proxy validates against trace|debug|info|warn|error|fatal."
+  type        = string
+  default     = "info"
+}
 
 variable "log_retention_days" {
   description = "CloudWatch log retention."

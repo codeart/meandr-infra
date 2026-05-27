@@ -38,6 +38,11 @@ locals {
   region = data.aws_region.current.name
   image  = "${var.ecr_registry}/${var.image_repository}:${var.image_tag}"
 
+  meandr_env = {
+    staging    = "stg"
+    production = "prd"
+  }[var.env]
+
   base_tags = merge({
     "meandr:env"        = var.env
     "meandr:app"        = "meandr-mcp"
@@ -45,13 +50,28 @@ locals {
     "meandr:owner"      = "infra"
   }, var.extra_tags)
 
-  # Proxy reads from reader Valkey (config + events) and writes to writer
-  # Valkey (telemetry, dedup locks). Both TLS-on.
+  # Proxy env vars — see meandr-mcp/internal/app/config.go for the full
+  # set. Redis access uses ADDR + USE_TLS, NOT URL-shape. ConfigSource
+  # MUST be `redis` (the default `static` looks for dev-tenant.json which
+  # isn't in the distroless image).
+  #
+  # No MEANDR_TLS_* vars set — TLS termination is deferred (see variables.tf
+  # comment). Proxy listens plain HTTP on :8080; NLB multiplexes both 80
+  # and 443 onto that port.
   proxy_environment = {
-    MEANDR_REGION           = local.region
-    MEANDR_ENV              = var.env == "staging" ? "stg" : "prd"
-    MEANDR_REDIS_READER_URL = "rediss://${var.reader_internal_dns_name}:6379"
-    MEANDR_REDIS_WRITER_URL = "rediss://${module.writer.internal_dns_name}:6379"
+    MEANDR_REGION    = local.region
+    MEANDR_ENV       = local.meandr_env
+    MEANDR_LOG_LEVEL = var.log_level
+
+    MEANDR_LISTEN_ADDR = ":${var.proxy_port}"
+
+    MEANDR_CONFIG_SOURCE = "redis"
+
+    MEANDR_REDIS_READER_ADDR    = "${var.reader_internal_dns_name}:6379"
+    MEANDR_REDIS_READER_USE_TLS = "true"
+
+    MEANDR_REDIS_WRITER_ADDR    = "${module.writer.internal_dns_name}:6379"
+    MEANDR_REDIS_WRITER_USE_TLS = "true"
   }
 }
 
@@ -87,29 +107,17 @@ module "writer" {
   tags = merge(local.base_tags, { "meandr:role" = "writer" })
 }
 
-# --- ACM cert -----------------------------------------------------------
-
-module "cert" {
-  source = "../acm-cert"
-
-  providers = {
-    aws     = aws
-    aws.dns = aws.dns
-  }
-
-  domain_name               = var.cert_domain
-  subject_alternative_names = var.cert_subject_alternative_names
-  dns_zone_name             = var.dns_zone_name
-
-  tags = local.base_tags
-}
-
 # --- NLB (network load balancer) ---------------------------------------
 #
-# TCP load balancer (not HTTP/HTTPS) — the proxy terminates TLS itself per
-# CLAUDE.md "TLS termination" note. NLB just forwards bytes. ALB would have
-# to strip and re-establish TLS which loses information the proxy uses for
-# client identification.
+# TCP load balancer (not HTTP/HTTPS) — the proxy terminates TLS itself
+# (per the E2E-encryption product commitment). NLB just forwards bytes.
+#
+# Two TCP listeners (80 + 443), both forwarding to the same target group
+# on :8080. Until the BE-side cert pipeline lands, the proxy listens
+# plain HTTP on :8080 and HTTPS clients see a handshake failure — that's
+# the expected v0 state. When the cert pipeline is in, target group port
+# stays 8080 but the proxy starts terminating TLS on its end (via
+# MEANDR_TLS_* env vars + a Secrets Manager-sourced cert).
 
 resource "aws_lb" "main" {
   name               = "meandr-mcp-nlb"
@@ -150,7 +158,20 @@ resource "aws_lb_target_group" "proxy" {
   }
 }
 
-resource "aws_lb_listener" "tls" {
+resource "aws_lb_listener" "http_80" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.proxy.arn
+  }
+
+  tags = merge(local.base_tags, { Name = "MCP NLB TCP:80 listener" })
+}
+
+resource "aws_lb_listener" "http_443" {
   load_balancer_arn = aws_lb.main.arn
   port              = 443
   protocol          = "TCP"
@@ -255,13 +276,13 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
 
 resource "aws_security_group" "proxy" {
   name        = "meandr-mcp-proxy"
-  description = "Proxy tasks - accepts TLS traffic on ${var.proxy_port}"
+  description = "Proxy tasks - accepts customer traffic on ${var.proxy_port} (NLB multiplexes external 80/443 onto this single port)"
   vpc_id      = var.vpc_id
 
   tags = merge(local.base_tags, { Name = "meandr-mcp-proxy SG" })
 }
 
-resource "aws_security_group_rule" "proxy_ingress_tls" {
+resource "aws_security_group_rule" "proxy_ingress" {
   type              = "ingress"
   security_group_id = aws_security_group.proxy.id
 
@@ -269,7 +290,7 @@ resource "aws_security_group_rule" "proxy_ingress_tls" {
   to_port     = var.proxy_port
   protocol    = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
-  description = "TLS ingress from NLB (which preserves client IP)"
+  description = "Customer traffic via NLB (which preserves client IP when target_type=ip)"
 }
 
 resource "aws_security_group_rule" "proxy_egress_all" {

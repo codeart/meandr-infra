@@ -67,6 +67,18 @@ resource "aws_ecr_lifecycle_policy" "service" {
         }
         action = { type = "expire" }
       },
+      {
+        rulePriority = 4
+        description  = "Expire stray unstable-* images after 7 days (CI promote step normally deletes them on success; this catches what slipped through)"
+        selection = {
+          tagStatus      = "tagged"
+          tagPatternList = ["unstable-*"]
+          countType      = "sinceImagePushed"
+          countUnit      = "days"
+          countNumber    = 7
+        }
+        action = { type = "expire" }
+      },
     ]
   })
 }

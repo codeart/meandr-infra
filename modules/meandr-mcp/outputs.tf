@@ -12,10 +12,6 @@ output "nlb_dns_name"     { value = aws_lb.main.dns_name }
 output "nlb_zone_id"      { value = aws_lb.main.zone_id }
 output "target_group_arn" { value = aws_lb_target_group.proxy.arn }
 
-# --- Cert ---------------------------------------------------------------
-
-output "certificate_arn" { value = module.cert.certificate_arn }
-
 # --- Writer Valkey -----------------------------------------------------
 #
 # Exported so other regions / the BE can reach this region's writer.
