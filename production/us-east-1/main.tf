@@ -145,9 +145,13 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  reader_internal_dns_name = aws_route53_record.be_redis_in.fqdn
   writer_internal_dns_name = aws_route53_record.be_redis_out.fqdn
   reader_security_group_id = module.config_valkey.security_group_id
+
+  # State-plane regions BE should consume streams from. Just primary
+  # today; expand to include eu-central-1 once that region's meandr-mcp
+  # is provisioned.
+  regions = [local.region]
 
   # Production sizing — conservative starting point; revisit after first weeks of real traffic.
   db_instance_class           = "db.t4g.medium"

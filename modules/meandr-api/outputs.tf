@@ -44,9 +44,9 @@ output "rds_db_name"            { value = module.rds.db_name }
 
 # --- Secrets ----------------------------------------------------------
 
-output "secret_key_base_arn" {
-  description = "Rails SECRET_KEY_BASE secret ARN."
-  value       = aws_secretsmanager_secret.secret_key_base.arn
+output "rails_master_key_arn" {
+  description = "Rails master key secret ARN — operator populates the value from config/credentials/<env>.key after first apply."
+  value       = aws_secretsmanager_secret.rails_master_key.arn
 }
 
 # --- For run-task invocation ------------------------------------------

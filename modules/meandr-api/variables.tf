@@ -134,22 +134,25 @@ variable "db_deletion_protection" {
 }
 
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
+#
+# BE only needs ONE Redis URL — the egress (write) endpoint of the config
+# plane. Read URLs for per-region state planes are constructed inside the
+# app from var.regions and the known hostname pattern.
 
-variable "reader_internal_dns_name" {
-  description = "Reader Valkey internal DNS name (e.g. `redis-reader.staging.meandr.local`). Caller creates the reader Valkey at the region level since both meandr-api and meandr-mcp use it."
+variable "writer_internal_dns_name" {
+  description = "Egress (write) Valkey internal DNS name — wired to the be-redis-out CNAME at the caller. Becomes MEANDR_REDIS_EGRESS_URL inside the container."
   type        = string
 }
 
 variable "reader_security_group_id" {
-  description = "SG attached to the reader Valkey. ECS task SGs need this referenced as a source... or simpler: ECS task SGs egress all to VPC CIDR, and reader SG ingresses from VPC CIDR (current pattern). Kept here for future tightening."
+  description = "SG attached to the config Valkey cluster. ECS task SGs need to be allowed to reach it (current pattern leans on VPC-CIDR ingress; kept here for future tightening)."
   type        = string
   default     = null
 }
 
-variable "writer_internal_dns_name" {
-  description = "Writer Valkey internal DNS name. Optional — null when meandr-mcp is not yet deployed in this region. When set, REDIS_WRITER_URL env var is injected; when null, BE assumes no writer is available."
-  type        = string
-  default     = null
+variable "regions" {
+  description = "Regions whose state-plane Redis BE should consume streams from. BE constructs each region's read URL itself as `be-state-in.<region>.<env>.meandr.local`. Today a single-element list; expands as more regions come online. Joined with commas into MEANDR_REGIONS."
+  type        = list(string)
 }
 
 # --- Per-service sizing -------------------------------------------------
@@ -192,18 +195,6 @@ variable "jobs" {
     max_replicas           = 4
     target_cpu_utilization = 70
   }
-}
-
-variable "frontend_url" {
-  description = "Public URL of the dashboard SPA (where the React app lives — Heroku, etc.). Used by Rails for absolute-URL emission in mailers / OAuth callbacks / CORS allowlist."
-  type        = string
-  default     = "https://console.meandr.com"
-}
-
-variable "log_level" {
-  description = "Rails log level. `info` for staging + production; `debug` only for active triage."
-  type        = string
-  default     = "info"
 }
 
 variable "migrate" {

@@ -163,9 +163,12 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  reader_internal_dns_name = aws_route53_record.be_redis_in.fqdn
   writer_internal_dns_name = aws_route53_record.be_redis_out.fqdn
   reader_security_group_id = module.config_valkey.security_group_id
+
+  # State-plane regions BE should consume streams from. Just our own
+  # region today; expand when more regions come online with meandr-mcp.
+  regions = [local.region]
 
   db_instance_class = "db.t4g.micro"
   puma    = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }

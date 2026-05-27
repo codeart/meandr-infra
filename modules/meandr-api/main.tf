@@ -49,40 +49,22 @@ locals {
 
   # Shared container env. Every service / task uses the same set; the Rails
   # CMD chooses what to read.
-  #
-  # Convention: app-internal env vars are prefixed `MEANDR_` so they never
-  # collide with what gems / libraries read. The exceptions are:
-  #   - RAILS_ENV / RAILS_*    — Rails reads these by name
-  #   - AWS_REGION             — AWS SDK reads this by name
-  #   - SECRET_KEY_BASE        — Rails reads this by name; injected as secret
-  #
-  # MEANDR_REDIS_READER_URL — `rediss://` (TLS) — reader is GD-replicated.
-  # MEANDR_REDIS_WRITER_URL — `rediss://` (TLS) — writer is per-region; only
-  #   present when meandr-mcp is deployed in this region. Until then the env
-  #   var is omitted and BE must tolerate its absence.
-  app_environment = merge({
+  app_environment = {
     RAILS_ENV                = var.env
-    RAILS_LOG_LEVEL          = var.log_level
     RAILS_LOG_TO_STDOUT      = "true"
     RAILS_SERVE_STATIC_FILES = "true"
 
-    MEANDR_ENV          = local.meandr_env
-    MEANDR_APP_HOST     = var.hostname        # API's own public hostname; used in absolute URLs
-    MEANDR_FRONTEND_URL = var.frontend_url    # dashboard origin (Heroku) — for CORS + mailer links
-
+    MEANDR_ENV = local.meandr_env
     AWS_REGION = local.region
 
-    MEANDR_REDIS_READER_URL = "rediss://${var.reader_internal_dns_name}:6379"
-    }, var.writer_internal_dns_name != null ? {
-    MEANDR_REDIS_WRITER_URL = "rediss://${var.writer_internal_dns_name}:6379"
-  } : {})
+    MEANDR_REDIS_EGRESS_URL = "rediss://${var.writer_internal_dns_name}:6379"
+    MEANDR_REGIONS          = join(",", var.regions)
+  }
 
-  # MEANDR_DATABASE_URL — pre-assembled connection string from the master
-  # credential secret (see rds-postgres module). Hostname is the internal
-  # CNAME, not the RDS endpoint, so it survives instance replacements.
   app_secrets = {
     MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
-    SECRET_KEY_BASE     = aws_secretsmanager_secret.secret_key_base.arn
+
+    RAILS_MASTER_KEY = aws_secretsmanager_secret.rails_master_key.arn
 
     MEANDR_ENC_PRIMARY_KEY         = "${aws_secretsmanager_secret.encryption.arn}:primary_key::"
     MEANDR_ENC_DETERMINISTIC_KEY   = "${aws_secretsmanager_secret.encryption.arn}:deterministic_key::"
@@ -250,7 +232,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
       Action = "secretsmanager:GetSecretValue"
       Resource = [
         module.rds.secret_arn,
-        aws_secretsmanager_secret.secret_key_base.arn,
+        aws_secretsmanager_secret.rails_master_key.arn,
         aws_secretsmanager_secret.encryption.arn,
         aws_secretsmanager_secret.ops.arn,
       ]
@@ -341,23 +323,29 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
   })
 }
 
-# --- SECRET_KEY_BASE secret --------------------------------------------
+# --- RAILS_MASTER_KEY secret -------------------------------------------
+#
+# Rails 7+ encrypted credentials live in the BE repo at
+# config/credentials/<env>.yml.enc; the matching key file
+# config/credentials/<env>.key is gitignored. In production / staging we
+# inject the .key contents as RAILS_MASTER_KEY and Rails decrypts the
+# enc file at boot to populate Rails.application.credentials.
+#
+# Terraform creates the secret but never sets the value (operator
+# populates it with `aws secretsmanager put-secret-value` once per env).
+# A bootstrap placeholder is written so the ECS task can start; the real
+# value overrides it out-of-band.
 
-resource "random_password" "secret_key_base" {
-  length  = 128
-  special = false
+resource "aws_secretsmanager_secret" "rails_master_key" {
+  name        = "meandr/api/${var.env}/rails-master-key"
+  description = "Rails master key — decrypts config/credentials/${var.env}.yml.enc. Populate from config/credentials/${var.env}.key in the meandr-api repo."
+
+  tags = merge(local.base_tags, { Name = "meandr-api RAILS_MASTER_KEY" })
 }
 
-resource "aws_secretsmanager_secret" "secret_key_base" {
-  name        = "meandr/api/${var.env}/secret-key-base"
-  description = "Rails SECRET_KEY_BASE for meandr-api ${var.env}. Rotating invalidates sessions; rotate intentionally."
-
-  tags = merge(local.base_tags, { Name = "meandr-api SECRET_KEY_BASE" })
-}
-
-resource "aws_secretsmanager_secret_version" "secret_key_base" {
-  secret_id     = aws_secretsmanager_secret.secret_key_base.id
-  secret_string = random_password.secret_key_base.result
+resource "aws_secretsmanager_secret_version" "rails_master_key" {
+  secret_id     = aws_secretsmanager_secret.rails_master_key.id
+  secret_string = "POPULATE_FROM_CREDENTIALS_KEY_FILE"
 
   lifecycle {
     ignore_changes = [secret_string]
