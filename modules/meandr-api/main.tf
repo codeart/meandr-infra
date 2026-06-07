@@ -636,8 +636,14 @@ module "migrate" {
   cpu    = var.migrate.cpu
   memory = var.migrate.memory
 
-  environment = local.app_environment
-  secrets     = local.app_secrets
+  # Migrations run serially — one for the migration itself, one for
+  # the boot-time schema_migrations check, one of headroom for any
+  # initializer that touches AR at load. Wider than 3 is wasted; 1
+  # is too tight (initializers reliably reach for a second connection).
+  environment = merge(local.app_environment, {
+    MEANDR_DATABASE_POOL = "3"
+  })
+  secrets = local.app_secrets
 
   log_group_name     = "/aws/ecs/meandr-api-migrate"
   log_retention_days = var.log_retention_days
