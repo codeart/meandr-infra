@@ -542,8 +542,15 @@ module "puma" {
   cpu    = var.puma.cpu
   memory = var.puma.memory
 
-  environment = local.app_environment
-  secrets     = local.app_secrets
+  # Per-service DB pool sizing on top of the shared env. Puma's
+  # WEB_CONCURRENCY × RAILS_MAX_THREADS sets the upper bound on
+  # concurrent active connections from a single task; 15 covers the
+  # worst case (1 × ~10-12 threads) with headroom for one-off Rake-y
+  # work that grabs an extra connection.
+  environment = merge(local.app_environment, {
+    MEANDR_DATABASE_POOL = "15"
+  })
+  secrets = local.app_secrets
 
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.puma.id]
@@ -580,8 +587,14 @@ module "jobs" {
   cpu    = var.jobs.cpu
   memory = var.jobs.memory
 
-  environment = local.app_environment
-  secrets     = local.app_secrets
+  # Jobs runs GOOD_JOB_MAX_THREADS workers in one process, each holding
+  # an AR connection for the duration of its job. 30 = headroom for the
+  # max worker pool plus the dispatcher loops and the audit walker's
+  # short-burst connections (RedisSync::*Job fan-out).
+  environment = merge(local.app_environment, {
+    MEANDR_DATABASE_POOL = "30"
+  })
+  secrets = local.app_secrets
 
   container_health_check = {
     command     = ["CMD-SHELL", "pgrep -f good_job || exit 1"]
