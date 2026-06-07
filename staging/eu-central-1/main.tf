@@ -172,8 +172,10 @@ module "api" {
 # terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
 # Customer HTTPS traffic won't work end-to-end until then — expected v0.
 
-# Temporarily disabled while AWS Support processes the NLB account-level
-# limit increase. Uncomment to re-provision once the limit is in place.
+# Re-disabled — AWS Support's "approved" message didn't actually lift
+# the account-level NLB block (confirmed 2026-06-05 via Terraform, CLI,
+# and AWS Console all returning OperationNotPermitted). Half-applied
+# state was destroyed; re-enable once the block is genuinely lifted.
 # module "mcp" {
 #   source = "../../modules/meandr-mcp"
 #
@@ -194,7 +196,7 @@ module "api" {
 #   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
 #   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 #
-#   reader_internal_dns_name = module.reader.internal_dns_name
+#   reader_internal_dns_name = aws_route53_record.mcp_redis_in.fqdn
 #
 #   writer_node_type = "cache.t4g.micro"
 #   proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
@@ -213,6 +215,8 @@ output "be_redis_out_dns" { value = aws_route53_record.be_redis_out.fqdn }
 # (writer cluster); not exposed here until that module is uncommented.
 output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
 output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
+# mcp_cluster_name / mcp_proxy_service_name / mcp_nlb_dns_name omitted
+# while module.mcp is disabled. Re-add when re-enabling.
 
 output "hostname"             { value = module.api.hostname }
 output "alb_dns_name"         { value = module.api.alb_dns_name }
