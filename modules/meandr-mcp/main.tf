@@ -71,12 +71,13 @@ locals {
     MEANDR_CONFIG_SOURCE = "redis"
 
     # Proxy reads config records from the reader cluster (caller passes
-    # the mcp-redis-in.<region> FQDN) and writes counters/streams to the
-    # per-region writer cluster created by this module.
-    MEANDR_REDIS_READER_ADDR    = "${var.reader_internal_dns_name}:6379"
+    # the endpoint) and writes counters/streams to the per-region writer
+    # cluster created by this module. Both use the AWS-internal hostnames
+    # directly so the clusters' wildcard certs verify cleanly.
+    MEANDR_REDIS_READER_ADDR    = "${var.reader_endpoint_address}:6379"
     MEANDR_REDIS_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_WRITER_ADDR    = "${aws_route53_record.mcp_redis_out.fqdn}:6379"
+    MEANDR_REDIS_WRITER_ADDR    = "${module.writer_valkey.primary_endpoint_address}:6379"
     MEANDR_REDIS_WRITER_USE_TLS = "true"
   }
 }
@@ -88,15 +89,11 @@ locals {
 # each region has its own writer cluster. Proxy writes everything here;
 # BE consumes the streams.
 #
-# DNS records (in/out from each app's perspective):
-#   mcp-redis-out.<region>.<env>.meandr.local → master  (proxy writes telemetry)
-#   be-redis-in.<region>.<env>.meandr.local   → replica (BE consumes streams)
-#
-# No need for a proxy-side reader of this cluster today — the proxy
-# reads its own counters from the master to avoid replica lag inside
-# the rate-limit Lua. If that ever changes, add `mcp-redis-out-replica`
-# or similar; don't reuse `mcp-redis-in.<region>` (which is the
-# reader-cluster prefix).
+# Both consumers dial the AWS-internal hostnames directly (proxy via
+# `module.writer_valkey.primary_endpoint_address`, BE via the same output
+# surfaced as `writer_endpoint`). No CNAME indirection — the cluster's
+# wildcard cert covers only its AWS hostname, and aliasing breaks TLS
+# verification without a ServerName override.
 
 module "writer_valkey" {
   source = "../elasticache-valkey"
@@ -123,22 +120,6 @@ module "writer_valkey" {
   private_subnet_ids = var.private_subnet_ids
 
   tags = merge(local.base_tags, { "meandr:cluster" = "writer" })
-}
-
-resource "aws_route53_record" "mcp_redis_out" {
-  zone_id = var.internal_dns_zone_id
-  name    = "mcp-redis-out.${local.region}.${var.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.writer_valkey.primary_endpoint_address]
-}
-
-resource "aws_route53_record" "be_redis_in" {
-  zone_id = var.internal_dns_zone_id
-  name    = "be-redis-in.${local.region}.${var.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [module.writer_valkey.reader_endpoint_address]
 }
 
 # --- NLB (network load balancer) ---------------------------------------

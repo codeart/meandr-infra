@@ -57,8 +57,8 @@ variable "internal_dns_zone_name" {
 
 # --- Reader Valkey (created at region level; consumed here) ------------
 
-variable "reader_internal_dns_name" {
-  description = "Reader Valkey internal DNS name. The proxy reads config from here."
+variable "reader_endpoint_address" {
+  description = "Reader Valkey endpoint — the AWS-internal hostname (e.g. `replica.meandr-reader.t0vlsz.euc1.cache.amazonaws.com`) the proxy dials for config reads. Using the AWS hostname directly (rather than a CNAME alias) means the cluster's wildcard TLS cert verifies cleanly."
   type        = string
 }
 

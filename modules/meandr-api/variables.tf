@@ -140,7 +140,7 @@ variable "db_deletion_protection" {
 # app from var.regions and the known hostname pattern.
 
 variable "writer_internal_dns_name" {
-  description = "Egress (write) Valkey internal DNS name — wired to the be-redis-out CNAME at the caller. Becomes MEANDR_REDIS_EGRESS_URL inside the container."
+  description = "Egress (write) Valkey endpoint — AWS-internal hostname the caller passes in. Becomes MEANDR_REDIS_EGRESS_URL inside the container. Using the AWS hostname directly (rather than a CNAME) means the cluster's wildcard TLS cert verifies cleanly."
   type        = string
 }
 
