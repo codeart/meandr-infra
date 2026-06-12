@@ -160,9 +160,9 @@ module "api" {
   regions = [local.region]
 
   db_instance_class = "db.t4g.micro"
-  puma    = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
-  jobs    = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
-  migrate = { cpu = 512, memory = 1024 }
+  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
+  jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
+  migrate           = { cpu = 512, memory = 1024 }
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -172,60 +172,56 @@ module "api" {
 # terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
 # Customer HTTPS traffic won't work end-to-end until then — expected v0.
 
-# Re-disabled — AWS Support's "approved" message didn't actually lift
-# the account-level NLB block (confirmed 2026-06-05 via Terraform, CLI,
-# and AWS Console all returning OperationNotPermitted). Half-applied
-# state was destroyed; re-enable once the block is genuinely lifted.
-# module "mcp" {
-#   source = "../../modules/meandr-mcp"
-#
-#   providers = {
-#     aws     = aws
-#     aws.dns = aws.shared
-#   }
-#
-#   env        = local.env
-#   account_id = local.account_id
-#
-#   image_tag = "develop"
-#
-#   vpc_id                 = module.vpc.vpc_id
-#   vpc_cidr_block         = module.vpc.vpc_cidr_block
-#   public_subnet_ids      = module.vpc.public_subnet_ids
-#   private_subnet_ids     = module.vpc.private_subnet_ids
-#   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
-#   internal_dns_zone_name = module.vpc.internal_dns_zone_name
-#
-#   reader_internal_dns_name = aws_route53_record.mcp_redis_in.fqdn
-#
-#   writer_node_type = "cache.t4g.micro"
-#   proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
-# }
+module "mcp" {
+  source = "../../modules/meandr-mcp"
+
+  providers = {
+    aws     = aws
+    aws.dns = aws.shared
+  }
+
+  env        = local.env
+  account_id = local.account_id
+
+  image_tag = "develop"
+
+  vpc_id                 = module.vpc.vpc_id
+  vpc_cidr_block         = module.vpc.vpc_cidr_block
+  public_subnet_ids      = module.vpc.public_subnet_ids
+  private_subnet_ids     = module.vpc.private_subnet_ids
+  internal_dns_zone_id   = module.vpc.internal_dns_zone_id
+  internal_dns_zone_name = module.vpc.internal_dns_zone_name
+
+  reader_internal_dns_name = aws_route53_record.mcp_redis_in.fqdn
+
+  writer_node_type = "cache.t4g.micro"
+  proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+}
 
 # --- Outputs -----------------------------------------------------------
 
-output "vpc_id"             { value = module.vpc.vpc_id }
-output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
-output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
+output "vpc_id" { value = module.vpc.vpc_id }
+output "vpc_cidr_block" { value = module.vpc.vpc_cidr_block }
+output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
 output "mcp_redis_in_dns" { value = aws_route53_record.mcp_redis_in.fqdn }
 output "be_redis_out_dns" { value = aws_route53_record.be_redis_out.fqdn }
-# mcp_redis_out / be_redis_in records are created inside module.mcp
-# (writer cluster); not exposed here until that module is uncommented.
+# mcp_redis_out / be_redis_in records are created inside module.mcp.
+output "mcp_redis_out_dns" { value = module.mcp.mcp_redis_out_dns }
+output "be_redis_in_dns" { value = module.mcp.be_redis_in_dns }
 output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
-output "config_redis_reader_endpoint"  { value = module.config_valkey.reader_endpoint_address }
-# mcp_cluster_name / mcp_proxy_service_name / mcp_nlb_dns_name omitted
-# while module.mcp is disabled. Re-add when re-enabling.
+output "config_redis_reader_endpoint" { value = module.config_valkey.reader_endpoint_address }
 
-output "hostname"             { value = module.api.hostname }
-output "alb_dns_name"         { value = module.api.alb_dns_name }
-output "cluster_name"         { value = module.api.cluster_name }
-output "puma_service_name"    { value = module.api.puma_service_name }
-output "jobs_service_name"    { value = module.api.jobs_service_name }
-output "migrate_task_family"  { value = module.api.migrate_task_family }
-output "worker_sg_id"         { value = module.api.worker_security_group_id }
+output "hostname" { value = module.api.hostname }
+output "alb_dns_name" { value = module.api.alb_dns_name }
+output "cluster_name" { value = module.api.cluster_name }
+output "puma_service_name" { value = module.api.puma_service_name }
+output "jobs_service_name" { value = module.api.jobs_service_name }
+output "migrate_task_family" { value = module.api.migrate_task_family }
+output "worker_sg_id" { value = module.api.worker_security_group_id }
 output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
 
-# mcp_* outputs and writer_internal_dns_name omitted while module.mcp is disabled.
-# Re-add once the NLB account-level limit is in place and module.mcp is uncommented.
+output "mcp_cluster_name" { value = module.mcp.cluster_name }
+output "mcp_proxy_service_name" { value = module.mcp.proxy_service_name }
+output "mcp_nlb_dns_name" { value = module.mcp.nlb_dns_name }
