@@ -321,11 +321,20 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
 # client's source IP through unchanged when target_type = ip + TCP).
 
 resource "aws_security_group" "proxy" {
-  name        = "meandr-mcp-proxy"
+  # name_prefix + create_before_destroy lets TF spin up a replacement SG
+  # under a fresh generated name when an immutable field (description,
+  # vpc_id) changes — the service swaps to the new SG ID, tasks roll,
+  # then the old SG drops. Avoids the ENI-still-attached deadlock that
+  # `name = "..."` causes (AWS rejects duplicate names per VPC).
+  name_prefix = "meandr-mcp-proxy-"
   description = "Proxy tasks - accepts customer traffic on ${var.proxy_port} (plain HTTP) and ${var.proxy_tls_port} (TLS). NLB :80 and :443 forward to these respective ports."
   vpc_id      = var.vpc_id
 
   tags = merge(local.base_tags, { Name = "meandr-mcp-proxy SG" })
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_security_group_rule" "proxy_ingress_plain" {
@@ -337,6 +346,10 @@ resource "aws_security_group_rule" "proxy_ingress_plain" {
   protocol    = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
   description = "Plain HTTP customer traffic via NLB :80 (client IP preserved when target_type=ip)"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_security_group_rule" "proxy_ingress_tls" {
@@ -348,6 +361,10 @@ resource "aws_security_group_rule" "proxy_ingress_tls" {
   protocol    = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
   description = "TLS customer traffic via NLB :443 (proxy terminates TLS; client IP preserved when target_type=ip)"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_security_group_rule" "proxy_egress_all" {
@@ -359,6 +376,10 @@ resource "aws_security_group_rule" "proxy_egress_all" {
   protocol    = "-1"
   cidr_blocks = ["0.0.0.0/0"]
   description = "All outbound (upstream MCP servers, Redis, Secrets Manager, ECR)"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- Proxy service ------------------------------------------------------
