@@ -105,6 +105,15 @@ variable "target_group_arn" {
   default     = null
 }
 
+variable "extra_load_balancers" {
+  description = "Additional LB target groups + container ports to register the service with, beyond the primary `target_group_arn`/`container_port` pair. Use when a single service serves multiple listener ports (e.g. plain HTTP on one TG, TLS on another). Each entry adds a port mapping in the task def and a load_balancer block on the service."
+  type = list(object({
+    target_group_arn = string
+    container_port   = number
+  }))
+  default = []
+}
+
 variable "enable_execute_command" {
   description = "Allow `aws ecs execute-command` into running tasks (Fargate SSM session). Helpful for debugging and Rails console access; should stay on for staging."
   type        = bool

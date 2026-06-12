@@ -31,12 +31,20 @@ locals {
       essential = true
       command   = length(var.command) > 0 ? var.command : null
 
-      portMappings = var.target_group_arn != null ? [
-        {
-          containerPort = var.container_port
-          protocol      = "tcp"
-        }
-      ] : []
+      portMappings = concat(
+        var.target_group_arn != null ? [
+          {
+            containerPort = var.container_port
+            protocol      = "tcp"
+          }
+        ] : [],
+        [
+          for lb in var.extra_load_balancers : {
+            containerPort = lb.container_port
+            protocol      = "tcp"
+          }
+        ],
+      )
 
       environment = [
         for k, v in var.environment : { name = k, value = v }
@@ -99,6 +107,15 @@ resource "aws_ecs_service" "main" {
       target_group_arn = var.target_group_arn
       container_name   = var.container_name
       container_port   = var.container_port
+    }
+  }
+
+  dynamic "load_balancer" {
+    for_each = var.extra_load_balancers
+    content {
+      target_group_arn = load_balancer.value.target_group_arn
+      container_name   = var.container_name
+      container_port   = load_balancer.value.container_port
     }
   }
 

@@ -66,7 +66,8 @@ locals {
     # CloudWatch Logs doesn't render ANSI.
     NO_COLOR = "1"
 
-    MEANDR_LISTEN_ADDR = ":${var.proxy_port}"
+    MEANDR_LISTEN_ADDR     = ":${var.proxy_port}"
+    MEANDR_TLS_LISTEN_ADDR = ":${var.proxy_tls_port}"
 
     MEANDR_CONFIG_SOURCE = "redis"
 
@@ -127,12 +128,17 @@ module "writer_valkey" {
 # TCP load balancer (not HTTP/HTTPS) — the proxy terminates TLS itself
 # (per the E2E-encryption product commitment). NLB just forwards bytes.
 #
-# Two TCP listeners (80 + 443), both forwarding to the same target group
-# on :8080. Until the BE-side cert pipeline lands, the proxy listens
-# plain HTTP on :8080 and HTTPS clients see a handshake failure — that's
-# the expected v0 state. When the cert pipeline is in, target group port
-# stays 8080 but the proxy starts terminating TLS on its end (via
-# MEANDR_TLS_* env vars + a Secrets Manager-sourced cert).
+# Two TCP listeners:
+#   :80  → proxy plain-HTTP TG  → proxy:proxy_port     (cleartext)
+#   :443 → proxy TLS TG         → proxy:proxy_tls_port (TLS, terminated in proxy)
+#
+# The proxy serves both ports — one via NewHTTP, one via NewHTTPS with
+# the cert.Cache wired. End-to-end encryption is preserved: bytes only
+# decrypt in the proxy task, never at the NLB.
+#
+# Until the BE-side cert pipeline lands, HTTPS handshakes will fail at
+# cert lookup (cert.Cache has no live Provider data). The routing shape
+# is correct; the cert side is what's missing.
 
 resource "aws_lb" "main" {
   name               = "meandr-mcp-nlb"
@@ -153,9 +159,6 @@ resource "aws_lb_target_group" "proxy" {
   target_type = "ip" # Fargate awsvpc mode
   vpc_id      = var.vpc_id
 
-  # TCP-level health check. The proxy listens on TLS so HTTP health check
-  # won't work; TCP just verifies the socket is open. Real health is
-  # better assessed at the ECS task health-check level.
   health_check {
     enabled             = true
     protocol            = "TCP"
@@ -167,6 +170,34 @@ resource "aws_lb_target_group" "proxy" {
   deregistration_delay = 30
 
   tags = merge(local.base_tags, { Name = "MCP proxy TG" })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_lb_target_group" "proxy_tls" {
+  name        = "meandr-mcp-proxy-tls"
+  port        = var.proxy_tls_port
+  protocol    = "TCP"
+  target_type = "ip"
+  vpc_id      = var.vpc_id
+
+  # TCP probe on the TLS port — verifies the socket accepts connections.
+  # A full TLS-protocol probe would require ACM/SNI awareness inside the
+  # health check; the TCP-level signal is sufficient given ECS already
+  # gates task health at the container level.
+  health_check {
+    enabled             = true
+    protocol            = "TCP"
+    interval            = 30
+    healthy_threshold   = 3
+    unhealthy_threshold = 3
+  }
+
+  deregistration_delay = 30
+
+  tags = merge(local.base_tags, { Name = "MCP proxy TLS TG" })
 
   lifecycle {
     create_before_destroy = true
@@ -193,7 +224,7 @@ resource "aws_lb_listener" "http_443" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.proxy.arn
+    target_group_arn = aws_lb_target_group.proxy_tls.arn
   }
 
   tags = merge(local.base_tags, { Name = "MCP NLB TCP:443 listener" })
@@ -291,13 +322,13 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
 
 resource "aws_security_group" "proxy" {
   name        = "meandr-mcp-proxy"
-  description = "Proxy tasks - accepts customer traffic on ${var.proxy_port} (NLB multiplexes external 80/443 onto this single port)"
+  description = "Proxy tasks - accepts customer traffic on ${var.proxy_port} (plain HTTP) and ${var.proxy_tls_port} (TLS). NLB :80 and :443 forward to these respective ports."
   vpc_id      = var.vpc_id
 
   tags = merge(local.base_tags, { Name = "meandr-mcp-proxy SG" })
 }
 
-resource "aws_security_group_rule" "proxy_ingress" {
+resource "aws_security_group_rule" "proxy_ingress_plain" {
   type              = "ingress"
   security_group_id = aws_security_group.proxy.id
 
@@ -305,7 +336,18 @@ resource "aws_security_group_rule" "proxy_ingress" {
   to_port     = var.proxy_port
   protocol    = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
-  description = "Customer traffic via NLB (which preserves client IP when target_type=ip)"
+  description = "Plain HTTP customer traffic via NLB :80 (client IP preserved when target_type=ip)"
+}
+
+resource "aws_security_group_rule" "proxy_ingress_tls" {
+  type              = "ingress"
+  security_group_id = aws_security_group.proxy.id
+
+  from_port   = var.proxy_tls_port
+  to_port     = var.proxy_tls_port
+  protocol    = "tcp"
+  cidr_blocks = ["0.0.0.0/0"]
+  description = "TLS customer traffic via NLB :443 (proxy terminates TLS; client IP preserved when target_type=ip)"
 }
 
 resource "aws_security_group_rule" "proxy_egress_all" {
@@ -341,6 +383,12 @@ module "proxy" {
   security_group_ids = [aws_security_group.proxy.id]
 
   target_group_arn = aws_lb_target_group.proxy.arn
+  extra_load_balancers = [
+    {
+      target_group_arn = aws_lb_target_group.proxy_tls.arn
+      container_port   = var.proxy_tls_port
+    },
+  ]
 
   desired_count          = var.proxy.desired_count
   enable_autoscaling     = var.proxy.desired_count > 0

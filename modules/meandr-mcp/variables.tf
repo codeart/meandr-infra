@@ -140,9 +140,15 @@ variable "proxy" {
 }
 
 variable "proxy_port" {
-  description = "TCP port the proxy listens on. Matches the Go binary's listen port."
+  description = "Plain-HTTP TCP port the proxy listens on. NLB :80 forwards here."
   type        = number
   default     = 8080
+}
+
+variable "proxy_tls_port" {
+  description = "TLS port the proxy listens on. NLB :443 forwards here. Unprivileged (>1024) because the distroless `nonroot` user can't bind <1024."
+  type        = number
+  default     = 8443
 }
 
 # --- Logging ------------------------------------------------------------
