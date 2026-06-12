@@ -126,6 +126,8 @@ module "api" {
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   migrate           = { cpu = 512, memory = 1024 }
+
+  log_retention_days = 7
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -159,6 +161,8 @@ module "mcp" {
 
   writer_node_type = "cache.t4g.micro"
   proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+
+  log_retention_days = 7
 }
 
 # --- Outputs -----------------------------------------------------------
