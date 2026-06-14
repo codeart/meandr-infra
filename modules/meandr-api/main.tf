@@ -18,6 +18,19 @@ resource "null_resource" "account_guard" {
   }
 }
 
+# Cross-variable invariant: MEANDR_MCP_REGIONS and MEANDR_REDIS_INGRESS_URLS
+# are positionally paired; mismatched lengths would cause the BE-side
+# zip to silently drop entries. Inline `validation` blocks can only see
+# their own variable, so the check lives here.
+resource "null_resource" "input_pairing_guard" {
+  lifecycle {
+    precondition {
+      condition     = length(var.regions) == length(var.ingress_endpoints)
+      error_message = "regions and ingress_endpoints must have the same length — they're positionally paired into MEANDR_MCP_REGIONS / MEANDR_REDIS_INGRESS_URLS."
+    }
+  }
+}
+
 # --- Public DNS zone (in Shared account; used for cert + public record) -
 
 data "aws_route53_zone" "public" {
@@ -60,8 +73,13 @@ locals {
     MEANDR_ENV = local.meandr_env
     AWS_REGION = local.region
 
-    MEANDR_REDIS_EGRESS_URL = "rediss://${var.writer_internal_dns_name}:6379"
-    MEANDR_REGIONS          = join(",", var.regions)
+    # MEANDR_MCP_REGIONS + MEANDR_REDIS_INGRESS_URLS are positionally
+    # paired — BE zips them into [[region, url], ...] to know which
+    # writer endpoint corresponds to which proxy region. Lengths must
+    # match (enforced by the input_pairing_guard below).
+    MEANDR_REDIS_EGRESS_URL   = "rediss://${var.writer_internal_dns_name}:6379"
+    MEANDR_MCP_REGIONS        = join(",", var.regions)
+    MEANDR_REDIS_INGRESS_URLS = join(",", [for h in var.ingress_endpoints : "rediss://${h}:6379"])
   }
 
   app_secrets = {

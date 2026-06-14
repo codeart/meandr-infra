@@ -120,7 +120,11 @@ module "api" {
 
   # State-plane regions BE should consume streams from. Just our own
   # region today; expand when more regions come online with meandr-mcp.
-  regions = [local.region]
+  # ingress_endpoints is positional with regions — first region's writer,
+  # second region's writer, etc. In a multi-region prod setup the extra
+  # regions' endpoints come via terraform_remote_state.
+  regions           = [local.region]
+  ingress_endpoints = [module.mcp.writer_primary_endpoint]
 
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }

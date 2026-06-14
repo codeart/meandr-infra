@@ -135,13 +135,24 @@ variable "db_deletion_protection" {
 
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
-# BE only needs ONE Redis URL — the egress (write) endpoint of the config
-# plane. Read URLs for per-region state planes are constructed inside the
-# app from var.regions and the known hostname pattern.
+# BE needs two flavors of Redis URL:
+#   - egress: the config-plane primary (BE writes config records).
+#   - ingress: every region's writer cluster primary (BE consumes
+#     streams from each region).
+#
+# The egress is one global cluster; the ingress is per-region — BE runs
+# only in the primary region today, so cross-region ingress URLs come
+# from each region's terraform_remote_state.
 
 variable "writer_internal_dns_name" {
   description = "Egress (write) Valkey endpoint — AWS-internal hostname the caller passes in. Becomes MEANDR_REDIS_EGRESS_URL inside the container. Using the AWS hostname directly (rather than a CNAME) means the cluster's wildcard TLS cert verifies cleanly."
   type        = string
+}
+
+variable "ingress_endpoints" {
+  description = "Per-region writer Valkey endpoints (AWS-internal hostnames) BE consumes streams from. Each entry becomes `rediss://<host>:6379` joined with commas into MEANDR_REDIS_INGRESS_URLS. Positionally paired with var.regions — entry N is the writer for region N. Today a single-element list (primary region only); expands as more regions come online with their own writer clusters."
+  type        = list(string)
+  default     = []
 }
 
 variable "reader_security_group_id" {
@@ -151,7 +162,7 @@ variable "reader_security_group_id" {
 }
 
 variable "regions" {
-  description = "Regions whose state-plane Redis BE should consume streams from. BE constructs each region's read URL itself as `be-state-in.<region>.<env>.meandr.local`. Today a single-element list; expands as more regions come online. Joined with commas into MEANDR_REGIONS."
+  description = "Region codes where the proxy fleet runs — every region with a `meandr-mcp` deployment that BE consumes streams from. Joined with commas into MEANDR_MCP_REGIONS. Positionally paired with var.ingress_endpoints — entry N labels the writer endpoint at ingress_endpoints[N]."
   type        = list(string)
 }
 
