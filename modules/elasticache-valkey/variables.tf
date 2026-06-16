@@ -68,6 +68,26 @@ variable "snapshot_retention_days" {
   default     = 1
 }
 
+variable "parameter_group_family" {
+  description = "Parameter-group family — must match the major of engine_version (`valkey8` for 8.x, `valkey7` for 7.x). When bumping engine to a new major, bump this too."
+  type        = string
+  default     = "valkey8"
+}
+
+variable "maxmemory_policy" {
+  description = "Eviction policy. ElastiCache's default-of-defaults is `volatile-lru`, which silently evicts keys with TTLs when memory pressure hits — bad for our planes (config records must not vanish; cable subscriptions must not vanish; counter keys are TTL'd by design and would be the first targets of volatile-lru). `noeviction` lets the cluster surface OOM as an error the caller can handle, which is what we want everywhere."
+  type        = string
+  default     = "noeviction"
+
+  validation {
+    condition = contains([
+      "noeviction", "volatile-lru", "allkeys-lru", "volatile-lfu", "allkeys-lfu",
+      "volatile-random", "allkeys-random", "volatile-ttl",
+    ], var.maxmemory_policy)
+    error_message = "Unsupported maxmemory_policy. See AWS ElastiCache Valkey docs for allowed values."
+  }
+}
+
 variable "vpc_id" {
   description = "VPC to place the cluster into. From vpc module output."
   type        = string

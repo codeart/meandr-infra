@@ -72,6 +72,31 @@ resource "aws_security_group_rule" "egress_all" {
   description = "Allow all outbound"
 }
 
+# --- Parameter group -----------------------------------------------------
+#
+# AWS's `default.valkey8` parameter group ships with `maxmemory-policy =
+# volatile-lru`, which silently evicts TTL'd keys under memory pressure.
+# That breaks every plane we run: config records, cable subscriptions,
+# rate-limit counters. Pinning `noeviction` makes the cluster fail loud
+# (OOM error to the caller) instead of failing silent (key vanished).
+#
+# ChangeType on maxmemory-policy is `immediate` — applies live, no
+# cluster restart. Parameter-group name change on the replication group
+# is also in-place; never forces a recreate.
+
+resource "aws_elasticache_parameter_group" "main" {
+  name        = var.name
+  family      = var.parameter_group_family
+  description = "Pinned parameters for ${var.name}"
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = var.maxmemory_policy
+  }
+
+  tags = var.tags
+}
+
 # --- Replication group ---------------------------------------------------
 
 resource "aws_elasticache_replication_group" "main" {
@@ -87,8 +112,9 @@ resource "aws_elasticache_replication_group" "main" {
   automatic_failover_enabled = var.automatic_failover_enabled
   multi_az_enabled           = var.multi_az_enabled
 
-  subnet_group_name  = aws_elasticache_subnet_group.main.name
-  security_group_ids = [aws_security_group.main.id]
+  subnet_group_name    = aws_elasticache_subnet_group.main.name
+  security_group_ids   = [aws_security_group.main.id]
+  parameter_group_name = aws_elasticache_parameter_group.main.name
 
   transit_encryption_enabled = var.transit_encryption_enabled
   at_rest_encryption_enabled = var.at_rest_encryption_enabled
