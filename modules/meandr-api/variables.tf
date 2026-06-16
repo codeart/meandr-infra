@@ -133,6 +133,14 @@ variable "db_deletion_protection" {
   default     = false
 }
 
+# --- API Redis (ActionCable + other API-owned persistent state) ---------
+
+variable "api_redis_node_type" {
+  description = "ElastiCache node type for the API's own Redis (ActionCable pub/sub, future API-owned persistent state). Single-node, no replication; sized small. cache.t4g.micro is fine for staging."
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
 # BE needs two flavors of Redis URL:

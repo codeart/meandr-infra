@@ -80,6 +80,13 @@ locals {
     MEANDR_REDIS_EGRESS_URL   = "rediss://${var.writer_internal_dns_name}:6379"
     MEANDR_MCP_REGIONS        = join(",", var.regions)
     MEANDR_REDIS_INGRESS_URLS = join(",", [for h in var.ingress_endpoints : "rediss://${h}:6379"])
+
+    # API's own Redis — ActionCable pub/sub today, future API-owned
+    # persistent state (anything we need to keep that isn't worth a
+    # Postgres table). Separate from the proxy planes by intent: those
+    # are GD-replicated (egress) or per-region writer-only (ingress);
+    # neither is appropriate for arbitrary API data.
+    MEANDR_REDIS_URL = "rediss://${module.api_valkey.primary_endpoint_address}:6379"
   }
 
   app_secrets = {
@@ -94,6 +101,44 @@ locals {
     MEANDR_OPS_USER     = "${aws_secretsmanager_secret.ops.arn}:user::"
     MEANDR_OPS_PASSWORD = "${aws_secretsmanager_secret.ops.arn}:password::"
   }
+}
+
+# --- API Redis (ActionCable + future API-owned persistent state) -------
+#
+# Single-node, no replication, no Multi-AZ — this is API-owned working
+# storage, not customer-facing. ActionCable is the immediate consumer
+# (per-subscription pub/sub for live introspect updates, etc.); future
+# API-only persistent state can land here too. Separate from the proxy
+# planes by intent: egress is GD-replicated (config), ingress is
+# per-region writer-only (proxy → BE streams); neither is suitable for
+# arbitrary API data.
+#
+# TLS-on for consistency with the other Valkeys. AT-rest encryption on
+# since the cable subscription identifiers may surface internal IDs.
+
+module "api_valkey" {
+  source = "../elasticache-valkey"
+
+  name        = "meandr-api-redis"
+  description = "API-owned Redis: ActionCable + persistent state"
+
+  engine_version = "8.1"
+  node_type      = var.api_redis_node_type
+
+  num_cache_clusters         = 1
+  automatic_failover_enabled = false
+  multi_az_enabled           = false
+
+  transit_encryption_enabled = true
+  at_rest_encryption_enabled = true
+
+  snapshot_retention_days = 1
+
+  vpc_id             = var.vpc_id
+  vpc_cidr_block     = var.vpc_cidr_block
+  private_subnet_ids = var.private_subnet_ids
+
+  tags = merge(local.base_tags, { "meandr:cluster" = "api" })
 }
 
 # --- RDS Postgres -------------------------------------------------------
