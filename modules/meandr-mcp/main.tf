@@ -71,16 +71,20 @@ locals {
 
     MEANDR_CONFIG_SOURCE = "redis"
 
-    # Proxy reads config records and consumes the inbound stream from the
-    # config-stream cluster (caller passes its primary endpoint), and writes
-    # outbound/audit streams to this region's event-stream cluster (created
-    # by this module). Both connect to AWS-internal hostnames directly so
-    # the clusters' wildcard certs verify cleanly.
-    MEANDR_REDIS_READER_ADDR    = "${var.config_writer_endpoint}:6379"
-    MEANDR_REDIS_READER_USE_TLS = "true"
+    # Three Redis planes:
+    #   CONFIG_READER → config-stream replica  (pure config-record reads)
+    #   CONFIG_WRITER → config-stream primary  (XREADGROUP on `<env>:in`)
+    #   EVENT_WRITER  → event-stream primary   (outbound + audit + locks)
+    # All three connect to AWS-internal hostnames directly so the
+    # clusters' wildcard certs verify cleanly.
+    MEANDR_REDIS_CONFIG_READER_ADDR    = "${var.config_reader_endpoint}:6379"
+    MEANDR_REDIS_CONFIG_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
-    MEANDR_REDIS_WRITER_USE_TLS = "true"
+    MEANDR_REDIS_CONFIG_WRITER_ADDR    = "${var.config_writer_endpoint}:6379"
+    MEANDR_REDIS_CONFIG_WRITER_USE_TLS = "true"
+
+    MEANDR_REDIS_EVENT_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
+    MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
   }
 }
 
