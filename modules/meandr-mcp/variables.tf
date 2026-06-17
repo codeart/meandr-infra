@@ -55,10 +55,31 @@ variable "internal_dns_zone_name" {
   type        = string
 }
 
-# --- Reader Valkey (created at region level; consumed here) ------------
+# --- Config-stream Valkey (created at region level; consumed here) -----
+#
+# The config-stream cluster lives at region level (both meandr-api and
+# meandr-mcp consume it). We take its two AWS-managed endpoints as
+# separate inputs so the proxy can pick the right one per use case:
+#
+#   - config_reader_endpoint (replica): pure config-record reads.
+#     Tolerates replication lag; takes load off the primary; in multi-AZ
+#     production this endpoint refuses writes at the AWS layer, which is
+#     a useful safety boundary.
+#
+#   - config_writer_endpoint (primary): inbound stream consumption
+#     (XREADGROUP on `<env>:in`). Group state is a write op, so this MUST
+#     be the primary even though the app is "reading."
+#
+# Both AWS hostnames are passed directly (no CNAME alias) so the
+# cluster's wildcard TLS cert verifies cleanly.
 
-variable "reader_endpoint_address" {
-  description = "Reader Valkey endpoint — the AWS-internal hostname (e.g. `replica.meandr-reader.t0vlsz.euc1.cache.amazonaws.com`) the proxy dials for config reads. Using the AWS hostname directly (rather than a CNAME alias) means the cluster's wildcard TLS cert verifies cleanly."
+variable "config_reader_endpoint" {
+  description = "Reader (replica) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for config-record reads only — XREADGROUP on the inbound stream needs the writer endpoint."
+  type        = string
+}
+
+variable "config_writer_endpoint" {
+  description = "Writer (primary) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for inbound stream consumption (`<env>:in`). In multi-AZ production this is the only endpoint that accepts writes — including the XREADGROUP group-state writes that stream consumption produces."
   type        = string
 }
 
@@ -97,22 +118,22 @@ variable "image_tag" {
   default     = "develop"
 }
 
-# --- Writer Valkey sizing -----------------------------------------------
+# --- Event-stream Valkey sizing ----------------------------------------
 
-variable "writer_node_type" {
-  description = "ElastiCache node type for the writer cluster. Writer is single-region (never in GD), so any node family works including T-family."
+variable "event_stream_node_type" {
+  description = "ElastiCache node type for the event-stream cluster. Single-region (never in GD), so any node family works including T-family."
   type        = string
   default     = "cache.t4g.micro"
 }
 
-variable "writer_replicas" {
-  description = "num_cache_clusters for the writer. 1 = single node, no replication."
+variable "event_stream_replicas" {
+  description = "num_cache_clusters for the event-stream cluster. 1 = single node, no replication."
   type        = number
   default     = 1
 }
 
-variable "writer_snapshot_retention_days" {
-  description = "Daily RDB snapshots for the writer. 1 for staging; consider 7+ for production."
+variable "event_stream_snapshot_retention_days" {
+  description = "Daily RDB snapshots for the event-stream cluster. 1 for staging; consider 7+ for production."
   type        = number
   default     = 1
 }

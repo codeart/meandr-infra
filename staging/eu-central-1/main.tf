@@ -38,32 +38,21 @@ module "vpc" {
   tags = local.tags
 }
 
-# --- Config-plane Valkey -----------------------------------------------
+# --- Config-stream Valkey ----------------------------------------------
 #
 # The shared Redis where the BE writes config records (projects, servers,
-# agents, policies, tokens, hosts, tools) and the proxy reads them. Lives
-# at region level (not inside an app module) because both meandr-api and
-# meandr-mcp consume it. Standalone today; promotes to gd_primary when
-# production launches a second region. TLS-on from day 1 — required for
-# Global Datastore eligibility, can't be toggled in place.
-#
-# Two DNS records are created by the module:
-#   - mcp-redis-in.<region>.staging.meandr.local  → reader endpoint
-#   - mcp-redis-out.staging.meandr.local          → writable primary
-#
-# Read endpoint includes the region because each region's secondary
-# cluster has its own replica endpoint. Write endpoint omits region
-# because there is only one global GD primary.
+# agents, policies, tokens, hosts, tools) and produces the inbound event
+# stream that the proxy consumes. Lives at region level (not inside an
+# app module) because both meandr-api and meandr-mcp consume it.
+# Standalone today; promotes to gd_primary when production launches a
+# second region. TLS-on from day 1 — required for Global Datastore
+# eligibility, can't be toggled in place.
 
-module "config_valkey" {
+module "config_stream" {
   source = "../../modules/elasticache-valkey"
 
-  # AWS replication_group_id intentionally kept at "meandr-reader" — the
-  # legacy name in the AWS console — to avoid a destroy/recreate of the
-  # cluster. The customer-visible naming change is in the DNS records
-  # below, which is what apps actually connect to.
-  name        = "meandr-reader"
-  description = "Config Valkey staging - BE writes config, proxy reads config"
+  name        = "meandr-config-stream"
+  description = "Config-stream Valkey staging - BE writes config + inbound events, proxy reads config + consumes inbound events"
 
   engine_version = "8.1"
   node_type      = "cache.t4g.micro"
@@ -84,12 +73,13 @@ module "config_valkey" {
   tags = merge(local.tags, { "meandr:plane" = "config" })
 }
 
-# Local-module rename in state. The underlying AWS resource ID is
-# unchanged (still "meandr-reader") so no resource churn — Terraform
-# just updates its state-tree addressing.
+# Local-module rename in state. The AWS replication_group_id also changes
+# (`meandr-reader` → `meandr-config-stream`), so the underlying cluster
+# gets destroyed and recreated — `moved` here just keeps the state-tree
+# addressing consistent across the rename.
 moved {
-  from = module.reader
-  to   = module.config_valkey
+  from = module.config_valkey
+  to   = module.config_stream
 }
 
 # --- meandr-api --------------------------------------------------------
@@ -115,16 +105,16 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  writer_internal_dns_name = module.config_valkey.primary_endpoint_address
-  reader_security_group_id = module.config_valkey.security_group_id
+  config_writer_endpoint          = module.config_stream.primary_endpoint_address
+  config_stream_security_group_id = module.config_stream.security_group_id
 
   # State-plane regions BE should consume streams from. Just our own
   # region today; expand when more regions come online with meandr-mcp.
-  # ingress_endpoints is positional with regions — first region's writer,
-  # second region's writer, etc. In a multi-region prod setup the extra
-  # regions' endpoints come via terraform_remote_state.
-  regions           = [local.region]
-  ingress_endpoints = [module.mcp.writer_primary_endpoint]
+  # event_writer_endpoints is positional with regions — first region's
+  # event-stream writer, second region's, etc. In a multi-region prod
+  # setup the extra regions' endpoints come via terraform_remote_state.
+  regions                = [local.region]
+  event_writer_endpoints = [module.mcp.event_writer_endpoint]
 
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -161,10 +151,11 @@ module "mcp" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  reader_endpoint_address = module.config_valkey.reader_endpoint_address
+  config_reader_endpoint = module.config_stream.reader_endpoint_address
+  config_writer_endpoint = module.config_stream.primary_endpoint_address
 
-  writer_node_type = "cache.t4g.micro"
-  proxy            = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+  event_stream_node_type = "cache.t4g.micro"
+  proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
   log_retention_days = 7
 }
@@ -176,10 +167,9 @@ output "vpc_cidr_block" { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "config_redis_primary_endpoint" { value = module.config_valkey.primary_endpoint_address }
-output "config_redis_reader_endpoint" { value = module.config_valkey.reader_endpoint_address }
-output "writer_redis_primary_endpoint" { value = module.mcp.writer_primary_endpoint }
-output "writer_redis_reader_endpoint" { value = module.mcp.writer_reader_endpoint }
+output "config_stream_writer_endpoint" { value = module.config_stream.primary_endpoint_address }
+output "config_stream_reader_endpoint" { value = module.config_stream.reader_endpoint_address }
+output "event_stream_writer_endpoint" { value = module.mcp.event_writer_endpoint }
 
 output "hostname" { value = module.api.hostname }
 output "alb_dns_name" { value = module.api.alb_dns_name }

@@ -71,41 +71,41 @@ locals {
 
     MEANDR_CONFIG_SOURCE = "redis"
 
-    # Proxy reads config records from the reader cluster (caller passes
-    # the endpoint) and writes counters/streams to the per-region writer
-    # cluster created by this module. Both use the AWS-internal hostnames
-    # directly so the clusters' wildcard certs verify cleanly.
-    MEANDR_REDIS_READER_ADDR    = "${var.reader_endpoint_address}:6379"
+    # Proxy reads config records and consumes the inbound stream from the
+    # config-stream cluster (caller passes its primary endpoint), and writes
+    # outbound/audit streams to this region's event-stream cluster (created
+    # by this module). Both connect to AWS-internal hostnames directly so
+    # the clusters' wildcard certs verify cleanly.
+    MEANDR_REDIS_READER_ADDR    = "${var.config_writer_endpoint}:6379"
     MEANDR_REDIS_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_WRITER_ADDR    = "${module.writer_valkey.primary_endpoint_address}:6379"
+    MEANDR_REDIS_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
     MEANDR_REDIS_WRITER_USE_TLS = "true"
   }
 }
 
-# --- Writer Valkey (per-region, no replication) -----------------------
+# --- Event-stream Valkey (per-region, no replication) -----------------
 #
-# The "writer" half of the proxy/BE Redis topology: counters (rl: hash),
-# audit / events streams, dedup locks. Per-region, never GD-replicated —
-# each region has its own writer cluster. Proxy writes everything here;
-# BE consumes the streams.
+# The event-stream half of the proxy/BE Redis topology: counters (rl:
+# hash), outbound/audit streams, dedup locks. Per-region, never GD-
+# replicated — each region has its own event cluster. Proxy writes
+# everything here (so connects to the writer/primary endpoint); BE
+# consumes the streams (also via the writer endpoint, because
+# XREADGROUP requires a writable node).
 #
-# Both consumers dial the AWS-internal hostnames directly (proxy via
-# `module.writer_valkey.primary_endpoint_address`, BE via the same output
-# surfaced as `writer_endpoint`). No CNAME indirection — the cluster's
-# wildcard cert covers only its AWS hostname, and aliasing breaks TLS
-# verification without a ServerName override.
+# Both consumers dial the AWS-internal hostnames directly — no CNAME
+# indirection — so the cluster's wildcard cert verifies cleanly.
 
-module "writer_valkey" {
+module "event_stream" {
   source = "../elasticache-valkey"
 
-  name        = "meandr-writer"
-  description = "Writer Valkey - proxy writes counters/streams/locks, BE consumes streams"
+  name        = "meandr-event-stream"
+  description = "Event-stream Valkey - proxy writes counters/streams/locks, BE consumes streams"
 
   engine_version = "8.1"
-  node_type      = var.writer_node_type
+  node_type      = var.event_stream_node_type
 
-  num_cache_clusters         = var.writer_replicas
+  num_cache_clusters         = var.event_stream_replicas
   automatic_failover_enabled = false
   multi_az_enabled           = false
 
@@ -114,13 +114,22 @@ module "writer_valkey" {
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
 
-  snapshot_retention_days = var.writer_snapshot_retention_days
+  snapshot_retention_days = var.event_stream_snapshot_retention_days
 
   vpc_id             = var.vpc_id
   vpc_cidr_block     = var.vpc_cidr_block
   private_subnet_ids = var.private_subnet_ids
 
-  tags = merge(local.base_tags, { "meandr:cluster" = "writer" })
+  tags = merge(local.base_tags, { "meandr:plane" = "event" })
+}
+
+# Local-module rename in state. The underlying AWS resource ID also changed
+# (`meandr-writer` → `meandr-event-stream`), so this is a destroy/recreate,
+# not a state-only move — `moved` here just keeps `terraform plan`'s diff
+# tidy by addressing the old + new state nodes by the same logical name.
+moved {
+  from = module.writer_valkey
+  to   = module.event_stream
 }
 
 # --- NLB (network load balancer) ---------------------------------------

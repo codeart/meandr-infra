@@ -143,34 +143,39 @@ variable "api_redis_node_type" {
 
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
-# BE needs two flavors of Redis URL:
-#   - egress: the config-plane primary (BE writes config records).
-#   - ingress: every region's writer cluster primary (BE consumes
-#     streams from each region).
+# BE needs two Valkey planes:
+#   - config-stream: BE writes config records + inbound events (one global
+#     cluster). Always the writer (primary) endpoint — BE writes here.
+#   - event-stream: BE consumes outbound streams (per-region cluster).
+#     Also the writer endpoint — XREADGROUP is a write op.
 #
-# The egress is one global cluster; the ingress is per-region — BE runs
-# only in the primary region today, so cross-region ingress URLs come
-# from each region's terraform_remote_state.
+# The config-stream cluster is single; event-stream is per-region. BE
+# runs only in the primary region today, so cross-region event-stream
+# writer endpoints come from each region's terraform_remote_state.
+#
+# Env-var wire names (MEANDR_REDIS_EGRESS_URL / MEANDR_REDIS_INGRESS_URLS)
+# are kept stable on the Rails side; only the TF input names follow the
+# new <plane>_<role>_endpoint convention.
 
-variable "writer_internal_dns_name" {
-  description = "Egress (write) Valkey endpoint — AWS-internal hostname the caller passes in. Becomes MEANDR_REDIS_EGRESS_URL inside the container. Using the AWS hostname directly (rather than a CNAME) means the cluster's wildcard TLS cert verifies cleanly."
+variable "config_writer_endpoint" {
+  description = "Writer (primary) endpoint of `meandr-config-stream`. AWS-internal hostname. BE writes config records and produces inbound events here. Maps onto MEANDR_REDIS_EGRESS_URL inside the container."
   type        = string
 }
 
-variable "ingress_endpoints" {
-  description = "Per-region writer Valkey endpoints (AWS-internal hostnames) BE consumes streams from. Each entry becomes `rediss://<host>:6379` joined with commas into MEANDR_REDIS_INGRESS_URLS. Positionally paired with var.regions — entry N is the writer for region N. Today a single-element list (primary region only); expands as more regions come online with their own writer clusters."
+variable "event_writer_endpoints" {
+  description = "Per-region writer (primary) endpoints of `meandr-event-stream`. AWS-internal hostnames. BE consumes outbound streams here (XREADGROUP needs the primary). Each entry becomes `rediss://<host>:6379` joined with commas into MEANDR_REDIS_INGRESS_URLS. Positionally paired with var.regions — entry N is the event-stream writer for region N."
   type        = list(string)
   default     = []
 }
 
-variable "reader_security_group_id" {
-  description = "SG attached to the config Valkey cluster. ECS task SGs need to be allowed to reach it (current pattern leans on VPC-CIDR ingress; kept here for future tightening)."
+variable "config_stream_security_group_id" {
+  description = "SG attached to the config-stream Valkey cluster. ECS task SGs need to be allowed to reach it (current pattern leans on VPC-CIDR ingress; kept here for future tightening)."
   type        = string
   default     = null
 }
 
 variable "regions" {
-  description = "Region codes where the proxy fleet runs — every region with a `meandr-mcp` deployment that BE consumes streams from. Joined with commas into MEANDR_MCP_REGIONS. Positionally paired with var.ingress_endpoints — entry N labels the writer endpoint at ingress_endpoints[N]."
+  description = "Region codes where the proxy fleet runs — every region with a `meandr-mcp` deployment that BE consumes streams from. Joined with commas into MEANDR_MCP_REGIONS. Positionally paired with var.event_writer_endpoints — entry N labels the writer endpoint at event_writer_endpoints[N]."
   type        = list(string)
 }
 
