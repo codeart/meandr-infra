@@ -152,7 +152,6 @@ module "mcp" {
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
   config_reader_endpoint = module.config_stream.reader_endpoint_address
-  config_writer_endpoint = module.config_stream.primary_endpoint_address
 
   event_stream_node_type = "cache.t4g.micro"
   proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }

@@ -152,7 +152,6 @@ module "api" {
 #   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 #
 #   config_reader_endpoint = module.config_stream.reader_endpoint_address
-#   config_writer_endpoint = module.config_stream.primary_endpoint_address
 #
 #   event_stream_node_type             = "cache.t4g.small"  # bump above staging; event stream can take more load
 #   event_stream_snapshot_retention_days = 7

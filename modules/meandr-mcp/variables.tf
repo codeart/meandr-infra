@@ -58,28 +58,27 @@ variable "internal_dns_zone_name" {
 # --- Config-stream Valkey (created at region level; consumed here) -----
 #
 # The config-stream cluster lives at region level (both meandr-api and
-# meandr-mcp consume it). We take its two AWS-managed endpoints as
-# separate inputs so the proxy can pick the right one per use case:
+# meandr-mcp consume it). The proxy is *read-only* on this cluster:
 #
-#   - config_reader_endpoint (replica): pure config-record reads.
-#     Tolerates replication lag; takes load off the primary; in multi-AZ
-#     production this endpoint refuses writes at the AWS layer, which is
-#     a useful safety boundary.
+#   - tenant.RedisSource — GET / HGET / HGETALL of config records.
+#   - eventbus inbound listener — plain XREAD (NOT XREADGROUP) with a `$`
+#     cursor on `<env>:in`.
 #
-#   - config_writer_endpoint (primary): inbound stream consumption
-#     (XREADGROUP on `<env>:in`). Group state is a write op, so this MUST
-#     be the primary even though the app is "reading."
+# Both are pure read ops, so the AWS reader (replica) endpoint serves
+# them. We deliberately do NOT pass the primary endpoint — the proxy
+# never writes here. The XREAD-not-XREADGROUP design is load-bearing:
+# every proxy reads the whole stream independently (fan-out), and
+# routing/dedup happens at the proxy layer via the envelope's
+# `region` / `node` / `uni` fields plus a SETNX claim on the event
+# cluster. If you ever switch to XREADGROUP (per-proxy acked delivery),
+# you must also switch this variable's source to the primary endpoint.
+# See meandr-mcp's app.Config.ConfigReader for the full rationale.
 #
-# Both AWS hostnames are passed directly (no CNAME alias) so the
-# cluster's wildcard TLS cert verifies cleanly.
+# The AWS hostname is passed directly (no CNAME alias) so the cluster's
+# wildcard TLS cert verifies cleanly.
 
 variable "config_reader_endpoint" {
-  description = "Reader (replica) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for config-record reads only — XREADGROUP on the inbound stream needs the writer endpoint."
-  type        = string
-}
-
-variable "config_writer_endpoint" {
-  description = "Writer (primary) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for inbound stream consumption (`<env>:in`). In multi-AZ production this is the only endpoint that accepts writes — including the XREADGROUP group-state writes that stream consumption produces."
+  description = "Reader (replica) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for ALL config-stream traffic: config-record reads + inbound `<env>:in` XREAD. The replica is correct because every operation on this cluster is read-only — see the comment above for the load-bearing reasoning."
   type        = string
 }
 

@@ -71,17 +71,16 @@ locals {
 
     MEANDR_CONFIG_SOURCE = "redis"
 
-    # Three Redis planes:
-    #   CONFIG_READER → config-stream replica  (pure config-record reads)
-    #   CONFIG_WRITER → config-stream primary  (XREADGROUP on `<env>:in`)
-    #   EVENT_WRITER  → event-stream primary   (outbound + audit + locks)
-    # All three connect to AWS-internal hostnames directly so the
-    # clusters' wildcard certs verify cleanly.
+    # Two Redis planes:
+    #   CONFIG_READER → config-stream replica (config records + inbound XREAD)
+    #   EVENT_WRITER  → event-stream primary  (outbound XADD + audit + SETNX dedup)
+    # The proxy is read-only on the config-stream cluster (no XREADGROUP,
+    # no XACK, no SETNX) — see the variable doc on config_reader_endpoint
+    # for why the replica endpoint is correct. Both connect to AWS-
+    # internal hostnames directly so the clusters' wildcard certs
+    # verify cleanly.
     MEANDR_REDIS_CONFIG_READER_ADDR    = "${var.config_reader_endpoint}:6379"
     MEANDR_REDIS_CONFIG_READER_USE_TLS = "true"
-
-    MEANDR_REDIS_CONFIG_WRITER_ADDR    = "${var.config_writer_endpoint}:6379"
-    MEANDR_REDIS_CONFIG_WRITER_USE_TLS = "true"
 
     MEANDR_REDIS_EVENT_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
     MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
