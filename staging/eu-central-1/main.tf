@@ -154,6 +154,12 @@ module "mcp" {
 
   config_reader_endpoint = module.config_stream.reader_endpoint_address
 
+  # Staging customer-facing MCP traffic lands at *.meandr.live. Production
+  # uses the module default *.meandr.io. The split keeps staging traffic
+  # off the production-shaped hostname and lets us roll DNS / certs on
+  # meandr.live without touching production's apex.
+  dns_zone_name = "meandr.live"
+
   event_stream_node_type = "cache.t4g.micro"
   proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 

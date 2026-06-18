@@ -1,10 +1,10 @@
 # meandr-mcp orchestrator — proxy stack for a region.
 #
-# Owns: writer Valkey (per-region, no replication) + NLB + ACM (*.meandr.io)
-#       + ECS cluster + proxy service + wildcard DNS.
+# Owns: event-stream Valkey (per-region, no replication) + NLB + ECS
+#       cluster + proxy service + wildcard `*.<dns_zone_name>` DNS.
 #
-# Reader Valkey is created at the region-caller level (because meandr-api also
-# uses it). meandr-mcp takes its endpoint as input.
+# Config-stream Valkey is created at the region-caller level (because
+# meandr-api also uses it). meandr-mcp takes its endpoint as input.
 
 # --- Identity / placement -----------------------------------------------
 

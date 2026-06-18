@@ -1,14 +1,15 @@
 # meandr-mcp orchestrator — proxy stack for a region.
 #
 # Composes:
-#   - Writer Valkey (per-region standalone, TLS-on for future AUTH)
-#   - ACM cert (*.meandr.io, cross-account R53 validation)
-#   - NLB in public subnets (TCP passthrough — proxy terminates TLS itself)
+#   - Event-stream Valkey (per-region standalone, TLS-on for future AUTH)
+#   - NLB in public subnets (TCP passthrough — proxy terminates TLS itself
+#     once the BE-side cert pipeline lands; see variables.tf for status)
 #   - ECS cluster + proxy service (desired_count overridable; 0 = idle)
-#   - Wildcard DNS record `*.meandr.io` → NLB
+#   - Wildcard DNS record `*.<dns_zone_name>` → NLB (zone resolved in the
+#     Shared account; staging uses meandr.live, production uses meandr.io)
 #
-# Reader Valkey is NOT created here. The region-level caller creates it (since
-# meandr-api needs it too), and passes the endpoint as input.
+# Config-stream Valkey is NOT created here. The region-level caller creates
+# it (since meandr-api needs it too), and passes the endpoint as input.
 
 # --- Account guard ------------------------------------------------------
 
@@ -436,7 +437,7 @@ module "proxy" {
   tags = merge(local.base_tags, { "meandr:role" = "proxy" })
 }
 
-# --- Wildcard DNS *.meandr.io → NLB ------------------------------------
+# --- Wildcard DNS *.<dns_zone_name> → NLB ------------------------------
 
 resource "aws_route53_record" "wildcard" {
   provider = aws.dns
