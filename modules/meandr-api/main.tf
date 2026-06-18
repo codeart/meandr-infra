@@ -695,7 +695,7 @@ module "ingest" {
   task_role_arn      = aws_iam_role.task.arn
 
   image   = local.image
-  command = ["bundle", "exec", "bin/proxy-ingest"]
+  command = ["bundle", "exec", "bin/proxy-ingest", "start"]
 
   cpu    = var.ingest.cpu
   memory = var.ingest.memory
