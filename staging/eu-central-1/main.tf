@@ -119,6 +119,7 @@ module "api" {
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
+  ingest            = { cpu = 256, memory = 512, desired_count = 0 }
   migrate           = { cpu = 512, memory = 1024 }
 
   log_retention_days = 7
@@ -175,6 +176,7 @@ output "alb_dns_name" { value = module.api.alb_dns_name }
 output "cluster_name" { value = module.api.cluster_name }
 output "puma_service_name" { value = module.api.puma_service_name }
 output "jobs_service_name" { value = module.api.jobs_service_name }
+output "ingest_service_name" { value = module.api.ingest_service_name }
 output "migrate_task_family" { value = module.api.migrate_task_family }
 output "worker_sg_id" { value = module.api.worker_security_group_id }
 output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }

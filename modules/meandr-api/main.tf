@@ -684,6 +684,56 @@ module "jobs" {
   tags = merge(local.base_tags, { "meandr:role" = "jobs" })
 }
 
+# --- Proxy-ingest service ----------------------------------------------
+
+module "ingest" {
+  source = "../ecs-fargate-service"
+
+  name               = "meandr-api-ingest"
+  cluster_arn        = module.cluster.cluster_arn
+  execution_role_arn = module.cluster.execution_role_arn
+  task_role_arn      = aws_iam_role.task.arn
+
+  image   = local.image
+  command = ["bundle", "exec", "bin/proxy-ingest"]
+
+  cpu    = var.ingest.cpu
+  memory = var.ingest.memory
+
+  # One AR connection per region reader thread (events + audit per
+  # region) plus slack for the orchestrator and any initializer-time
+  # connections. 5 covers up to ~2 regions on this single-replica
+  # default; bump when adding more.
+  environment = merge(local.app_environment, {
+    MEANDR_DATABASE_POOL = "5"
+  })
+  secrets = local.app_secrets
+
+  # pgrep matches both the orchestrator parent and the per-region
+  # children — a single hit means at least one process is alive.
+  container_health_check = {
+    command     = ["CMD-SHELL", "pgrep -f proxy-ingest || exit 1"]
+    interval    = 30
+    timeout     = 5
+    retries     = 3
+    startPeriod = 60
+  }
+
+  subnets            = var.private_subnet_ids
+  security_group_ids = [aws_security_group.worker.id]
+
+  target_group_arn = null
+
+  desired_count      = var.ingest.desired_count
+  enable_autoscaling = false
+
+  log_group_name     = "/aws/ecs/meandr-api-ingest"
+  log_retention_days = var.log_retention_days
+  region             = local.region
+
+  tags = merge(local.base_tags, { "meandr:role" = "ingest" })
+}
+
 # --- Migrate one-off task ----------------------------------------------
 
 module "migrate" {

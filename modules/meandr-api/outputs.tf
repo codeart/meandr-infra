@@ -19,6 +19,7 @@ output "task_role_arn" {
 
 output "puma_service_name"    { value = module.puma.service_name }
 output "jobs_service_name"    { value = module.jobs.service_name }
+output "ingest_service_name"  { value = module.ingest.service_name }
 output "migrate_task_family"  { value = module.migrate.task_definition_family }
 
 # --- Networking / ALB ---------------------------------------------------

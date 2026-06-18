@@ -221,6 +221,20 @@ variable "jobs" {
   }
 }
 
+variable "ingest" {
+  description = "Sizing for the proxy-ingest service — long-running blocking reader on each region's event-stream Valkey. Fixed-replica (no autoscaling): blocking XREADGROUP holds one connection per region thread, so horizontal scaling means splitting `regions:` across processes, not adding more workers behind the same regions. Default 1 desired = 1 replica owns every region; bump only when a single process can't keep up with one of them."
+  type = object({
+    cpu           = number
+    memory        = number
+    desired_count = number
+  })
+  default = {
+    cpu           = 256
+    memory        = 512
+    desired_count = 1
+  }
+}
+
 variable "migrate" {
   description = "CPU/memory for the one-off migrate task. Bigger than runtime services — schema loads can be heavy."
   type = object({
