@@ -126,15 +126,21 @@ variable "image_tag" {
 # also wired to config-stream + api-redis from their region-level
 # callers — single token, single rotation lever per env.
 
+variable "redis_auth_enabled" {
+  description = "Explicit on/off gate for Redis AUTH wiring on the proxy side. Separate from redis_auth_secret_arn because `count` on the conditional IAM policy needs a known-at-plan-time value, and the ARN of a not-yet-created SM secret isn't. Set true alongside non-empty redis_auth_token + redis_auth_secret_arn; false leaves AUTH disabled and the secret wiring inert."
+  type        = bool
+  default     = false
+}
+
 variable "redis_auth_token" {
-  description = "Plaintext Redis AUTH token. Passed to the event-stream cluster's auth_token attribute. Empty disables AUTH on this cluster."
+  description = "Plaintext Redis AUTH token. Passed to the event-stream cluster's auth_token attribute when redis_auth_enabled = true; ignored otherwise."
   type        = string
   default     = ""
   sensitive   = true
 }
 
 variable "redis_auth_secret_arn" {
-  description = "ARN of the SM secret holding the same AUTH token. Wired into the proxy task def as MEANDR_REDIS_CONFIG_READER_PASSWORD + MEANDR_REDIS_EVENT_WRITER_PASSWORD so the proxy authenticates to both Redis planes with one shared token. Empty disables the secret wiring; must be set when redis_auth_token is set."
+  description = "ARN of the SM secret holding the same AUTH token. Wired into the proxy task def as MEANDR_REDIS_CONFIG_READER_PASSWORD + MEANDR_REDIS_EVENT_WRITER_PASSWORD when redis_auth_enabled = true so the proxy authenticates to both Redis planes with one shared token."
   type        = string
   default     = ""
 }

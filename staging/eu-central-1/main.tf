@@ -193,6 +193,7 @@ module "mcp" {
 
   config_reader_endpoint = module.config_stream.reader_endpoint_address
 
+  redis_auth_enabled    = true
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 

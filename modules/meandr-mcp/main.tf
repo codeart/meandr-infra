@@ -92,10 +92,10 @@ locals {
   # (one per plane) so the existing config.RedisEndpoint.Password field
   # is populated for each client without app-side glue. Same SM secret
   # behind both — single token across all three Redis planes.
-  proxy_secrets = var.redis_auth_secret_arn == "" ? {} : {
+  proxy_secrets = var.redis_auth_enabled ? {
     MEANDR_REDIS_CONFIG_READER_PASSWORD = var.redis_auth_secret_arn
     MEANDR_REDIS_EVENT_WRITER_PASSWORD  = var.redis_auth_secret_arn
-  }
+  } : {}
 }
 
 # --- Event-stream Valkey (per-region, no replication) -----------------
@@ -326,7 +326,7 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
 # task role is the runtime identity (proxy code), execution role is what
 # ECS uses to *fetch* secrets at task launch and pass them as env vars.
 resource "aws_iam_role_policy" "execution_secrets" {
-  count = var.redis_auth_secret_arn == "" ? 0 : 1
+  count = var.redis_auth_enabled ? 1 : 0
 
   name = "secrets-access"
   role = module.cluster.execution_role_name
