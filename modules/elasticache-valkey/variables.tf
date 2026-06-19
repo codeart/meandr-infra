@@ -110,6 +110,29 @@ variable "private_subnet_ids" {
 
 # internal_dns_zone_id / internal_dns_zone_name removed — DNS is caller-owned.
 
+variable "auth_token" {
+  description = "Optional AUTH token (Redis 6+ AUTH). When set, the cluster requires authentication on every connection — clients must pass this token via the `requirepass` / Password field. Network isolation (private subnets + SG ingress) remains the primary trust boundary; AUTH is defense-in-depth. Token must be 16-128 printable ASCII chars. When changing on an existing cluster, set `auth_token_update_strategy` accordingly. Empty string disables AUTH."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.auth_token == "" || (length(var.auth_token) >= 16 && length(var.auth_token) <= 128)
+    error_message = "auth_token must be 16-128 chars (or empty to disable)."
+  }
+}
+
+variable "auth_token_update_strategy" {
+  description = "How AWS rotates the AUTH token when its value changes. `ROTATE` (default) accepts BOTH old and new tokens during the rollout window — required when enabling AUTH on an existing cluster or swapping the token, otherwise live clients fail mid-flight. `SET` switches in one shot (only safe on first creation). `DELETE` removes AUTH. ElastiCache docs: a single ROTATE → SET sequence is the canonical zero-downtime AUTH enablement."
+  type        = string
+  default     = "ROTATE"
+
+  validation {
+    condition     = contains(["SET", "ROTATE", "DELETE"], var.auth_token_update_strategy)
+    error_message = "auth_token_update_strategy must be one of SET, ROTATE, DELETE."
+  }
+}
+
 variable "tags" {
   description = "Common tags applied to every resource."
   type        = map(string)

@@ -38,6 +38,40 @@ module "vpc" {
   tags = local.tags
 }
 
+# --- Redis AUTH token (shared across all three planes) -----------------
+#
+# One token per env, used by config-stream + event-stream + api-redis.
+# Network isolation (private subnets + SG ingress) stays the primary
+# trust boundary; AUTH is defense-in-depth and helps with SOC 2 / HIPAA
+# questionnaires that ask specifically about data-tier auth.
+#
+# Rollout sequence on a cluster that's already running without AUTH:
+#   1. First apply with `auth_token_update_strategy = "ROTATE"` (the
+#      default in the elasticache-valkey module) — cluster starts
+#      accepting both no-auth and the new token. Apps can roll their
+#      task defs onto the new password env vars during this window
+#      without disconnects.
+#   2. Second apply with no changes (still ROTATE) — cluster has been
+#      auth-only since the first apply finished propagating, but a
+#      no-op second apply makes the state explicit.
+# To rotate later: change the random_password length/keepers, apply.
+
+resource "random_password" "redis_auth" {
+  length  = 64
+  special = false # ElastiCache AUTH tokens allow printable ASCII; staying alphanumeric avoids URL-encoding traps in BE / proxy code.
+}
+
+resource "aws_secretsmanager_secret" "redis_auth" {
+  name        = "meandr/redis/${local.env}/auth-token"
+  description = "Shared Redis AUTH token — config-stream + event-stream + api-redis."
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_auth" {
+  secret_id     = aws_secretsmanager_secret.redis_auth.id
+  secret_string = random_password.redis_auth.result
+}
+
 # --- Config-stream Valkey ----------------------------------------------
 #
 # The shared Redis where the BE writes config records (projects, servers,
@@ -63,6 +97,8 @@ module "config_stream" {
 
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
+
+  auth_token = random_password.redis_auth.result
 
   snapshot_retention_days = 1
 
@@ -116,6 +152,9 @@ module "api" {
   regions                = [local.region]
   event_writer_endpoints = [module.mcp.event_writer_endpoint]
 
+  redis_auth_token      = random_password.redis_auth.result
+  redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -153,6 +192,9 @@ module "mcp" {
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
   config_reader_endpoint = module.config_stream.reader_endpoint_address
+
+  redis_auth_token      = random_password.redis_auth.result
+  redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic

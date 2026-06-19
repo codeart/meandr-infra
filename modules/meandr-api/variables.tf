@@ -141,6 +141,30 @@ variable "api_redis_node_type" {
   default     = "cache.t4g.micro"
 }
 
+# --- Redis AUTH (shared token across all three planes) -----------------
+#
+# One token per env, used by config-stream, event-stream, and api-redis.
+# Network isolation stays the primary control; AUTH is defense-in-depth.
+# Caller owns the random_password + aws_secretsmanager_secret resources,
+# passes the plaintext to the cluster (here, the api_valkey internal)
+# and the secret ARN to the task def secrets so Rails can read it at boot.
+# See modules/elasticache-valkey/variables.tf `auth_token` for the full
+# enablement story; the canonical first-enable sequence is two applies
+# with `auth_token_update_strategy = "ROTATE"`.
+
+variable "redis_auth_token" {
+  description = "Plaintext Redis AUTH token. Passed to the api-redis cluster's auth_token attribute. Empty disables AUTH (single-control: network isolation only)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "redis_auth_secret_arn" {
+  description = "ARN of the SM secret holding the same AUTH token. Wired into task defs as a secret named MEANDR_REDIS_PASSWORD so Rails reads it at boot. Empty disables the secret wiring; must be set when redis_auth_token is set."
+  type        = string
+  default     = ""
+}
+
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
 # BE needs two Valkey planes:

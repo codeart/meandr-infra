@@ -14,10 +14,14 @@
 # Direction (-in/-out) is named from the consumer's perspective: -in is
 # "data flowing into me" (read), -out is "data flowing out of me" (write).
 #
-# AUTH tokens are NOT used. SG + private-subnet placement is the trust boundary.
-# This matches deployment_strategy.md §6: "in-VPC isolation is the trust model;
-# auth tokens add ops complexity for marginal benefit when nothing internet-
-# facing can reach the cluster."
+# AUTH tokens are OPTIONAL — opt-in via `auth_token`. SG + private-subnet
+# placement remains the primary trust boundary; AUTH is defense-in-depth
+# that helps with compliance posture (SOC 2 / HIPAA questionnaires) and
+# narrows the blast radius if a network-isolation control ever slips.
+# Enabling AUTH on an existing cluster requires `auth_token_update_strategy
+# = "ROTATE"` for the first apply (both old/no-auth and new token accepted)
+# followed by a second apply with the same strategy or `"SET"` to flip to
+# auth-only; this avoids mid-flight client disconnects.
 
 # --- Networking ----------------------------------------------------------
 
@@ -118,6 +122,14 @@ resource "aws_elasticache_replication_group" "main" {
 
   transit_encryption_enabled = var.transit_encryption_enabled
   at_rest_encryption_enabled = var.at_rest_encryption_enabled
+
+  # AUTH token (Redis 6+ AUTH). Conditional: empty string = disabled.
+  # AWS requires transit_encryption_enabled = true when auth_token is set —
+  # the validation block on this resource would fail apply otherwise, but
+  # we don't double-check here because transit encryption is already a
+  # required input on the module.
+  auth_token                 = var.auth_token == "" ? null : var.auth_token
+  auth_token_update_strategy = var.auth_token == "" ? null : var.auth_token_update_strategy
 
   snapshot_retention_limit = var.snapshot_retention_days
   snapshot_window          = "03:00-04:00" # UTC; aligns with RDS backup window

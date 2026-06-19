@@ -117,6 +117,28 @@ variable "image_tag" {
   default     = "develop"
 }
 
+# --- Redis AUTH (shared token across config-stream + event-stream) -----
+#
+# Caller owns the random_password + aws_secretsmanager_secret resources
+# and passes (plaintext, secret_arn) here. Plaintext goes to the
+# event-stream cluster's auth_token; secret ARN goes to the proxy task
+# def secrets so it reads MEANDR_REDIS_*_PASSWORD at boot. Same token
+# also wired to config-stream + api-redis from their region-level
+# callers — single token, single rotation lever per env.
+
+variable "redis_auth_token" {
+  description = "Plaintext Redis AUTH token. Passed to the event-stream cluster's auth_token attribute. Empty disables AUTH on this cluster."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "redis_auth_secret_arn" {
+  description = "ARN of the SM secret holding the same AUTH token. Wired into the proxy task def as MEANDR_REDIS_CONFIG_READER_PASSWORD + MEANDR_REDIS_EVENT_WRITER_PASSWORD so the proxy authenticates to both Redis planes with one shared token. Empty disables the secret wiring; must be set when redis_auth_token is set."
+  type        = string
+  default     = ""
+}
+
 # --- Event-stream Valkey sizing ----------------------------------------
 
 variable "event_stream_node_type" {

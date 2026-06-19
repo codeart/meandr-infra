@@ -89,7 +89,7 @@ locals {
     MEANDR_REDIS_URL = "rediss://${module.api_valkey.primary_endpoint_address}:6379"
   }
 
-  app_secrets = {
+  app_secrets = merge({
     MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
 
     RAILS_MASTER_KEY = aws_secretsmanager_secret.rails_master_key.arn
@@ -100,7 +100,12 @@ locals {
 
     MEANDR_OPS_USER     = "${aws_secretsmanager_secret.ops.arn}:user::"
     MEANDR_OPS_PASSWORD = "${aws_secretsmanager_secret.ops.arn}:password::"
-  }
+    }, var.redis_auth_secret_arn == "" ? {} : {
+    # Same token used for config-stream + event-stream + api-redis. Rails
+    # reads from MEANDR_REDIS_PASSWORD at boot and threads into all three
+    # client constructions.
+    MEANDR_REDIS_PASSWORD = var.redis_auth_secret_arn
+  })
 }
 
 # --- API Redis (ActionCable + future API-owned persistent state) -------
@@ -131,6 +136,8 @@ module "api_valkey" {
 
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
+
+  auth_token = var.redis_auth_token
 
   snapshot_retention_days = 1
 
@@ -296,12 +303,13 @@ resource "aws_iam_role_policy" "execution_secrets" {
     Statement = [{
       Effect = "Allow"
       Action = "secretsmanager:GetSecretValue"
-      Resource = [
+      Resource = compact([
         module.rds.secret_arn,
         aws_secretsmanager_secret.rails_master_key.arn,
         aws_secretsmanager_secret.encryption.arn,
         aws_secretsmanager_secret.ops.arn,
-      ]
+        var.redis_auth_secret_arn,
+      ])
     }]
   })
 }

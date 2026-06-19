@@ -86,6 +86,16 @@ locals {
     MEANDR_REDIS_EVENT_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
     MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
   }
+
+  # Proxy task def secrets — keyed by env-var name, valueFrom is the SM
+  # secret ARN. The Redis AUTH token reaches the proxy as two env vars
+  # (one per plane) so the existing config.RedisEndpoint.Password field
+  # is populated for each client without app-side glue. Same SM secret
+  # behind both — single token across all three Redis planes.
+  proxy_secrets = var.redis_auth_secret_arn == "" ? {} : {
+    MEANDR_REDIS_CONFIG_READER_PASSWORD = var.redis_auth_secret_arn
+    MEANDR_REDIS_EVENT_WRITER_PASSWORD  = var.redis_auth_secret_arn
+  }
 }
 
 # --- Event-stream Valkey (per-region, no replication) -----------------
@@ -113,10 +123,12 @@ module "event_stream" {
   automatic_failover_enabled = false
   multi_az_enabled           = false
 
-  # TLS-on from day 1 — production may add AUTH tokens later, and AUTH
-  # requires TLS-in-transit which can't be enabled in-place after creation.
+  # TLS-on from day 1 — AUTH requires TLS-in-transit which can't be
+  # enabled in-place after creation.
   transit_encryption_enabled = true
   at_rest_encryption_enabled = true
+
+  auth_token = var.redis_auth_token
 
   snapshot_retention_days = var.event_stream_snapshot_retention_days
 
@@ -309,6 +321,26 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
   })
 }
 
+# Execution role gets SM read on the proxy-side secrets we inject as task
+# def `secrets` (env-vars-from-SM). Distinct from the task role above —
+# task role is the runtime identity (proxy code), execution role is what
+# ECS uses to *fetch* secrets at task launch and pass them as env vars.
+resource "aws_iam_role_policy" "execution_secrets" {
+  count = var.redis_auth_secret_arn == "" ? 0 : 1
+
+  name = "secrets-access"
+  role = module.cluster.execution_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = [var.redis_auth_secret_arn]
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "task_ssm_exec" {
   name = "ssm-exec"
   role = aws_iam_role.task.id
@@ -412,6 +444,7 @@ module "proxy" {
   memory = var.proxy.memory
 
   environment = local.proxy_environment
+  secrets     = local.proxy_secrets
 
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.proxy.id]
