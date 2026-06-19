@@ -145,6 +145,52 @@ variable "redis_auth_secret_arn" {
   default     = ""
 }
 
+# --- Credential store (proxy is read-only) -----------------------------
+#
+# `cred_store_enabled` gates the IAM policy count separately from the
+# ARN value because `count` needs a known-at-plan-time bool — same
+# pattern as redis_auth_enabled above.
+
+variable "cred_store_enabled" {
+  description = "Explicit on/off gate for cred-store wiring on the proxy side. Set true alongside the table_arn + key_arn inputs; false leaves the env vars empty and the IAM policy absent."
+  type        = bool
+  default     = false
+}
+
+#
+# Proxy side of the cred-store architecture. Reads AES-256-GCM blobs
+# from the cred Dynamo table on cred-version-change events, decrypts
+# locally with a data key it fetches from the dated SM secret + unwraps
+# via KMS. See docs/credential_store.md for the full architecture.
+#
+# IAM is strictly narrower than the BE side: GetItem on Dynamo (no
+# writes), GetSecretValue on the SM path (no creates), Decrypt on the
+# CMK (no GenerateDataKey — only BE mints data keys).
+
+variable "creds_table_name" {
+  description = "DynamoDB cred-store table name. Goes into MEANDR_CRED_TABLE_NAME for the proxy. Empty disables cred-store wiring on the proxy side."
+  type        = string
+  default     = ""
+}
+
+variable "creds_table_arn" {
+  description = "DynamoDB cred-store table ARN. Used to scope the task role's DynamoDB GetItem policy to this specific table."
+  type        = string
+  default     = ""
+}
+
+variable "cred_encryption_key_arn" {
+  description = "KMS CMK ARN. Proxy calls KMS.Decrypt against it to unwrap data keys fetched from SM. No GenerateDataKey permission — that's BE-only."
+  type        = string
+  default     = ""
+}
+
+variable "cred_sm_secret_path_prefix" {
+  description = "SM secret path prefix for the dated wrapped data keys, e.g. `meandr/mcp/staging/key`. Proxy reads SM secrets like `<prefix>/<date>` when it encounters a previously-unseen key_version on a Dynamo blob. Used to scope the task role's SM IAM policy."
+  type        = string
+  default     = ""
+}
+
 # --- Event-stream Valkey sizing ----------------------------------------
 
 variable "event_stream_node_type" {

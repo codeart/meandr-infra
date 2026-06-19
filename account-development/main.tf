@@ -30,15 +30,19 @@ resource "null_resource" "account_guard" {
   }
 }
 
-# --- Dev IAM user for local Rails / Go access to Secrets Manager --------
+# --- Dev IAM user (account-level identity) ------------------------------
 #
 # Long-lived access key used by engineers running the BE locally during
-# the auth-development phase. Scoped to the same SM namespace the ECS
-# task role uses in staging/prod (`meandr/tenants/*`) so the path
-# conventions stay identical across environments.
+# the auth-development phase. This file holds account-level resources
+# only — the user identity, its access key, and the SM scope that
+# mirrors the production task role.
+#
+# Region-bound resources (cred-store Dynamo table, KMS CMK) and the
+# IAM grants tying them to this user live in `development/eu-central-1/`,
+# matching the account-staging / staging-eu-central-1 split.
 #
 # Rotation: there's no automation. If a key leaks or an engineer
-# offboards, run `terraform taint aws_iam_access_key.dev_user` + apply.
+# offboards, run `terraform taint aws_iam_access_key.dev` + apply.
 # Re-running apply mints a fresh key and the old one is destroyed.
 #
 # Why an IAM user and not SSO?
@@ -53,8 +57,8 @@ resource "aws_iam_user" "dev" {
   path = "/dev/"
 
   tags = merge(local.tags, {
-    Name        = "meandr-dev"
-    Purpose     = "Local-dev access to Secrets Manager for auth work"
+    Name    = "meandr-dev"
+    Purpose = "Local-dev access to AWS for auth work"
   })
 }
 
@@ -107,6 +111,11 @@ resource "aws_iam_access_key" "dev" {
 output "dev_user_arn" {
   description = "ARN of the meandr-dev IAM user."
   value       = aws_iam_user.dev.arn
+}
+
+output "dev_user_name" {
+  description = "Name of the meandr-dev IAM user. Region callers under `development/<region>/` look this up via data source to attach region-scoped policies."
+  value       = aws_iam_user.dev.name
 }
 
 output "dev_access_key_id" {

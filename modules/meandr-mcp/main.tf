@@ -85,6 +85,12 @@ locals {
 
     MEANDR_REDIS_EVENT_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
     MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
+
+    # Cred-store wiring. Empty values mean "no cred-store" — proxy's
+    # cred-resolution falls back to whatever the previous SM-direct
+    # path supports. See docs/credential_store.md.
+    MEANDR_CRED_TABLE_NAME     = var.creds_table_name
+    MEANDR_CRED_SM_PATH_PREFIX = var.cred_sm_secret_path_prefix
   }
 
   # Proxy task def secrets — keyed by env-var name, valueFrom is the SM
@@ -318,6 +324,45 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
       ]
       Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/tenants/*"
     }]
+  })
+}
+
+# Cred-store (proxy is read-only): DynamoDB GetItem on the cred table +
+# KMS Decrypt on the CMK (NO GenerateDataKey — only BE mints data keys)
+# + SM GetSecretValue on the dated wrapped-data-key path. Gated on the
+# table ARN being set — same plan-time bool pattern as the other
+# conditional policies in this module.
+resource "aws_iam_role_policy" "task_cred_store" {
+  count = var.cred_store_enabled ? 1 : 0
+
+  name = "cred-store"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoCredTableRead"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:DescribeTable",
+        ]
+        Resource = var.creds_table_arn
+      },
+      {
+        Sid      = "KMSDecryptDataKey"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource = var.cred_encryption_key_arn
+      },
+      {
+        Sid      = "SMReadDatedWrappedDataKeys"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+        Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:${var.cred_sm_secret_path_prefix}/*"
+      },
+    ]
   })
 }
 

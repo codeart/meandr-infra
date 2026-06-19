@@ -38,6 +38,44 @@ module "vpc" {
   tags = local.tags
 }
 
+# --- Credential store (Dynamo + KMS envelope) --------------------------
+#
+# BE writes AES-256-GCM-encrypted server creds to the cred Dynamo table
+# alongside the cred_version + key_version metadata; proxy reads on
+# cfg.server events and decrypts locally with a KMS-wrapped data key
+# fetched from SM. See docs/credential_store.md for the full Ruby↔Go
+# wire contract.
+#
+# Staging is single-region — no replica_regions on the table. When
+# production launches a secondary proxy region, that caller adds the
+# region to `replica_regions` and a Global Tables replica spins up.
+
+module "creds_table" {
+  source = "../../modules/dynamodb-creds-table"
+
+  name = "meandr-creds-${local.env}"
+
+  pitr_enabled                = false # staging: throwaway data, no audit need
+  deletion_protection_enabled = false # staging: easy teardown
+
+  tags = local.tags
+}
+
+module "cred_encryption_key" {
+  source = "../../modules/cred-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-cred-${local.env}"
+
+  # Annual auto-rotation on. Dated SM secrets (per data key) live under
+  # meandr/mcp/staging/key/<date> and are managed by the BE bootstrap +
+  # rotation tasks — not in TF.
+  enable_key_rotation     = true
+  deletion_window_in_days = 7 # staging: short window for easy iteration
+
+  tags = local.tags
+}
+
 # --- Redis AUTH token (shared across all three planes) -----------------
 #
 # One token per env, used by config-stream + event-stream + api-redis.
@@ -155,6 +193,13 @@ module "api" {
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
+  cred_store_enabled         = true
+  creds_table_name           = module.creds_table.table_name
+  creds_table_arn            = module.creds_table.table_arn
+  cred_encryption_key_arn    = module.cred_encryption_key.key_arn
+  cred_encryption_key_alias  = module.cred_encryption_key.alias_name
+  cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
+
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -196,6 +241,12 @@ module "mcp" {
   redis_auth_enabled    = true
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+
+  cred_store_enabled         = true
+  creds_table_name           = module.creds_table.table_name
+  creds_table_arn            = module.creds_table.table_arn
+  cred_encryption_key_arn    = module.cred_encryption_key.key_arn
+  cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic

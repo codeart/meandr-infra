@@ -165,6 +165,59 @@ variable "redis_auth_secret_arn" {
   default     = ""
 }
 
+# --- Credential store (DynamoDB + KMS envelope) ------------------------
+#
+# `cred_store_enabled` gates the IAM policy count separately from the
+# ARN value because `count` needs a known-at-plan-time bool — same
+# pattern as redis_auth_enabled above.
+
+variable "cred_store_enabled" {
+  description = "Explicit on/off gate for cred-store wiring on the BE side. Set true alongside the table_arn + key_arn + path_prefix inputs; false leaves the env vars empty and the IAM policy absent."
+  type        = bool
+  default     = false
+}
+
+#
+# BE side of the cred-store architecture. Rails writes AES-256-GCM blobs
+# to the cred Dynamo table and manages the dated SM secrets that hold
+# KMS-wrapped data keys. See docs/credential_store.md for the full
+# Ruby↔Go wire contract.
+#
+# Caller creates the table (modules/dynamodb-creds-table) + the KMS CMK
+# (modules/cred-encryption-key) at the region level and passes both
+# ARNs here. The proxy gets the same table ARN + a narrower IAM scope
+# (read-only on the table; Decrypt-only on the CMK).
+
+variable "creds_table_name" {
+  description = "DynamoDB cred-store table name. Goes into MEANDR_CRED_TABLE_NAME for Rails. Empty disables cred-store wiring on the BE side."
+  type        = string
+  default     = ""
+}
+
+variable "creds_table_arn" {
+  description = "DynamoDB cred-store table ARN. Used to scope the task role's DynamoDB R/W policy to this specific table."
+  type        = string
+  default     = ""
+}
+
+variable "cred_encryption_key_arn" {
+  description = "KMS CMK ARN for the AEAD envelope key. BE calls KMS.GenerateDataKey + KMS.Decrypt against it; IAM is scoped to this single ARN."
+  type        = string
+  default     = ""
+}
+
+variable "cred_encryption_key_alias" {
+  description = "KMS alias for the CMK (with `alias/` prefix, e.g. `alias/meandr-cred-staging`). Goes into MEANDR_CRED_KMS_KEY_ALIAS. BE uses the alias form so we can swap the underlying CMK without redeploying."
+  type        = string
+  default     = ""
+}
+
+variable "cred_sm_secret_path_prefix" {
+  description = "SM secret path prefix for the dated wrapped data keys, e.g. `meandr/mcp/staging/key`. BE creates / reads SM secrets like `<prefix>/2026-06-19`. Used to scope the task role's SM IAM policy."
+  type        = string
+  default     = ""
+}
+
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
 # BE needs two Valkey planes:

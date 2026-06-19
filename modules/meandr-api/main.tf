@@ -87,6 +87,13 @@ locals {
     # are GD-replicated (egress) or per-region writer-only (ingress);
     # neither is appropriate for arbitrary API data.
     MEANDR_REDIS_URL = "rediss://${module.api_valkey.primary_endpoint_address}:6379"
+
+    # Cred-store wiring. Empty values are harmless — Rails treats them
+    # as "cred-store not configured here" and skips the encrypt path.
+    # See docs/credential_store.md for the BE-side responsibilities.
+    MEANDR_CRED_TABLE_NAME     = var.creds_table_name
+    MEANDR_CRED_KMS_KEY_ALIAS  = var.cred_encryption_key_alias
+    MEANDR_CRED_SM_PATH_PREFIX = var.cred_sm_secret_path_prefix
   }
 
   app_secrets = merge({
@@ -354,6 +361,59 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
         Effect   = "Allow"
         Action   = "secretsmanager:ListSecrets"
         Resource = "*"
+      },
+    ]
+  })
+}
+
+# Cred-store: DynamoDB R/W on the cred table + KMS GenerateDataKey/Decrypt
+# on the CMK + SM C/R/U on the dated-key path. Gated on the bool var so
+# the policy is omitted entirely when cred-store isn't wired (e.g. envs
+# where BE doesn't manage creds yet). Same pattern reason as the Redis
+# AUTH IAM in meandr-mcp — count needs a known-at-plan-time bool.
+resource "aws_iam_role_policy" "task_cred_store" {
+  count = var.cred_store_enabled ? 1 : 0
+
+  name = "cred-store"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "DynamoCredTableReadWrite"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:DescribeTable",
+        ]
+        Resource = var.creds_table_arn
+      },
+      {
+        Sid    = "KMSCredEnvelope"
+        Effect = "Allow"
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+          "kms:DescribeKey",
+        ]
+        Resource = var.cred_encryption_key_arn
+      },
+      {
+        Sid    = "SMDatedWrappedDataKeys"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:TagResource",
+        ]
+        Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:${var.cred_sm_secret_path_prefix}/*"
       },
     ]
   })

@@ -77,6 +77,41 @@ module "config_stream" {
   tags = merge(local.tags, { "meandr:plane" = "config" })
 }
 
+# --- Credential store (Dynamo + KMS envelope) --------------------------
+#
+# Production cred-store. Multi-region replication is empty for now
+# (single proxy region today) — add region codes here when secondary
+# proxy regions come online and AWS spins up Global Tables replicas.
+#
+# PITR + deletion protection on: cred rotations are audit-relevant and
+# irrecoverable if the blob is destroyed (the AEAD plaintext only
+# exists in BE memory between rotations). 35-day continuous backup
+# window + explicit destroy guard.
+
+module "creds_table" {
+  source = "../../modules/dynamodb-creds-table"
+
+  name = "meandr-creds-${local.env}"
+
+  replica_regions             = [] # add eu-central-1 etc. when proxy goes multi-region
+  pitr_enabled                = true
+  deletion_protection_enabled = true
+
+  tags = local.tags
+}
+
+module "cred_encryption_key" {
+  source = "../../modules/cred-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-cred-${local.env}"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 30 # production: max window for ScheduleKeyDeletion safety
+
+  tags = local.tags
+}
+
 # --- meandr-api --------------------------------------------------------
 
 module "api" {
@@ -108,6 +143,13 @@ module "api" {
   # the local region (and event-stream writer endpoint).
   regions                = []
   event_writer_endpoints = []
+
+  cred_store_enabled         = true
+  creds_table_name           = module.creds_table.table_name
+  creds_table_arn            = module.creds_table.table_arn
+  cred_encryption_key_arn    = module.cred_encryption_key.key_arn
+  cred_encryption_key_alias  = module.cred_encryption_key.alias_name
+  cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
 
   # Production sizing — conservative starting point; revisit after first weeks of real traffic.
   db_instance_class           = "db.t4g.medium"
@@ -152,6 +194,12 @@ module "api" {
 #   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 #
 #   config_reader_endpoint = module.config_stream.reader_endpoint_address
+#
+#   cred_store_enabled         = true
+#   creds_table_name           = module.creds_table.table_name
+#   creds_table_arn            = module.creds_table.table_arn
+#   cred_encryption_key_arn    = module.cred_encryption_key.key_arn
+#   cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
 #
 #   event_stream_node_type             = "cache.t4g.small"  # bump above staging; event stream can take more load
 #   event_stream_snapshot_retention_days = 7
