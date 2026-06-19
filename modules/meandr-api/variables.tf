@@ -207,13 +207,7 @@ variable "cred_encryption_key_arn" {
 }
 
 variable "cred_encryption_key_alias" {
-  description = "KMS alias for the CMK (with `alias/` prefix, e.g. `alias/meandr-cred-staging`). Goes into MEANDR_CRED_KMS_KEY_ALIAS. BE uses the alias form so we can swap the underlying CMK without redeploying."
-  type        = string
-  default     = ""
-}
-
-variable "cred_sm_secret_path_prefix" {
-  description = "SM secret path prefix for the dated wrapped data keys, e.g. `meandr/mcp/staging/key`. BE creates / reads SM secrets like `<prefix>/2026-06-19`. Used to scope the task role's SM IAM policy."
+  description = "KMS alias for the CMK (with `alias/` prefix, e.g. `alias/meandr-cred-staging`). Goes into MEANDR_CRED_KMS_KEY_ALIAS. BE calls KMS.Encrypt(KeyId=alias) on cred writes; the alias survives CMK rotation if we ever swap the underlying key."
   type        = string
   default     = ""
 }

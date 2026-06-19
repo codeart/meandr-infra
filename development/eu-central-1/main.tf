@@ -104,28 +104,14 @@ resource "aws_iam_user_policy" "dev_cred_store" {
         Resource = module.creds_table.table_arn
       },
       {
-        Sid    = "KMSCredEnvelope"
+        Sid    = "KMSCredEncryption"
         Effect = "Allow"
         Action = [
-          "kms:GenerateDataKey",
+          "kms:Encrypt",
           "kms:Decrypt",
           "kms:DescribeKey",
         ]
         Resource = module.cred_encryption_key.key_arn
-      },
-      {
-        Sid    = "SMDatedWrappedDataKeys"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:CreateSecret",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecret",
-          "secretsmanager:DeleteSecret",
-          "secretsmanager:TagResource",
-          "secretsmanager:DescribeSecret",
-        ]
-        Resource = "arn:aws:secretsmanager:*:${local.account_id}:secret:meandr/mcp/development/key/*"
       },
     ]
   })

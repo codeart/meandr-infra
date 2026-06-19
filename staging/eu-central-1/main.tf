@@ -193,12 +193,11 @@ module "api" {
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
-  cred_store_enabled         = true
-  creds_table_name           = module.creds_table.table_name
-  creds_table_arn            = module.creds_table.table_arn
-  cred_encryption_key_arn    = module.cred_encryption_key.key_arn
-  cred_encryption_key_alias  = module.cred_encryption_key.alias_name
-  cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
+  cred_store_enabled        = true
+  creds_table_name          = module.creds_table.table_name
+  creds_table_arn           = module.creds_table.table_arn
+  cred_encryption_key_arn   = module.cred_encryption_key.key_arn
+  cred_encryption_key_alias = module.cred_encryption_key.alias_name
 
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
@@ -242,11 +241,10 @@ module "mcp" {
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
-  cred_store_enabled         = true
-  creds_table_name           = module.creds_table.table_name
-  creds_table_arn            = module.creds_table.table_arn
-  cred_encryption_key_arn    = module.cred_encryption_key.key_arn
-  cred_sm_secret_path_prefix = "meandr/mcp/${local.env}/key"
+  cred_store_enabled      = true
+  creds_table_name        = module.creds_table.table_name
+  creds_table_arn         = module.creds_table.table_arn
+  cred_encryption_key_arn = module.cred_encryption_key.key_arn
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic

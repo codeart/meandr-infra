@@ -91,9 +91,8 @@ locals {
     # Cred-store wiring. Empty values are harmless — Rails treats them
     # as "cred-store not configured here" and skips the encrypt path.
     # See docs/credential_store.md for the BE-side responsibilities.
-    MEANDR_CRED_TABLE_NAME     = var.creds_table_name
-    MEANDR_CRED_KMS_KEY_ALIAS  = var.cred_encryption_key_alias
-    MEANDR_CRED_SM_PATH_PREFIX = var.cred_sm_secret_path_prefix
+    MEANDR_CRED_TABLE_NAME    = var.creds_table_name
+    MEANDR_CRED_KMS_KEY_ALIAS = var.cred_encryption_key_alias
   }
 
   app_secrets = merge({
@@ -393,27 +392,14 @@ resource "aws_iam_role_policy" "task_cred_store" {
         Resource = var.creds_table_arn
       },
       {
-        Sid    = "KMSCredEnvelope"
+        Sid    = "KMSCredEncryption"
         Effect = "Allow"
         Action = [
-          "kms:GenerateDataKey",
+          "kms:Encrypt",
           "kms:Decrypt",
           "kms:DescribeKey",
         ]
         Resource = var.cred_encryption_key_arn
-      },
-      {
-        Sid    = "SMDatedWrappedDataKeys"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:CreateSecret",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecret",
-          "secretsmanager:DescribeSecret",
-          "secretsmanager:TagResource",
-        ]
-        Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:${var.cred_sm_secret_path_prefix}/*"
       },
     ]
   })

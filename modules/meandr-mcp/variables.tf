@@ -180,13 +180,7 @@ variable "creds_table_arn" {
 }
 
 variable "cred_encryption_key_arn" {
-  description = "KMS CMK ARN. Proxy calls KMS.Decrypt against it to unwrap data keys fetched from SM. No GenerateDataKey permission — that's BE-only."
-  type        = string
-  default     = ""
-}
-
-variable "cred_sm_secret_path_prefix" {
-  description = "SM secret path prefix for the dated wrapped data keys, e.g. `meandr/mcp/staging/key`. Proxy reads SM secrets like `<prefix>/<date>` when it encounters a previously-unseen key_version on a Dynamo blob. Used to scope the task role's SM IAM policy."
+  description = "KMS CMK ARN. Proxy calls KMS.Decrypt directly on the ciphertext blob fetched from Dynamo. No Encrypt permission — that's BE-only."
   type        = string
   default     = ""
 }
