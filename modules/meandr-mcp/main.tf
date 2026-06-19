@@ -308,24 +308,10 @@ resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
   })
 }
 
-# Proxy reads tenant outbound auth secrets at runtime (per CLAUDE.md "Credentials"
-# section). Read-only on the meandr/tenants/* path; BE writes them.
-resource "aws_iam_role_policy" "task_tenant_secrets" {
-  name = "tenant-secrets-read"
-  role = aws_iam_role.task.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:DescribeSecret",
-      ]
-      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/tenants/*"
-    }]
-  })
-}
+# Upstream creds moved to the cred-store (DynamoDB + KMS direct) — see
+# task_cred_store below + docs/credential_store.md. The proxy no longer
+# reads any SM secret under meandr/tenants/*; the TLS cert pipeline,
+# when it lands, gets its own scoped grant.
 
 # Cred-store (proxy is read-only): DynamoDB GetItem on the cred table +
 # KMS Decrypt on the CMK (NO Encrypt — only BE writes creds). The
