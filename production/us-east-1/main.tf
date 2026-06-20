@@ -3,6 +3,25 @@
 #
 # Status: NOT YET APPLIED. Scaffolded here so the shape mirrors staging.
 # Sizing is initial-production conservative; tune before first apply.
+#
+# *** PRODUCTION WORKLOAD DEFERRED ***
+#
+# Everything below (VPC, config_stream, creds, KMS, meandr-api, meandr-mcp,
+# and the related outputs) is wrapped in /* */ block comments so `terraform
+# apply` here is a no-op. The intent: routine TF activity (re-init, plan
+# checks, sibling-module edits) doesn't accidentally trigger production
+# bring-up. When ready for the planned production launch:
+#   1. Remove the two `/* WORKLOAD-DEFERRED START */` and
+#      `/* WORKLOAD-DEFERRED END */` markers (one wraps modules, one wraps
+#      outputs).
+#   2. Have prereqs in hand: config/credentials/production.key for
+#      rails-master-key, a *.meandr.io cert ready to upload after first
+#      apply, headspace for the bring-up event.
+#   3. `terraform apply` — expect ~95 resources created.
+#
+# Account-level policy work (cost alerts, IAM, anomaly detection,
+# org-wide SCP) lives in account-master/ and account-production/, NOT
+# here — those states are live and applicable independently of this one.
 
 provider "aws" {
   region  = "us-east-1"
@@ -25,6 +44,8 @@ locals {
     "meandr:env" = local.env
   }
 }
+
+/* WORKLOAD-DEFERRED START — modules wrapped until first-deploy day; see header.
 
 # --- VPC ---------------------------------------------------------------
 
@@ -163,6 +184,8 @@ module "api" {
   migrate = { cpu = 1024, memory = 2048 }
 }
 
+WORKLOAD-DEFERRED END (modules) */
+
 # --- meandr-mcp (not deployed yet — uncomment when proxy code is ready) -
 #
 # When uncommented:
@@ -206,6 +229,8 @@ module "api" {
 
 # --- Outputs -----------------------------------------------------------
 
+/* WORKLOAD-DEFERRED START — outputs wrapped until first-deploy day; see header.
+
 output "vpc_id"             { value = module.vpc.vpc_id }
 output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
@@ -223,3 +248,5 @@ output "jobs_service_name"    { value = module.api.jobs_service_name }
 output "migrate_task_family"  { value = module.api.migrate_task_family }
 output "worker_sg_id"         { value = module.api.worker_security_group_id }
 output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
+
+WORKLOAD-DEFERRED END (outputs) */
