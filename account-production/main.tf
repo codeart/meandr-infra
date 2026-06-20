@@ -70,6 +70,25 @@ resource "aws_iam_role_policy_attachment" "deploy_size_guard" {
   policy_arn = module.size_guard.policy_arn
 }
 
+# Cost Anomaly Detection — ML spike alerts in addition to the daily
+# budget. $20/day deviation threshold (higher than dev/staging because
+# production has real traffic-driven variation, lower threshold would
+# alert on legitimate weekend → Monday spikes). Fires within minutes
+# via the same SNS topic as the budget.
+module "cost_anomaly" {
+  source = "../modules/aws-cost-anomaly"
+
+  name          = "meandr-production"
+  threshold_usd = 20
+  sns_topic_arn = module.daily_budget.sns_topic_arn
+
+  tags = {
+    "meandr:env"        = "production"
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
+  }
+}
+
 # --- Outputs ------------------------------------------------------------
 
 output "github_oidc_provider_arn" {

@@ -26,24 +26,41 @@ resource "aws_sns_topic" "budget_alerts" {
   tags = var.tags
 }
 
-# AWS Budgets is a Budget Action; the SNS topic needs a policy
-# allowing the budgets service principal to Publish to it. Without this,
-# the budget notification fires but SNS rejects the publish silently.
+# SNS topic policy allowing both AWS Budgets AND AWS Cost Anomaly
+# Detection to Publish. The two services share this single topic so all
+# cost-control notifications (slow-burn budget breaches + fast-spike
+# anomalies) land in the same operator inbox. Without this policy,
+# either service's publish fails silently.
+#
+# Sourced both principals up-front rather than letting consuming
+# modules each add their own aws_sns_topic_policy (which would conflict
+# — only one policy per topic). Adding a third service principal later
+# = edit this list, re-apply.
 resource "aws_sns_topic_policy" "budgets_publish" {
   arn = aws_sns_topic.budget_alerts.arn
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "budgets.amazonaws.com" }
-      Action    = "SNS:Publish"
-      Resource  = aws_sns_topic.budget_alerts.arn
-      Condition = {
-        StringEquals = {
-          "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+    Statement = [
+      {
+        Sid       = "AllowBudgetsPublish"
+        Effect    = "Allow"
+        Principal = { Service = "budgets.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.budget_alerts.arn
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
         }
-      }
-    }]
+      },
+      {
+        Sid       = "AllowCostAnomalyPublish"
+        Effect    = "Allow"
+        Principal = { Service = "costalerts.amazonaws.com" }
+        Action    = "SNS:Publish"
+        Resource  = aws_sns_topic.budget_alerts.arn
+      },
+    ]
   })
 }
 

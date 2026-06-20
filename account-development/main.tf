@@ -139,6 +139,21 @@ resource "aws_iam_user_policy_attachment" "dev_size_guard" {
   policy_arn = module.size_guard.policy_arn
 }
 
+# Cost Anomaly Detection — ML spike detection on top of the daily
+# budget. Fires within minutes when a service's actual spend exceeds
+# the ML-predicted baseline by $5 (catches the "something went 10×
+# at noon" case that the daily budget would miss until the next day).
+# Publishes to the same SNS topic as the daily budget.
+module "cost_anomaly" {
+  source = "../modules/aws-cost-anomaly"
+
+  name          = "meandr-development"
+  threshold_usd = 5
+  sns_topic_arn = module.daily_budget.sns_topic_arn
+
+  tags = local.tags
+}
+
 # --- Outputs ------------------------------------------------------------
 
 output "dev_user_arn" {
