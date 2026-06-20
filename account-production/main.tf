@@ -50,7 +50,7 @@ module "daily_budget" {
   amount_usd          = 100
   time_unit           = "DAILY"
   threshold_percents  = [50, 75, 95, 100]
-  notification_emails = ["aws-operations@meandr.com"]
+  notification_emails = ["aws-billing@meandr.com"]
 
   tags = {
     "meandr:env"        = "production"
