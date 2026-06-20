@@ -106,11 +106,49 @@ resource "aws_iam_access_key" "dev" {
   # ~/.aws/credentials or .env locally.
 }
 
+# --- Cost-control guards (alerts + IAM size-guard) ---------------------
+#
+# Daily budget with alert at 95% (ACTUAL only — DAILY budgets don't
+# support FORECASTED per AWS). $15/day caps the "I left a test cluster
+# running over the weekend" failure mode without spamming on normal
+# dev iteration. Notification only.
+
+module "daily_budget" {
+  source = "../modules/aws-budget"
+
+  name                = "meandr-development-daily"
+  amount_usd          = 15
+  time_unit           = "DAILY"
+  threshold_percents  = [95]
+  notification_emails = ["aws-operations@meandr.com"]
+
+  tags = local.tags
+}
+
+# Deny RunInstances / RDS-Create / ElastiCache-Create on giant instance
+# types from the meandr-dev IAM user. Catches fat-finger node-type
+# typos when poking AWS directly from a laptop.
+module "size_guard" {
+  source = "../modules/iam-instance-size-guard"
+
+  name = "meandr-development-size-guard"
+}
+
+resource "aws_iam_user_policy_attachment" "dev_size_guard" {
+  user       = aws_iam_user.dev.name
+  policy_arn = module.size_guard.policy_arn
+}
+
 # --- Outputs ------------------------------------------------------------
 
 output "dev_user_arn" {
   description = "ARN of the meandr-dev IAM user."
   value       = aws_iam_user.dev.arn
+}
+
+output "daily_budget_sns_topic_arn" {
+  description = "SNS topic that the daily budget publishes to. Subscribe more channels (Slack, PagerDuty) here without touching the budget."
+  value       = module.daily_budget.sns_topic_arn
 }
 
 output "dev_user_name" {
