@@ -310,10 +310,36 @@ resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
   })
 }
 
-# Upstream creds moved to the cred-store (DynamoDB + KMS direct) — see
-# task_cred_store below + docs/credential_store.md. The proxy no longer
-# reads any SM secret under meandr/tenants/*; the TLS cert pipeline,
-# when it lands, gets its own scoped grant.
+# Upstream creds moved to the cred-store (DynamoDB + KMS direct) —
+# see task_cred_store below + docs/credential_store.md. The proxy no
+# longer reads any SM secret under meandr/tenants/* (the old
+# task_tenant_secrets policy was removed). The only remaining SM grant
+# on the task role is task_cert_secrets below, scoped to
+# meandr/certs/* for the TLS cert pipeline (internal/cert).
+
+# TLS cert pipeline: proxy reads its apex's wildcard cert from SM at
+# meandr/certs/<env-full>/<apex> on each cold-miss handshake. Read-
+# only (BE writes via the `certs:install` rake task today; ACME-
+# orchestrated writes when that lands). Scoped to meandr/certs/* —
+# same shape as the dev user's policy in account-development/main.tf
+# but write-side dropped.
+resource "aws_iam_role_policy" "task_cert_secrets" {
+  name = "cert-secrets-read"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "CertSecretsRead"
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      Resource = "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:meandr/certs/*"
+    }]
+  })
+}
 
 # Cred-store (proxy is read-only): DynamoDB GetItem on the cred table +
 # KMS Decrypt on the CMK (NO Encrypt — only BE writes creds). The
