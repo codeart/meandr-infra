@@ -55,10 +55,6 @@ locals {
   # set. Redis access uses ADDR + USE_TLS, NOT URL-shape. ConfigSource
   # MUST be `redis` (the default `static` looks for dev-tenant.json which
   # isn't in the distroless image).
-  #
-  # No MEANDR_TLS_* vars set — TLS termination is deferred (see variables.tf
-  # comment). Proxy listens plain HTTP on :8080; NLB multiplexes both 80
-  # and 443 onto that port.
   proxy_environment = {
     MEANDR_REGION    = local.region
     MEANDR_ENV       = local.meandr_env
@@ -69,6 +65,12 @@ locals {
 
     MEANDR_LISTEN_ADDR     = ":${var.proxy_port}"
     MEANDR_TLS_LISTEN_ADDR = ":${var.proxy_tls_port}"
+
+    # Single wildcard apex this proxy serves a cert for. Same apex as
+    # the public DNS zone — by design the cert covers what DNS resolves
+    # to. Proxy validates SNI matches exactly `<one-label>.<apex>` and
+    # fetches the cert from SM at meandr/certs/<env-full>/<apex>.
+    MEANDR_CERT_APEX = var.dns_zone_name
 
     MEANDR_CONFIG_SOURCE = "redis"
 

@@ -85,17 +85,21 @@ variable "config_reader_endpoint" {
 # --- Public DNS ---------------------------------------------------------
 
 variable "dns_zone_name" {
-  description = "Public Route 53 hosted zone name (in Shared account). Wildcard `*.<zone>` A-alias points at the NLB."
+  description = "Public Route 53 hosted zone name (in Shared account). Wildcard `*.<zone>` A-alias points at the NLB. Doubles as MEANDR_CERT_APEX — the cert serves whatever DNS resolves to."
   type        = string
   default     = "meandr.io"
 }
 
-# TLS termination is deferred — the proxy will eventually terminate TLS
-# itself using a cert acquired via Let's Encrypt DNS-01 (BE-side job
-# orders + renews, uploads to Secrets Manager, emits a config event the
-# proxy listens for). Until that pipeline lands, NLB exposes two plain
-# TCP listeners (80 + 443); HTTPS clients see a handshake failure, which
-# is the expected v0 state.
+# TLS termination is in the proxy itself, NOT at the NLB. Cert is
+# fetched per-handshake from Secrets Manager (path
+# meandr/certs/<env-full>/<apex>) via the internal/cert subsystem and
+# served for any SNI matching <one-label>.<apex>. NLB TCP-passes :443
+# to the proxy's TLS listener, :80 to the plain HTTP listener — the
+# proxy decides what to do with each.
+#
+# Cert provisioning today: manual upload via the `certs:install` rake
+# task on the BE side. ACME automation (Let's Encrypt DNS-01) is the
+# next step — same SM destination, just orchestrated end-to-end.
 
 # --- Image --------------------------------------------------------------
 
