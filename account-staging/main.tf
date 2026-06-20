@@ -34,12 +34,14 @@ module "account_bootstrap" {
   }
 }
 
-# --- Cost-control guards (alerts + IAM size-guard) ---------------------
+# --- Cost-control guards (budget + anomaly detection) ------------------
 #
 # Daily budget with alert at 95% (ACTUAL only — DAILY budgets don't
-# support FORECASTED per AWS). Notification
-# only; no Lambda/SCP actions wired. See `project_budget_alerts.md`
-# memory for the cross-env design.
+# support FORECASTED per AWS). Notification only.
+#
+# Instance-size guard lives at the Org Root as an SCP — see
+# account-master/main.tf §size_guard_scp. Member-account IAM-level
+# guard was dropped in the same commit that landed the SCP.
 
 module "daily_budget" {
   source = "../modules/aws-budget"
@@ -55,20 +57,6 @@ module "daily_budget" {
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
-}
-
-# Deny RunInstances / RDS-Create / ElastiCache-Create on giant instance
-# types from the gh-actions-deploy role. Catches fat-finger node-type
-# typos in TF before they reach AWS.
-module "size_guard" {
-  source = "../modules/iam-instance-size-guard"
-
-  name = "meandr-staging-size-guard"
-}
-
-resource "aws_iam_role_policy_attachment" "deploy_size_guard" {
-  role       = module.account_bootstrap.gh_actions_deploy_role_name
-  policy_arn = module.size_guard.policy_arn
 }
 
 # Cost Anomaly Detection — ML spike alerts in addition to the daily

@@ -142,11 +142,50 @@ module "cost_anomaly" {
   tags = local.tags
 }
 
+# --- Org-wide instance-size guard (SCP) --------------------------------
+#
+# Service Control Policy denying RunInstances + RDS Create/Modify +
+# ElastiCache Create/Modify when the requested instance/node type matches
+# a "giant" pattern. Attached to the Root, so every member account
+# (dev/staging/production) inherits the deny — no principal in those
+# accounts can launch a giant instance, full stop.
+#
+# Master itself is exempt (SCPs cannot constrain the Organizations
+# management account by design); the per-env iam-instance-size-guard
+# module attachments stay in place during rollout as defense-in-depth,
+# and can be removed in a follow-up once we're confident in SCP behavior.
+#
+# Override model deferred: if a real need ever surfaces, the choices are
+# (a) edit the pattern lists + re-apply, or (b) detach the SCP from the
+# target in the Organizations console (CloudTrail captures the detach).
+# We'll design a proper break-glass role only when an actual workload
+# needs it — premature today.
+#
+# Bootstrap (one-time, already done): the master must enable
+# SERVICE_CONTROL_POLICY on the Root before any policy can attach:
+#   aws organizations enable-policy-type \
+#     --root-id r-9zq7 --policy-type SERVICE_CONTROL_POLICY \
+#     --profile meandr-master
+
+module "size_guard_scp" {
+  source = "../modules/org-scp-instance-size-guard"
+
+  name       = "meandr-deny-large-instances"
+  target_ids = ["r-9zq7"] # Org Root — applies to dev + staging + production
+
+  tags = local.tags
+}
+
 # --- Outputs ------------------------------------------------------------
 
 output "account_id" {
   description = "Master account ID. Cross-references infra_inventory.md §2."
   value       = local.account_id
+}
+
+output "size_guard_scp_id" {
+  description = "Organizations policy ID for the org-wide size-guard SCP. Useful for `aws organizations list-targets-for-policy --policy-id <id>` to audit current attachments."
+  value       = module.size_guard_scp.policy_id
 }
 
 output "daily_budget_sns_topic_arn" {

@@ -32,7 +32,7 @@ module "account_bootstrap" {
   }
 }
 
-# --- Cost-control guards (alerts + IAM size-guard) ---------------------
+# --- Cost-control guards (budget + anomaly detection) ------------------
 #
 # Production gets a tiered budget — 50% / 75% / 95% / 100% gives both
 # the early heads-up (50%) and the holy-shit signal (100%) without
@@ -42,6 +42,10 @@ module "account_bootstrap" {
 # Notification only; the "apply brakes" Lambda is deferred per memory
 # `project_budget_alerts.md` until we have a week of real spend data
 # to pick the brake thresholds from.
+#
+# Instance-size guard lives at the Org Root as an SCP — see
+# account-master/main.tf §size_guard_scp. Member-account IAM-level
+# guard was dropped in the same commit that landed the SCP.
 
 module "daily_budget" {
   source = "../modules/aws-budget"
@@ -57,17 +61,6 @@ module "daily_budget" {
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
-}
-
-module "size_guard" {
-  source = "../modules/iam-instance-size-guard"
-
-  name = "meandr-production-size-guard"
-}
-
-resource "aws_iam_role_policy_attachment" "deploy_size_guard" {
-  role       = module.account_bootstrap.gh_actions_deploy_role_name
-  policy_arn = module.size_guard.policy_arn
 }
 
 # Cost Anomaly Detection — ML spike alerts in addition to the daily

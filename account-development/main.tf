@@ -106,12 +106,16 @@ resource "aws_iam_access_key" "dev" {
   # ~/.aws/credentials or .env locally.
 }
 
-# --- Cost-control guards (alerts + IAM size-guard) ---------------------
+# --- Cost-control guards (budget + anomaly detection) ------------------
 #
 # Daily budget with alert at 95% (ACTUAL only — DAILY budgets don't
 # support FORECASTED per AWS). $15/day caps the "I left a test cluster
 # running over the weekend" failure mode without spamming on normal
 # dev iteration. Notification only.
+#
+# Instance-size guard lives at the Org Root as an SCP — see
+# account-master/main.tf §size_guard_scp. Member-account IAM-level
+# guard was dropped in the same commit that landed the SCP.
 
 module "daily_budget" {
   source = "../modules/aws-budget"
@@ -123,20 +127,6 @@ module "daily_budget" {
   notification_emails = ["aws-billing@meandr.com"]
 
   tags = local.tags
-}
-
-# Deny RunInstances / RDS-Create / ElastiCache-Create on giant instance
-# types from the meandr-dev IAM user. Catches fat-finger node-type
-# typos when poking AWS directly from a laptop.
-module "size_guard" {
-  source = "../modules/iam-instance-size-guard"
-
-  name = "meandr-development-size-guard"
-}
-
-resource "aws_iam_user_policy_attachment" "dev_size_guard" {
-  user       = aws_iam_user.dev.name
-  policy_arn = module.size_guard.policy_arn
 }
 
 # Cost Anomaly Detection — ML spike detection on top of the daily
