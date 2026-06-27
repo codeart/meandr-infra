@@ -669,6 +669,24 @@ module "puma" {
   })
   secrets = local.app_secrets
 
+  # Container-level health check is distinct from the ALB target-group
+  # check on /up (which gates request routing). Without this block ECS
+  # reports the puma task as "Unknown" indefinitely, which makes the
+  # cluster's healthy-vs-total widget useless. Same /up endpoint either
+  # way — Rails 7.1+ built-in.
+  #
+  # startPeriod = 120s because Rails boot (config + eager loading +
+  # connection pool warmup) routinely takes 60-90s on Fargate; the
+  # period only suppresses failure counting, doesn't delay the first
+  # check, so generous is safe.
+  container_health_check = {
+    command     = ["CMD-SHELL", "curl -fsS http://localhost:3000/up || exit 1"]
+    interval    = 30
+    timeout     = 5
+    retries     = 3
+    startPeriod = 120
+  }
+
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.puma.id]
 

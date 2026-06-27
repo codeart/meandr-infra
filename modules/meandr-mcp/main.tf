@@ -511,6 +511,31 @@ module "proxy" {
     },
   ]
 
+  # Container-level health check distinct from the NLB target-group
+  # health check (which gates LB routing). Without this the ECS task
+  # status is "Unknown" in perpetuity.
+  #
+  # The runtime image is distroless — no shell, no curl, no wget — so
+  # the proxy's Dockerfile copies a single static busybox binary into
+  # the image just for probing. The proxy itself stays clean and only
+  # serves /healthz; this CMD invokes busybox-as-wget to probe it.
+  # CMD form (vs CMD-SHELL) runs the binary directly without a shell.
+  #
+  # `--spider` makes wget probe without writing the response body to
+  # disk. Exit code 0 on HTTP 200; non-zero on connect failure or 4xx/5xx.
+  #
+  # startPeriod = 60s: the proxy is Go-fast on boot, but cold start
+  # includes Redis connection, tenant fetcher warm-up, and TLS cert
+  # load — typically 5-15s. 60s is generous headroom; the period only
+  # suppresses failure counting, doesn't delay the first check.
+  container_health_check = {
+    command     = ["CMD", "/busybox", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+    interval    = 30
+    timeout     = 5
+    retries     = 3
+    startPeriod = 60
+  }
+
   desired_count          = var.proxy.desired_count
   enable_autoscaling     = var.proxy.desired_count > 0
   min_replicas           = var.proxy.min_replicas
