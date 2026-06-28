@@ -26,10 +26,11 @@ resource "aws_cloudwatch_log_group" "main" {
 locals {
   container_def = merge(
     {
-      name      = var.container_name
-      image     = var.image
-      essential = true
-      command   = length(var.command) > 0 ? var.command : null
+      name        = var.container_name
+      image       = var.image
+      essential   = true
+      command     = length(var.command) > 0 ? var.command : null
+      stopTimeout = var.stop_timeout
 
       portMappings = concat(
         var.target_group_arn != null ? [

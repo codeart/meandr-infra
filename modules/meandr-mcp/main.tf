@@ -200,7 +200,13 @@ resource "aws_lb_target_group" "proxy" {
     unhealthy_threshold = 3
   }
 
-  deregistration_delay = 30
+  # Matches the proxy's MEANDR_HTTP_DRAIN_TIMEOUT default — NLB stops
+  # routing new connections to this target by the time the proxy's
+  # graceful-shutdown drain window closes. Bigger than the AWS default
+  # of 300s isn't useful here because Fargate's hard stopTimeout cap
+  # is 120s; the proxy will be SIGKILLed before a longer dereg would
+  # come into play.
+  deregistration_delay = 90
 
   tags = merge(local.base_tags, { Name = "MCP proxy TG" })
 
@@ -228,7 +234,8 @@ resource "aws_lb_target_group" "proxy_tls" {
     unhealthy_threshold = 3
   }
 
-  deregistration_delay = 30
+  # See the plain-HTTP target group above for the dereg-delay rationale.
+  deregistration_delay = 90
 
   tags = merge(local.base_tags, { Name = "MCP proxy TLS TG" })
 
@@ -535,6 +542,17 @@ module "proxy" {
     retries     = 3
     startPeriod = 60
   }
+
+  # Graceful-shutdown budget. The proxy's two-phase shutdown
+  # (MEANDR_HTTP_DRAIN_TIMEOUT=90s + MEANDR_SHUTDOWN_TIMEOUT=25s + ~1s
+  # for aggregator final-flush) tops out around 116s. 120s is the
+  # Fargate hard cap on stopTimeout; we sit ~4s under it.
+  #
+  # NLB target-group deregistration_delay below is sized to match
+  # HTTPDrainTimeout so new traffic stops arriving in lockstep with
+  # the drain window — otherwise the drain runs uphill against fresh
+  # connections.
+  stop_timeout = 120
 
   desired_count          = var.proxy.desired_count
   enable_autoscaling     = var.proxy.desired_count > 0

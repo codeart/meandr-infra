@@ -79,6 +79,16 @@ variable "container_health_check" {
   default = null
 }
 
+variable "stop_timeout" {
+  description = "Seconds between SIGTERM and SIGKILL. Sized to fit the application's full graceful shutdown (connection drain + final-flush of any in-memory state). Fargate cap is 120s; EC2-launch supports higher. Default 30 matches ECS Fargate default."
+  type        = number
+  default     = 30
+  validation {
+    condition     = var.stop_timeout >= 2 && var.stop_timeout <= 120
+    error_message = "stop_timeout must be between 2 and 120 (Fargate range)."
+  }
+}
+
 # --- Networking ---------------------------------------------------------
 
 variable "subnets" {
