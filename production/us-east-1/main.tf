@@ -127,8 +127,33 @@ module "cred_encryption_key" {
   env        = local.env
   alias_name = "meandr-cred-${local.env}"
 
+  # Multi-region from day one — production will expand beyond us-east-1
+  # over time; multi_region is IMMUTABLE after key creation so we must
+  # set it correctly on first apply. Replicas in other regions are
+  # provisioned separately (aws_kms_replica_key) when those regions
+  # come online; this primary can then be decrypted from any replica
+  # region without cross-region API calls at Decrypt time.
+  multi_region = true
+
   enable_key_rotation     = true
   deletion_window_in_days = 30 # production: max window for ScheduleKeyDeletion safety
+
+  tags = local.tags
+}
+
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}"
+
+  # Multi-region for the same reason as cred_encryption_key above:
+  # production goes multi-region, multi_region is immutable, set it
+  # correctly at creation time.
+  multi_region = true
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
 
   tags = local.tags
 }

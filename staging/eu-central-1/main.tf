@@ -73,6 +73,26 @@ module "cred_encryption_key" {
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
 
+  # Staging is intentionally single-region (eu-central-1 only).
+  # multi_region defaults to false; explicit here for clarity.
+  multi_region = false
+
+  tags = local.tags
+}
+
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 7 # staging: short window for easy iteration
+
+  # Staging single-region. Production is multi_region=true (planned
+  # multi-region rollout).
+  multi_region = false
+
   tags = local.tags
 }
 
