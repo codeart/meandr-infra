@@ -75,6 +75,12 @@ module "cred_encryption_key" {
 
   # Staging is intentionally single-region (eu-central-1 only).
   # multi_region defaults to false; explicit here for clarity.
+  #
+  # TODO(staging-reset): flip to `true` during the planned staging
+  # reset (migration consolidation + test-data wipe). multi_region is
+  # IMMUTABLE, and the reset destroys the CMK anyway — the natural
+  # moment to correct this without a data migration. Costs the same
+  # as single-region until we actually add replicas.
   multi_region = false
 
   tags = local.tags
@@ -91,6 +97,9 @@ module "payload_encryption_key" {
 
   # Staging single-region. Production is multi_region=true (planned
   # multi-region rollout).
+  #
+  # TODO(staging-reset): same rationale as cred_encryption_key above —
+  # flip to `true` during the planned staging reset.
   multi_region = false
 
   tags = local.tags
