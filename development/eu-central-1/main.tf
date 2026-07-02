@@ -70,6 +70,22 @@ module "cred_encryption_key" {
   tags = local.tags
 }
 
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = "development"
+  alias_name = "meandr-payload-development"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+
+  # Dev is single-region (eu-central-1). Matches staging shape;
+  # production is multi_region=true for future rollout.
+  multi_region = false
+
+  tags = local.tags
+}
+
 # --- Cred-store IAM policy on the dev user -----------------------------
 #
 # The user itself is created in account-development/. We look it up by
@@ -113,6 +129,23 @@ resource "aws_iam_user_policy" "dev_cred_store" {
         ]
         Resource = module.cred_encryption_key.key_arn
       },
+      {
+        # Payload CMK — approval-flow tool-call payload envelope
+        # encryption. Dev user needs the union of proxy + BE
+        # permissions (proxy: GenerateDataKey + Decrypt to encrypt on
+        # emit and decrypt on replay; BE: Decrypt to unwrap on
+        # dashboard "View Request/Response" clicks). No Encrypt — the
+        # 4KB direct-KMS limit is a footgun and envelope encryption
+        # via GenerateDataKey is the only sanctioned path.
+        Sid    = "KMSPayloadEnvelope"
+        Effect = "Allow"
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+          "kms:DescribeKey",
+        ]
+        Resource = module.payload_encryption_key.key_arn
+      },
     ]
   })
 }
@@ -137,4 +170,14 @@ output "cred_encryption_key_alias" {
 output "cred_encryption_key_arn" {
   description = "Dev cred-store KMS CMK ARN."
   value       = module.cred_encryption_key.key_arn
+}
+
+output "payload_encryption_key_alias" {
+  description = "Dev payload KMS alias (full form, including `alias/`). Set as MEANDR_PAYLOAD_KMS_KEY_ALIAS in local .env when you want the approval flow to exercise real KMS locally. Unset it to use the NoopCipher (plaintext through the wire, dev-only)."
+  value       = module.payload_encryption_key.alias_name
+}
+
+output "payload_encryption_key_arn" {
+  description = "Dev payload KMS CMK ARN — approval-flow envelope encryption."
+  value       = module.payload_encryption_key.key_arn
 }
