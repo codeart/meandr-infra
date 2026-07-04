@@ -96,6 +96,14 @@ resource "aws_ecs_service" "main" {
   deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent
   deployment_maximum_percent         = var.deployment_maximum_percent
 
+  # Abort + roll back on deploys where new tasks fail to stabilize
+  # (bad image, missing env / secret, health-check failing). Catches
+  # the common "broken revision stuck rolling forever" mode.
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
   network_configuration {
     subnets          = var.subnets
     security_groups  = var.security_group_ids
