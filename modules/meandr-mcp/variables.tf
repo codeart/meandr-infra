@@ -149,6 +149,25 @@ variable "redis_auth_secret_arn" {
   default     = ""
 }
 
+# --- Client-session JWT signing ----------------------------------------
+#
+# Signs the Mcp-Session-Id JWT the proxy returns on `initialize`. Same
+# key must be used by every proxy task in the fleet (verification is
+# symmetric HS256); different keys per environment so a leak in one
+# env doesn't cross-contaminate. Rotated by changing session_signing_key.
+# See client.SessionIssuer in meandr-mcp for verify logic.
+
+variable "session_signing_key_secret_arn" {
+  description = "ARN of the SM secret holding the raw signing key (≥32 bytes). Wired to the proxy task def as MEANDR_SESSION_SIGNING_KEY. Boot fails fast if the key is missing or too short."
+  type        = string
+}
+
+variable "session_ttl" {
+  description = "JWT expiry for client sessions. Determines how long a Mcp-Session-Id remains valid before the client must re-initialize."
+  type        = string
+  default     = "8h"
+}
+
 # --- Credential store (proxy is read-only) -----------------------------
 #
 # `cred_store_enabled` gates the IAM policy count separately from the

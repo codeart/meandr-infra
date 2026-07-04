@@ -139,6 +139,30 @@ resource "aws_secretsmanager_secret_version" "redis_auth" {
   secret_string = random_password.redis_auth.result
 }
 
+# --- Proxy client-session JWT signing key ------------------------------
+#
+# Signs the Mcp-Session-Id JWT (HS256, symmetric). Every proxy task in
+# the env fleet must verify with the same key; rotating means bumping
+# random_password.session_signing_key.keepers so a new random is
+# generated + re-applied. Rotation invalidates existing JWTs → clients
+# re-initialize on their next call (spec-compliant 404 flow). 64 bytes
+# is plenty for HS256 (needs ≥32).
+resource "random_password" "session_signing_key" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "session_signing_key" {
+  name        = "meandr/session/${local.env}/signing-key"
+  description = "HS256 key signing client-session JWTs (Mcp-Session-Id) on the proxy."
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "session_signing_key" {
+  secret_id     = aws_secretsmanager_secret.session_signing_key.id
+  secret_string = random_password.session_signing_key.result
+}
+
 # --- Config-stream Valkey ----------------------------------------------
 #
 # The shared Redis where the BE writes config records (projects, servers,
@@ -269,6 +293,8 @@ module "mcp" {
   redis_auth_enabled    = true
   redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+
+  session_signing_key_secret_arn = aws_secretsmanager_secret.session_signing_key.arn
 
   cred_store_enabled      = true
   creds_table_name        = module.creds_table.table_name
