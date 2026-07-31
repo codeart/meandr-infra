@@ -37,3 +37,13 @@ output "nat_enabled" {
   description = "Whether NAT Gateway is provisioned. Useful for downstream modules to know whether internet egress is available from private subnets."
   value       = var.enable_nat
 }
+
+output "s3_endpoint_id" {
+  description = "S3 gateway endpoint ID. Useful for bucket policies that restrict access to traffic arriving via this VPC (aws:SourceVpce)."
+  value       = aws_vpc_endpoint.s3.id
+}
+
+output "dynamodb_endpoint_id" {
+  description = "DynamoDB gateway endpoint ID. Same use as s3_endpoint_id — table policies can pin to aws:SourceVpce."
+  value       = aws_vpc_endpoint.dynamodb.id
+}

@@ -97,8 +97,9 @@ resource "aws_route_table_association" "public" {
 }
 
 # Private route table — has a 0.0.0.0/0 → NAT route IFF NAT is enabled.
-# Without NAT, private subnets can only reach the VPC's CIDR + AWS service endpoints
-# (if VPC endpoints are added later). That's intentional for cost-free "VPC only" envs.
+# Without NAT, private subnets reach the VPC's CIDR plus whatever the gateway
+# endpoints below cover (S3, DynamoDB). That's intentional for cost-free
+# "VPC only" envs.
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
@@ -120,6 +121,59 @@ resource "aws_route_table_association" "private" {
 
   subnet_id      = each.value.id
   route_table_id = aws_route_table.private.id
+}
+
+# --- Gateway VPC endpoints (S3, DynamoDB) --------------------------------
+#
+# Unconditional and free. Gateway endpoints are route-table entries, not
+# PrivateLink interfaces: no hourly charge, no per-GB charge, no ENIs, no
+# security groups.
+#
+# Without them, every byte a private-subnet workload sends to S3 or DynamoDB
+# egresses through the NAT Gateway and pays NAT data processing (~$0.045/GB,
+# the same rate quoted on var.enable_nat). That is the dominant cost line for
+# the capture pipeline, which writes every request body to S3:
+#
+#     1 TB/month captured        →   ~$45/month in NAT processing
+#     10 GB/minute (~432 TB/mo)  →  ~$19,400/month
+#
+# The proxy also reads upstream credentials from DynamoDB on the request path
+# (cred-store), so both services belong here.
+#
+# Created even when enable_nat is false: with no NAT, these are the *only*
+# route to S3/DynamoDB from a private subnet, which is precisely when they
+# matter most.
+#
+# Private route table only. Public subnets host the NAT Gateway and the ALB,
+# no workloads, and they reach S3 via the Internet Gateway at no data
+# processing charge — so an association there would buy nothing.
+#
+# No endpoint policy attached: the default is full access, and access is
+# already constrained by the task roles. A restrictive endpoint policy is a
+# second place to get bucket permissions wrong.
+
+data "aws_region" "current" {}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+
+  tags = merge(var.tags, {
+    Name = "S3 Gateway Endpoint"
+  })
+}
+
+resource "aws_vpc_endpoint" "dynamodb" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+
+  tags = merge(var.tags, {
+    Name = "DynamoDB Gateway Endpoint"
+  })
 }
 
 # --- NAT Gateway (conditional) -------------------------------------------
