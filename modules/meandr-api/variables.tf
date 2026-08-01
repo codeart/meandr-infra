@@ -261,6 +261,8 @@ variable "puma" {
     min_replicas           = number
     max_replicas           = number
     target_cpu_utilization = number
+    concurrency            = number
+    threads                = number
   })
   default = {
     cpu                    = 256
@@ -269,6 +271,8 @@ variable "puma" {
     min_replicas           = 1
     max_replicas           = 4
     target_cpu_utilization = 70
+    concurrency            = 2
+    threads                = 5
   }
 }
 

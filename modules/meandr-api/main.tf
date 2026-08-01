@@ -666,6 +666,8 @@ module "puma" {
   # work that grabs an extra connection.
   environment = merge(local.app_environment, {
     MEANDR_DATABASE_POOL = "15"
+    WEB_CONCURRENCY      = var.puma.concurrency
+    RAILS_MAX_THREADS    = var.puma.threads
   })
   secrets = local.app_secrets
 
@@ -777,7 +779,7 @@ module "ingest" {
   # connections. 5 covers up to ~2 regions on this single-replica
   # default; bump when adding more.
   environment = merge(local.app_environment, {
-    MEANDR_DATABASE_POOL = "5"
+    MEANDR_DATABASE_POOL = "30"
   })
   secrets = local.app_secrets
 
@@ -826,7 +828,7 @@ module "migrate" {
   # initializer that touches AR at load. Wider than 3 is wasted; 1
   # is too tight (initializers reliably reach for a second connection).
   environment = merge(local.app_environment, {
-    MEANDR_DATABASE_POOL = "3"
+    MEANDR_DATABASE_POOL = "5"
   })
   secrets = local.app_secrets
 

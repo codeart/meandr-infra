@@ -253,7 +253,7 @@ module "api" {
   cred_encryption_key_alias = module.cred_encryption_key.alias_name
 
   db_instance_class = "db.t4g.micro"
-  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
+  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency: 0, threads: 6 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
