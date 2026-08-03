@@ -94,6 +94,10 @@ locals {
     # docs/credential_store.md §9 for the discriminator.
     MEANDR_CRED_TABLE_NAME = var.creds_table_name
 
+    # Payload capture. Empty = capture disabled; the proxy stores
+    # nothing and `log` policies degrade to metadata-only.
+    MEANDR_CAPTURE_BUCKET = var.payloads_bucket
+
     MEANDR_SESSION_TTL = var.session_ttl
   }
 
@@ -384,6 +388,54 @@ resource "aws_iam_role_policy" "task_cred_store" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:DescribeKey"]
         Resource = var.cred_encryption_key_arn
+      },
+    ]
+  })
+}
+
+# Payload capture: the proxy writes request/response bodies into the
+# regional payloads bucket as multipart segments, and reads one back on
+# an offline approval replay (policies.md §9.2.1).
+#
+# AbortMultipartUpload is separate from PutObject and is NOT optional —
+# the bucket's lifecycle rule cleans up what we abandon, but the proxy
+# aborts deliberately on drain, and without this it cannot.
+# PutObjectTagging is needed because the retention class rides as an
+# object tag on the PUT itself.
+#
+# KMS: the bucket is SSE-KMS, so the CALLER needs GenerateDataKey to
+# write and Decrypt to read. Bucket keys reduce how OFTEN S3 calls KMS,
+# not whether the principal may.
+resource "aws_iam_role_policy" "task_capture" {
+  count = var.capture_enabled ? 1 : 0
+
+  name = "payload-capture"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3PayloadsWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListMultipartUploadParts",
+        ]
+        Resource = [
+          var.payloads_bucket_arn,
+          "${var.payloads_bucket_arn}/*",
+        ]
+      },
+      {
+        Sid      = "KMSPayloadsBucket"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
+        Resource = var.payload_encryption_key_arn
       },
     ]
   })

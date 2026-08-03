@@ -283,3 +283,33 @@ variable "extra_tags" {
   type        = map(string)
   default     = {}
 }
+
+# --- Payload capture ----------------------------------------------------
+#
+# `capture_enabled` gates the IAM policy count separately from the ARNs,
+# for the same plan-time reason as cred_store_enabled: `count` needs a
+# known value, and a not-yet-created bucket's ARN isn't one.
+
+variable "capture_enabled" {
+  description = "Explicit on/off gate for payload capture on the proxy side. Set true alongside payloads_bucket_arn + payload_encryption_key_arn; false leaves the env var empty and the IAM policy absent."
+  type        = bool
+  default     = false
+}
+
+variable "payloads_bucket" {
+  description = "Payloads bucket NAME (meandr-mcp-payloads-<region>-<env>), passed to the proxy as MEANDR_CAPTURE_BUCKET."
+  type        = string
+  default     = ""
+}
+
+variable "payloads_bucket_arn" {
+  description = "Payloads bucket ARN, to scope the task role's S3 grant to this bucket alone."
+  type        = string
+  default     = ""
+}
+
+variable "payload_encryption_key_arn" {
+  description = "Payload CMK ARN. Required because the bucket is SSE-KMS: an S3 PUT needs kms:GenerateDataKey from the CALLER, and a ranged GET on the approval replay path needs kms:Decrypt. Bucket keys cut the call VOLUME, not the permission."
+  type        = string
+  default     = ""
+}

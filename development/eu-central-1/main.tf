@@ -150,7 +150,115 @@ resource "aws_iam_user_policy" "dev_cred_store" {
   })
 }
 
+# --- S3 capture access (dev user) ---------------------------------------
+#
+# Its own policy rather than more statements on cred-store-access: a
+# different subsystem, a different lifecycle, and keeping them apart means
+# a change here can never be the reason cred-store access disappears.
+#
+# Staging and production grant the same thing to the ECS TASK ROLE
+# instead (modules/meandr-mcp, capture_enabled). Dev is the odd one
+# because the proxy and BE run on a laptop against a stored access key.
+
+resource "aws_iam_user_policy" "dev_s3_capture" {
+  name = "s3-capture-access"
+  user = data.aws_iam_user.dev.user_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Payloads bucket — the proxy's capture path. PutObject covers
+        # CreateMultipartUpload / UploadPart / Complete; Abort is its own
+        # action and is what the incomplete-upload lifecycle rule cannot
+        # substitute for. PutObjectTagging is there for the retention tag
+        # (set on CreateMultipartUpload, but a re-tag needs its own
+        # permission). GetObject is the approval REPLAY read — an offline
+        # approval is decided later, possibly elsewhere, so the body comes
+        # back from here (policies.md §9.2.1). ListBucket is what the
+        # monthly untagged-object sweep enumerates with.
+        Sid    = "S3PayloadsReadWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:DeleteObject",
+          "s3:AbortMultipartUpload",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListMultipartUploadParts",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.payloads_bucket.arn,
+          "${module.payloads_bucket.arn}/*",
+        ]
+      },
+      {
+        # Archive bucket — BE writes Parquet, Athena reads it. ListBucket
+        # is not optional for Athena: it enumerates partitions before it
+        # scans.
+        Sid    = "S3ArchiveReadWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.archive_bucket.arn,
+          "${module.archive_bucket.arn}/*",
+        ]
+      },
+    ]
+  })
+}
+
+# --- Capture buckets ----------------------------------------------------
+#
+# Two buckets, split by WHO WRITES and HOW IT IS READ
+# (capture_and_archive.md §6):
+#
+#   archive   tool calls + actions as Parquet. Written by BE from
+#             Postgres, which is central, so ONE bucket per env and
+#             Athena stays single-region. Later: MCP logs.
+#
+#   payloads  request/response bodies. Written by the proxy on the hot
+#             path, so it must be regional — but nothing ever SCANS it,
+#             because a ref names the bucket and a byte range. That is
+#             what keeps the archive queryable from one place.
+
+module "archive_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-archive-development"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
+module "payloads_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-payloads-eu-central-1-development"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
 # --- Outputs ------------------------------------------------------------
+
+output "archive_bucket" {
+  description = "Dev archive bucket (calls + actions Parquet). Athena reads this one; it is the only bucket that gets scanned."
+  value       = module.archive_bucket.bucket
+}
+
+output "payloads_bucket" {
+  description = "Dev payloads bucket (request/response bodies). Set as MEANDR_CAPTURE_BUCKET in local .env — the locally-running proxy writes here."
+  value       = module.payloads_bucket.bucket
+}
 
 output "creds_table_name" {
   description = "Dev cred-store Dynamo table name. Set as MEANDR_CRED_TABLE_NAME in local .env."

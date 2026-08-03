@@ -253,7 +253,7 @@ module "api" {
   cred_encryption_key_alias = module.cred_encryption_key.alias_name
 
   db_instance_class = "db.t4g.micro"
-  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency: 0, threads: 6 }
+  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
@@ -267,6 +267,30 @@ module "api" {
 # two plain TCP listeners (80 + 443) forwarding to proxy:8080; proxy
 # terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
 # Customer HTTPS traffic won't work end-to-end until then — expected v0.
+
+# --- Capture buckets ----------------------------------------------------
+#
+# Split by who writes and how it is read (capture_and_archive.md §6):
+# archive is BE-written Parquet queried by Athena, so ONE per env and
+# single-region; payloads are proxy-written bodies, regional because the
+# proxy writes them on the hot path, and never scanned — a ref names the
+# bucket and a byte range.
+
+module "archive_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-archive-staging"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
+module "payloads_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-payloads-eu-central-1-staging"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
 
 module "mcp" {
   source = "../../modules/meandr-mcp"
@@ -300,6 +324,15 @@ module "mcp" {
   creds_table_name        = module.creds_table.table_name
   creds_table_arn         = module.creds_table.table_arn
   cred_encryption_key_arn = module.cred_encryption_key.key_arn
+
+  # On ahead of the writer. The grant and the env var are inert until
+  # the proxy has capture code — nothing reads MEANDR_CAPTURE_BUCKET yet
+  # — but wiring them now means the writer ships without a second task
+  # definition revision and a second rolling restart.
+  capture_enabled            = true
+  payloads_bucket            = module.payloads_bucket.bucket
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic
@@ -337,3 +370,13 @@ output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
 output "mcp_cluster_name" { value = module.mcp.cluster_name }
 output "mcp_proxy_service_name" { value = module.mcp.proxy_service_name }
 output "mcp_nlb_dns_name" { value = module.mcp.nlb_dns_name }
+
+output "archive_bucket" {
+  description = "Calls + actions Parquet. The only bucket Athena scans."
+  value       = module.archive_bucket.bucket
+}
+
+output "payloads_bucket" {
+  description = "Request/response bodies. Written by the proxy, read by ranged GET; never scanned."
+  value       = module.payloads_bucket.bucket
+}

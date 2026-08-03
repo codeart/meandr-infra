@@ -1,23 +1,31 @@
 # production / us-east-1 — primary region. Hosts the BE; will also host MCP
 # once the proxy code ships. EU + other regions become mcp-only secondaries.
 #
-# Status: NOT YET APPLIED. Scaffolded here so the shape mirrors staging.
-# Sizing is initial-production conservative; tune before first apply.
+# Status: PARTIALLY APPLIED (2026-08-03). The capture buckets and the
+# payload CMK they encrypt with are LIVE; everything else is still
+# deferred. Sizing is initial-production conservative; tune before first
+# apply of the rest.
 #
-# *** PRODUCTION WORKLOAD DEFERRED ***
+# Why those three and nothing else: S3's namespace is GLOBAL, so a bucket
+# name is claimable by any AWS account on earth until we hold it. Empty
+# buckets bill nothing and the CMK is ~$1/month, which production needs
+# eventually anyway — cheap insurance against having to rename at launch.
 #
-# Everything below (VPC, config_stream, creds, KMS, meandr-api, meandr-mcp,
-# and the related outputs) is wrapped in /* */ block comments so `terraform
-# apply` here is a no-op. The intent: routine TF activity (re-init, plan
-# checks, sibling-module edits) doesn't accidentally trigger production
-# bring-up. When ready for the planned production launch:
+# *** THE REST OF THE PRODUCTION WORKLOAD IS DEFERRED ***
+#
+# VPC, config_stream, creds, meandr-api, meandr-mcp and their outputs are
+# wrapped in /* */ block comments so `terraform apply` here creates
+# nothing new. The intent: routine TF activity (re-init, plan checks,
+# sibling-module edits) doesn't accidentally trigger production bring-up.
+# When ready for the planned production launch:
 #   1. Remove the two `/* WORKLOAD-DEFERRED START */` and
 #      `/* WORKLOAD-DEFERRED END */` markers (one wraps modules, one wraps
 #      outputs).
 #   2. Have prereqs in hand: config/credentials/production.key for
 #      rails-master-key, a *.meandr.io cert ready to upload after first
 #      apply, headspace for the bring-up event.
-#   3. `terraform apply` — expect ~95 resources created.
+#   3. `terraform apply` — expect ~95 resources created (the buckets and
+#      the payload CMK are already there and will not reappear).
 #
 # Account-level policy work (cost alerts, IAM, anomaly detection,
 # org-wide SCP) lives in account-master/ and account-production/, NOT
@@ -43,6 +51,56 @@ locals {
   tags = {
     "meandr:env" = local.env
   }
+}
+
+# --- Capture buckets ----------------------------------------------------
+#
+# NOT deferred, unlike the rest of production.
+#
+# S3's namespace is GLOBAL — a bucket name is claimable by any AWS
+# account on earth until we hold it — so these are created ahead of the
+# workload purely to reserve the names. An empty bucket bills nothing;
+# the only cost is the CMK below, at roughly $1/month, which production
+# needs eventually anyway.
+#
+# The payload CMK is lifted out with them because the buckets encrypt
+# with it. multi_region = true is set at creation deliberately: the flag
+# is immutable, and production goes multi-region.
+#
+# The task-role grant (capture_enabled + the two ARNs) goes in when the
+# mcp module below is uncommented; until then nothing writes here.
+
+module "archive_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-archive-production"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
+module "payloads_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-payloads-us-east-1-production"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}"
+
+  # Multi-region for the same reason as cred_encryption_key above:
+  # production goes multi-region, multi_region is immutable, set it
+  # correctly at creation time.
+  multi_region = true
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  tags = local.tags
 }
 
 /* WORKLOAD-DEFERRED START — modules wrapped until first-deploy day; see header.
@@ -141,22 +199,6 @@ module "cred_encryption_key" {
   tags = local.tags
 }
 
-module "payload_encryption_key" {
-  source = "../../modules/payload-encryption-key"
-
-  env        = local.env
-  alias_name = "meandr-payload-${local.env}"
-
-  # Multi-region for the same reason as cred_encryption_key above:
-  # production goes multi-region, multi_region is immutable, set it
-  # correctly at creation time.
-  multi_region = true
-
-  enable_key_rotation     = true
-  deletion_window_in_days = 30
-
-  tags = local.tags
-}
 
 # --- meandr-api --------------------------------------------------------
 
@@ -254,6 +296,32 @@ WORKLOAD-DEFERRED END (modules) */
 
 # --- Outputs -----------------------------------------------------------
 
+# --- Outputs (live) -----------------------------------------------------
+#
+# Only what is actually deployed. The rest sits in the deferred block
+# below and comes back with the workload — same list as staging, minus
+# what production does not run yet.
+
+output "archive_bucket" {
+  description = "Calls + actions Parquet. The only bucket Athena scans."
+  value       = module.archive_bucket.bucket
+}
+
+output "payloads_bucket" {
+  description = "Request/response bodies. Written by the proxy, read by ranged GET; never scanned."
+  value       = module.payloads_bucket.bucket
+}
+
+output "payload_encryption_key_alias" {
+  description = "Payload KMS alias (full form, including `alias/`). SSE-KMS for both buckets, and the approval-flow envelope key once the workload lands."
+  value       = module.payload_encryption_key.alias_name
+}
+
+output "payload_encryption_key_arn" {
+  description = "Payload KMS CMK ARN."
+  value       = module.payload_encryption_key.key_arn
+}
+
 /* WORKLOAD-DEFERRED START — outputs wrapped until first-deploy day; see header.
 
 output "vpc_id"             { value = module.vpc.vpc_id }
@@ -275,3 +343,4 @@ output "worker_sg_id"         { value = module.api.worker_security_group_id }
 output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
 
 WORKLOAD-DEFERRED END (outputs) */
+
