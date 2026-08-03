@@ -9,12 +9,32 @@ variable "kms_key_arn" {
 }
 
 variable "retention_classes" {
-  description = "Map of retention tag value -> days, one lifecycle rule each. An object opts in by carrying `retention=<key>` as an object tag at PUT, set from the tenant's plan. Keep this small: a rule per distinct value, against a 1,000-rules-per-bucket cap. Values are design intent until ratified into billing_pricing_matrix.md §3."
+  description = <<-EOT
+    Map of retention CLASS -> days, one lifecycle rule each. An object opts in
+    by carrying `retention=<class>` as an object tag at PUT, set from the host
+    record's plan-derived value (redis_schema.md §6.1.1).
+
+    `none` and `inf` are deliberately absent: `none` writes no object at all,
+    and `inf` is tagged like the rest but matches no rule — the absence of a
+    rule IS the permanence.
+
+    ORDER MATTERS when adding a class: the rule must exist here BEFORE BE may
+    write the enum value, or objects written in between carry a tag nothing
+    matches and become `inf` by accident, indistinguishable afterwards from
+    ones that meant it.
+
+    Months are 30 days, years are 365; nothing is calendar-aware. S3 sweeps
+    asynchronously, so a class is a floor rather than an exact date.
+  EOT
   type        = map(number)
   default = {
-    "30"  = 30
-    "90"  = 90
-    "365" = 365
+    "1d"  = 1
+    "1m"  = 30
+    "3m"  = 90
+    "1y"  = 365
+    "2y"  = 730
+    "5y"  = 1825
+    "10y" = 3650
   }
 }
 

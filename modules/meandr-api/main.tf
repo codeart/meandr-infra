@@ -405,6 +405,75 @@ resource "aws_iam_role_policy" "task_cred_store" {
   })
 }
 
+# Capture buckets. The split is deliberate and asymmetric — BE and the
+# proxy each WRITE their own bucket and read the other's, so neither can
+# corrupt what the other produces:
+#
+#   archive    BE writes (daily Parquet), BE + Athena read.
+#              The proxy has no access at all.
+#   payloads   the proxy writes (body segments); BE READS and RETAGS,
+#              never writes.
+#
+# BE's two reasons to touch payloads:
+#   - the dashboard's "show me the request" button, a ranged GET by ref;
+#   - the cancellation flow, which retags an account's objects from `inf`
+#     to `1d` so the bucket's own lifecycle does the deleting. That is
+#     why PutObjectTagging is here and PutObject is not — retagging is
+#     how you get S3 to delete at scale without enumerating, since
+#     S3 Batch Operations has no native delete job type.
+#
+# ListBucket is not optional for Athena: it enumerates partitions before
+# it scans.
+resource "aws_iam_role_policy" "task_capture" {
+  count = var.capture_enabled ? 1 : 0
+
+  name = "capture-buckets"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ArchiveReadWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:PutObjectTagging",
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          var.archive_bucket_arn,
+          "${var.archive_bucket_arn}/*",
+        ]
+      },
+      {
+        # NO PutObject. Bodies have exactly one writer, and it is not BE.
+        Sid    = "S3PayloadsReadAndRetag"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectTagging",
+          "s3:PutObjectTagging",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          var.payloads_bucket_arn,
+          "${var.payloads_bucket_arn}/*",
+        ]
+      },
+      {
+        Sid      = "KMSCaptureBuckets"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
+        Resource = var.payload_encryption_key_arn
+      },
+    ]
+  })
+}
+
 resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
   name = "cloudwatch-metrics"
   role = aws_iam_role.task.id

@@ -259,6 +259,15 @@ module "api" {
   migrate           = { cpu = 512, memory = 1024 }
 
   log_retention_days = 7
+
+  # BE writes the archive (daily Parquet) and READS + RETAGS payloads —
+  # never writes bodies. Retag is the cancellation flow: move an
+  # account's objects from `inf` to `1d` and let the bucket's lifecycle
+  # do the deleting.
+  capture_enabled            = true
+  archive_bucket_arn         = module.archive_bucket.arn
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
 }
 
 # --- meandr-mcp --------------------------------------------------------

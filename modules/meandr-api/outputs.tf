@@ -17,17 +17,17 @@ output "task_role_arn" {
 
 # --- Services -----------------------------------------------------------
 
-output "puma_service_name"    { value = module.puma.service_name }
-output "jobs_service_name"    { value = module.jobs.service_name }
-output "ingest_service_name"  { value = module.ingest.service_name }
-output "migrate_task_family"  { value = module.migrate.task_definition_family }
+output "puma_service_name"   { value = module.puma.service_name }
+output "jobs_service_name"   { value = module.jobs.service_name }
+output "ingest_service_name" { value = module.ingest.service_name }
+output "migrate_task_family" { value = module.migrate.task_definition_family }
 
 # --- Networking / ALB ---------------------------------------------------
 
-output "alb_arn"          { value = aws_lb.main.arn }
-output "alb_dns_name"     { value = aws_lb.main.dns_name }
-output "alb_zone_id"      { value = aws_lb.main.zone_id }
-output "alb_security_group_id" { value = aws_security_group.alb.id }
+output "alb_arn"                  { value = aws_lb.main.arn }
+output "alb_dns_name"             { value = aws_lb.main.dns_name }
+output "alb_zone_id"              { value = aws_lb.main.zone_id }
+output "alb_security_group_id"    { value = aws_security_group.alb.id }
 output "worker_security_group_id" { value = aws_security_group.worker.id }
 output "puma_security_group_id"   { value = aws_security_group.puma.id }
 

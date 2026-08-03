@@ -337,3 +337,32 @@ variable "extra_tags" {
   type        = map(string)
   default     = {}
 }
+
+# --- Payload capture / archive ------------------------------------------
+#
+# `capture_enabled` gates the IAM policy count separately from the ARNs,
+# for the same plan-time reason as cred_store_enabled.
+
+variable "capture_enabled" {
+  description = "Explicit on/off gate for BE's S3 grants. Set true alongside the three ARNs below."
+  type        = bool
+  default     = false
+}
+
+variable "archive_bucket_arn" {
+  description = "Archive bucket ARN (calls + actions Parquet). BE WRITES this one — it is the daily archiver's target and the only bucket Athena scans."
+  type        = string
+  default     = ""
+}
+
+variable "payloads_bucket_arn" {
+  description = "Payloads bucket ARN (request/response bodies). BE gets READ + RETAG here, never write: the proxy is the only writer of bodies. Read serves the dashboard's 'show me the request'; retag is the cancellation flow, which moves an account's objects from `inf` to `1d` and lets the bucket's own lifecycle do the deleting (redis_schema.md §6.1.1)."
+  type        = string
+  default     = ""
+}
+
+variable "payload_encryption_key_arn" {
+  description = "Payload CMK ARN. Both buckets are SSE-KMS, so the caller needs GenerateDataKey to write and Decrypt to read."
+  type        = string
+  default     = ""
+}
