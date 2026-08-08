@@ -293,6 +293,14 @@ module "archive_bucket" {
   tags        = local.tags
 }
 
+module "archive_database" {
+  source = "../../modules/glue-database"
+
+  name        = "meandr_${local.env}"
+  description = "meandr archive (${local.env}) — external tables over ${module.archive_bucket.bucket}"
+  tags        = local.tags
+}
+
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
 

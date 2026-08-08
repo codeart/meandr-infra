@@ -62,9 +62,16 @@ resource "aws_iam_user" "dev" {
   })
 }
 
-resource "aws_iam_user_policy" "dev_secretsmanager" {
-  name = "secrets-manager-access"
-  user = aws_iam_user.dev.name
+# Managed, because user's inline policies share a 2048-byte budget.
+#
+# This one stays in the ACCOUNT stack because its ARNs are
+# region-agnostic (`secretsmanager:*:`). Grants that name regional
+# resources live beside those resources, in development/<region>.
+resource "aws_iam_policy" "dev_secretsmanager" {
+  name        = "meandr-dev-secrets-manager"
+  path        = "/dev/"
+  description = "Secrets Manager access for local BE (tenant secrets + cert installs)"
+  tags        = local.tags
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -100,6 +107,11 @@ resource "aws_iam_user_policy" "dev_secretsmanager" {
       },
     ]
   })
+}
+
+resource "aws_iam_user_policy_attachment" "dev_secretsmanager" {
+  user       = aws_iam_user.dev.name
+  policy_arn = aws_iam_policy.dev_secretsmanager.arn
 }
 
 resource "aws_iam_access_key" "dev" {

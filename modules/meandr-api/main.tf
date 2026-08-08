@@ -443,6 +443,15 @@ resource "aws_iam_role_policy" "task_capture" {
           "s3:GetObjectTagging",
           "s3:DeleteObject",
           "s3:ListBucket",
+          # Athena reads this bucket AND writes its results here. It
+          # calls GetBucketLocation before running anything and answers a
+          # missing grant with "Unable to verify/create output bucket",
+          # which reads as the bucket not existing. Large result sets go
+          # up as multipart uploads, hence the other three.
+          "s3:GetBucketLocation",
+          "s3:AbortMultipartUpload",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListMultipartUploadParts",
         ]
         Resource = [
           var.archive_bucket_arn,
@@ -469,6 +478,58 @@ resource "aws_iam_role_policy" "task_capture" {
         Effect   = "Allow"
         Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
         Resource = var.payload_encryption_key_arn
+      },
+    ]
+  })
+}
+
+# Archive query API — Athena over the Parquet in the archive bucket
+# (Meandr::Athena). S3 and KMS come from capture-buckets above; this adds
+# the query engine and the catalog.
+#
+# READ-ONLY on the catalog, deliberately. Tables are provisioned by an
+# operator running `rake archive:provision`, whose columns are derived
+# from the Rails models; a web process that can drop catalog tables is a
+# worse default than an occasional manual step. The database itself is a
+# Terraform resource in the region stack.
+resource "aws_iam_role_policy" "task_archive_query" {
+  name = "archive-query"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # The default workgroup, because the client names none.
+        Sid    = "AthenaQueryExecution"
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:StopQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:GetQueryResultsStream",
+          "athena:ListQueryExecutions",
+          "athena:GetWorkGroup",
+        ]
+        Resource = "arn:aws:athena:${local.region}:${var.account_id}:workgroup/primary"
+      },
+      {
+        Sid    = "GlueCatalogRead"
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+        ]
+        Resource = [
+          "arn:aws:glue:${local.region}:${var.account_id}:catalog",
+          "arn:aws:glue:${local.region}:${var.account_id}:database/meandr_${var.env}",
+          "arn:aws:glue:${local.region}:${var.account_id}:table/meandr_${var.env}/*",
+        ]
       },
     ]
   })

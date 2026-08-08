@@ -20,10 +20,17 @@ provider "aws" {
 }
 
 locals {
+  env        = "development"  # Rails-env form, as in staging/production
+  region     = "eu-central-1" # matches the provider; used in ARNs below
   account_id = "238020582774" # Development
 
+  # Glue database the archive query API reads and `rake archive:provision`
+  # creates. Named for the Rails env, not the 3-letter MEANDR_ENV, so it
+  # reads as `meandr_development` / `meandr_staging` / `meandr_production`.
+  athena_database = "meandr_${local.env}"
+
   tags = {
-    "meandr:env"        = "development"
+    "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
@@ -61,7 +68,7 @@ module "creds_table" {
 module "cred_encryption_key" {
   source = "../../modules/cred-encryption-key"
 
-  env        = "development"
+  env        = local.env
   alias_name = "meandr-cred-development"
 
   enable_key_rotation     = true
@@ -73,7 +80,7 @@ module "cred_encryption_key" {
 module "payload_encryption_key" {
   source = "../../modules/payload-encryption-key"
 
-  env        = "development"
+  env        = local.env
   alias_name = "meandr-payload-development"
 
   enable_key_rotation     = true
@@ -99,9 +106,11 @@ data "aws_iam_user" "dev" {
   user_name = "meandr-dev"
 }
 
-resource "aws_iam_user_policy" "dev_cred_store" {
-  name = "cred-store-access"
-  user = data.aws_iam_user.dev.user_name
+resource "aws_iam_policy" "dev_cred_store" {
+  name        = "meandr-dev-cred-store"
+  path        = "/dev/"
+  description = "DynamoDB cred table + KMS envelope keys for local BE/proxy"
+  tags        = local.tags
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -150,6 +159,11 @@ resource "aws_iam_user_policy" "dev_cred_store" {
   })
 }
 
+resource "aws_iam_user_policy_attachment" "dev_cred_store" {
+  user       = data.aws_iam_user.dev.user_name
+  policy_arn = aws_iam_policy.dev_cred_store.arn
+}
+
 # --- S3 capture access (dev user) ---------------------------------------
 #
 # Its own policy rather than more statements on cred-store-access: a
@@ -160,9 +174,11 @@ resource "aws_iam_user_policy" "dev_cred_store" {
 # instead (modules/meandr-mcp, capture_enabled). Dev is the odd one
 # because the proxy and BE run on a laptop against a stored access key.
 
-resource "aws_iam_user_policy" "dev_s3_capture" {
-  name = "s3-capture-access"
-  user = data.aws_iam_user.dev.user_name
+resource "aws_iam_policy" "dev_s3_capture" {
+  name        = "meandr-dev-s3-capture"
+  path        = "/dev/"
+  description = "Payloads + archive bucket access for local BE/proxy capture"
+  tags        = local.tags
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -208,6 +224,16 @@ resource "aws_iam_user_policy" "dev_s3_capture" {
           "s3:GetObjectTagging",
           "s3:DeleteObject",
           "s3:ListBucket",
+          # Athena calls GetBucketLocation on the results location BEFORE
+          # it runs anything, and answers a missing grant with "Unable to
+          # verify/create output bucket" — which reads as the bucket not
+          # existing rather than as a permission. Results are written
+          # here (athena-results/), and a large result set goes up as a
+          # multipart upload, hence the three multipart actions.
+          "s3:GetBucketLocation",
+          "s3:AbortMultipartUpload",
+          "s3:ListBucketMultipartUploads",
+          "s3:ListMultipartUploadParts",
         ]
         Resource = [
           module.archive_bucket.arn,
@@ -216,6 +242,146 @@ resource "aws_iam_user_policy" "dev_s3_capture" {
       },
     ]
   })
+}
+
+resource "aws_iam_user_policy_attachment" "dev_s3_capture" {
+  user       = data.aws_iam_user.dev.user_name
+  policy_arn = aws_iam_policy.dev_s3_capture.arn
+}
+
+# --- Athena (archive query API) -----------------------------------------
+#
+# The archive query API runs Athena over the Parquet in archive_bucket
+# (Meandr::Athena, lib/meandr/athena.rb). In development the Rails client
+# authenticates as THIS user, not the operator's own admin identity —
+# same dev-vs-deployed split as Proxy::Payloads and Meandr::CredStore —
+# so the grant has to live here or every query returns AccessDenied.
+#
+# S3 and KMS are already covered above: the archive bucket is R/W with
+# ListBucket (Athena enumerates partitions before it scans), results land
+# under the same bucket's athena-results/ prefix, and the bucket is
+# SSE-KMS under payload_encryption_key, which the cred-store policy
+# already grants GenerateDataKey + Decrypt on. Only the query engine and
+# the catalog were missing.
+#
+# MANAGED, like every other grant on this user, and that is not a style
+# choice. A user's INLINE policies share a 2048-byte budget IN AGGREGATE
+# — across every stack that writes to that user, since IAM is global —
+# and adding this one inline failed with LimitExceeded. Managed policies
+# get 6144 bytes each and share nothing, which also decouples the two
+# stacks that grant to meandr-dev from each other.
+#
+# The grant lives HERE, beside the resources it names, rather than in
+# account-development with the user: these ARNs are regional, and a
+# second dev region would attach its own policy to the same global user
+# with no conflict. account-development keeps only the grants whose ARNs
+# are region-agnostic.
+resource "aws_iam_policy" "dev_athena" {
+  name        = "meandr-dev-athena-query"
+  path        = "/dev/"
+  description = "Athena + Glue catalog read for the local BE's archive query API"
+  tags        = local.tags
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Scoped to the DEFAULT workgroup because the client does not
+        # name one (athena.rb builds no work_group param). A dedicated
+        # workgroup is the right home for per-query byte caps if archive
+        # spend ever needs bounding; this follows the code as written.
+        Sid    = "AthenaQueryExecution"
+        Effect = "Allow"
+        Action = [
+          "athena:StartQueryExecution",
+          "athena:StopQueryExecution",
+          "athena:GetQueryExecution",
+          "athena:GetQueryResults",
+          "athena:GetQueryResultsStream",
+          "athena:ListQueryExecutions",
+          "athena:GetWorkGroup",
+        ]
+        Resource = "arn:aws:athena:${local.region}:${local.account_id}:workgroup/primary"
+      },
+      {
+        # READ-ONLY on the catalog: the query path only resolves tables
+        # and partitions. DDL lives in its own policy below, so a grant
+        # that exists for `rake archive:provision` can be removed without
+        # touching the one queries depend on.
+        Sid    = "GlueCatalogRead"
+        Effect = "Allow"
+        Action = [
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:GetPartition",
+          "glue:GetPartitions",
+        ]
+        Resource = [
+          "arn:aws:glue:${local.region}:${local.account_id}:catalog",
+          "arn:aws:glue:${local.region}:${local.account_id}:database/${local.athena_database}",
+          "arn:aws:glue:${local.region}:${local.account_id}:table/${local.athena_database}/*",
+        ]
+      },
+    ]
+  })
+}
+
+resource "aws_iam_user_policy_attachment" "dev_athena" {
+  user       = data.aws_iam_user.dev.user_name
+  policy_arn = aws_iam_policy.dev_athena.arn
+}
+
+# --- Glue table DDL (rake archive:provision) ----------------------------
+#
+# TABLES ONLY. The database is a Terraform resource (below) because it is
+# stable infrastructure; the tables are not, because their columns are
+# DERIVED — the rake task reads them off the Rails models and the
+# Archiver writes the Parquet from those same models, so writer and
+# reader schema cannot drift. Hand-maintaining the column list here would
+# create exactly that drift, and silently: a migration adds a column, the
+# Parquet carries it, and Athena cannot see it.
+#
+# So infra owns what it can state, and the app owns what only it knows.
+#
+# Separate from the query policy so a deployed environment can hold the
+# read grant alone — no task role should be able to drop a catalog table.
+# Provisioning is an operator action, run with an operator identity.
+#
+# No partition APIs: the tables use partition projection (see the rake
+# task, "no Glue catalog, no MSCK"), so partitions are computed at query
+# time and never registered.
+resource "aws_iam_policy" "dev_glue_provision" {
+  name        = "meandr-dev-glue-provision"
+  path        = "/dev/"
+  description = "Glue DDL for rake archive:provision (database + external tables)"
+  tags        = local.tags
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "GlueTableDDL"
+        Effect = "Allow"
+        Action = [
+          "glue:CreateTable",
+          "glue:UpdateTable",
+          "glue:DeleteTable",
+        ]
+        Resource = [
+          "arn:aws:glue:${local.region}:${local.account_id}:catalog",
+          "arn:aws:glue:${local.region}:${local.account_id}:database/${local.athena_database}",
+          "arn:aws:glue:${local.region}:${local.account_id}:table/${local.athena_database}/*",
+        ]
+      },
+    ]
+  })
+}
+
+resource "aws_iam_user_policy_attachment" "dev_glue_provision" {
+  user       = data.aws_iam_user.dev.user_name
+  policy_arn = aws_iam_policy.dev_glue_provision.arn
 }
 
 # --- Capture buckets ----------------------------------------------------
@@ -237,6 +403,14 @@ module "archive_bucket" {
 
   name        = "meandr-mcp-archive-development"
   kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+}
+
+module "archive_database" {
+  source = "../../modules/glue-database"
+
+  name        = local.athena_database
+  description = "meandr archive (development) — external tables over ${module.archive_bucket.bucket}"
   tags        = local.tags
 }
 
