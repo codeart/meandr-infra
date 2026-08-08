@@ -493,6 +493,10 @@ resource "aws_iam_role_policy" "task_capture" {
 # worse default than an occasional manual step. The database itself is a
 # Terraform resource in the region stack.
 resource "aws_iam_role_policy" "task_archive_query" {
+  # Same gate as capture-buckets: querying an archive this environment
+  # does not write is not a thing to grant.
+  count = var.capture_enabled ? 1 : 0
+
   name = "archive-query"
   role = aws_iam_role.task.id
 

@@ -27,6 +27,23 @@ locals {
   region     = "eu-central-1"
   account_id = "238020582774"
 
+  # Is this the env's PRIMARY region? The archive is written by BE from
+  # Postgres, which is central, so there is ONE archive per env and it
+  # lives here. Secondary regions are mcp-only: they get a payloads
+  # bucket — which IS per region, because the proxy writes it on the hot
+  # path — and no archive.
+  #
+  # Deliberately NOT derived from whether the api module is present.
+  # Production creates the archive bucket ahead of its deferred workload
+  # to reserve the global S3 name, and development has no ECS at all yet
+  # still writes an archive from a laptop.
+  #
+  # S3 catches half a mistake: `meandr-mcp-archive-<env>` is globally
+  # unique, so a second region trying to create it fails loudly. The Glue
+  # database would NOT — catalogs are per region, so a duplicate would
+  # silently stand up an empty database whose queries return nothing.
+  primary = true
+
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
@@ -242,8 +259,8 @@ resource "aws_iam_policy" "dev_s3_capture" {
           "s3:ListMultipartUploadParts",
         ]
         Resource = [
-          module.archive_bucket.arn,
-          "${module.archive_bucket.arn}/*",
+          one(module.archive_bucket[*].arn),
+          "${one(module.archive_bucket[*].arn)}/*",
         ]
       },
     ]
@@ -406,6 +423,7 @@ resource "aws_iam_user_policy_attachment" "dev_glue_provision" {
 
 module "archive_bucket" {
   source = "../../modules/s3-capture-bucket"
+  count  = local.primary ? 1 : 0
 
   name        = "meandr-mcp-archive-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
@@ -414,9 +432,10 @@ module "archive_bucket" {
 
 module "archive_database" {
   source = "../../modules/glue-database"
+  count  = local.primary ? 1 : 0
 
   name        = local.athena_database
-  description = "meandr archive (${local.env}) — external tables over ${module.archive_bucket.bucket}"
+  description = "meandr archive (${local.env}) — external tables over ${one(module.archive_bucket[*].bucket)}"
   tags        = local.tags
 }
 
@@ -432,7 +451,7 @@ module "payloads_bucket" {
 
 output "archive_bucket" {
   description = "Dev archive bucket (calls + actions Parquet). Athena reads this one; it is the only bucket that gets scanned."
-  value       = module.archive_bucket.bucket
+  value       = one(module.archive_bucket[*].bucket)
 }
 
 output "payloads_bucket" {
