@@ -15,25 +15,31 @@
 # stays in account-development/, since identity is account-global.
 
 provider "aws" {
-  region  = "eu-central-1"
+  region  = local.region
   profile = "meandr-development"
 }
 
 locals {
-  env        = "development"  # Rails-env form, as in staging/production
-  region     = "eu-central-1" # matches the provider; used in ARNs below
-  account_id = "238020582774" # Development
-
-  # Glue database the archive query API reads and `rake archive:provision`
-  # creates. Named for the Rails env, not the 3-letter MEANDR_ENV, so it
-  # reads as `meandr_development` / `meandr_staging` / `meandr_production`.
-  athena_database = "meandr_${local.env}"
+  # This stack's identity. Everything below derives from these — the
+  # provider, resource names, ARNs — so onboarding a region is a copy of
+  # this file with the three edited.
+  env        = "development"
+  region     = "eu-central-1"
+  account_id = "238020582774"
 
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
+
+  # Dev-only. Staging and production scope the same ARNs inside
+  # modules/meandr-api from var.env; here the IAM policies are written
+  # out in this file, so the name is needed in five places.
+  #
+  # Named for the Rails env, not the 3-letter MEANDR_ENV — the app
+  # derives it as `meandr_#{Rails.env}`.
+  athena_database = "meandr_${local.env}"
 }
 
 # --- Account guard ------------------------------------------------------
@@ -57,7 +63,7 @@ resource "null_resource" "account_guard" {
 module "creds_table" {
   source = "../../modules/dynamodb-creds-table"
 
-  name = "meandr-creds-development"
+  name = "meandr-creds-${local.env}"
 
   pitr_enabled                = false
   deletion_protection_enabled = false
@@ -69,7 +75,7 @@ module "cred_encryption_key" {
   source = "../../modules/cred-encryption-key"
 
   env        = local.env
-  alias_name = "meandr-cred-development"
+  alias_name = "meandr-cred-${local.env}"
 
   enable_key_rotation     = true
   deletion_window_in_days = 7
@@ -81,7 +87,7 @@ module "payload_encryption_key" {
   source = "../../modules/payload-encryption-key"
 
   env        = local.env
-  alias_name = "meandr-payload-development"
+  alias_name = "meandr-payload-${local.env}"
 
   enable_key_rotation     = true
   deletion_window_in_days = 7
@@ -401,7 +407,7 @@ resource "aws_iam_user_policy_attachment" "dev_glue_provision" {
 module "archive_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-archive-development"
+  name        = "meandr-mcp-archive-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }
@@ -410,14 +416,14 @@ module "archive_database" {
   source = "../../modules/glue-database"
 
   name        = local.athena_database
-  description = "meandr archive (development) — external tables over ${module.archive_bucket.bucket}"
+  description = "meandr archive (${local.env}) — external tables over ${module.archive_bucket.bucket}"
   tags        = local.tags
 }
 
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-payloads-eu-central-1-development"
+  name        = "meandr-mcp-payloads-${local.region}-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }

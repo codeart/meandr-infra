@@ -32,7 +32,7 @@
 # here — those states are live and applicable independently of this one.
 
 provider "aws" {
-  region  = "us-east-1"
+  region  = local.region
   profile = "meandr-production"
 }
 
@@ -44,12 +44,17 @@ provider "aws" {
 }
 
 locals {
+  # This stack's identity. Everything below derives from these — the
+  # provider, resource names, ARNs — so onboarding a region is a copy of
+  # this file with the three edited.
   env        = "production"
   region     = "us-east-1"
   account_id = "393686273464"
 
   tags = {
-    "meandr:env" = local.env
+    "meandr:env"        = local.env
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
   }
 }
 
@@ -73,7 +78,7 @@ locals {
 module "archive_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-archive-production"
+  name        = "meandr-mcp-archive-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }
@@ -81,7 +86,7 @@ module "archive_bucket" {
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-payloads-us-east-1-production"
+  name        = "meandr-mcp-payloads-${local.region}-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }
@@ -111,7 +116,7 @@ module "vpc" {
   source = "../../modules/vpc"
 
   cidr_block        = "10.20.0.0/16"
-  azs               = ["us-east-1a", "us-east-1b"]
+  azs               = ["${local.region}a", "${local.region}b"]
   enable_nat        = true
   internal_dns_zone = "${local.env}.meandr.local"
 

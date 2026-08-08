@@ -3,7 +3,7 @@
 # uncomment/comment module blocks per which apps run there.
 
 provider "aws" {
-  region  = "eu-central-1"
+  region  = local.region
   profile = "meandr-staging"
 }
 
@@ -16,12 +16,17 @@ provider "aws" {
 }
 
 locals {
+  # This stack's identity. Everything below derives from these — the
+  # provider, resource names, ARNs — so onboarding a region is a copy of
+  # this file with the three edited.
   env        = "staging"
   region     = "eu-central-1"
   account_id = "259534890849"
 
   tags = {
-    "meandr:env" = local.env
+    "meandr:env"        = local.env
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
   }
 }
 
@@ -31,7 +36,7 @@ module "vpc" {
   source = "../../modules/vpc"
 
   cidr_block        = "10.10.0.0/16"
-  azs               = ["eu-central-1a", "eu-central-1b"]
+  azs               = ["${local.region}a", "${local.region}b"]
   enable_nat        = true
   internal_dns_zone = "${local.env}.meandr.local"
 
@@ -288,7 +293,7 @@ module "api" {
 module "archive_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-archive-staging"
+  name        = "meandr-mcp-archive-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }
@@ -304,7 +309,7 @@ module "archive_database" {
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
 
-  name        = "meandr-mcp-payloads-eu-central-1-staging"
+  name        = "meandr-mcp-payloads-${local.region}-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
 }
