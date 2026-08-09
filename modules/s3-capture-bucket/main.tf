@@ -128,6 +128,27 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
       }
     }
   }
+
+  # Prefix-scoped expiry for machinery droppings — objects a SERVICE
+  # writes into the bucket (Athena query results above all), untagged
+  # and otherwise immortal. No overlap with the tag rules: these
+  # prefixes hold no retention-tagged objects.
+  dynamic "rule" {
+    for_each = var.prefix_expirations
+
+    content {
+      id     = "prefix-expire-${trimsuffix(rule.key, "/")}"
+      status = "Enabled"
+
+      filter {
+        prefix = rule.key
+      }
+
+      expiration {
+        days = rule.value
+      }
+    }
+  }
 }
 
 # TLS-only. S3 accepts plain HTTP otherwise, and a bucket holding

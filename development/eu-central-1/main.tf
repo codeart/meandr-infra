@@ -428,6 +428,9 @@ module "archive_bucket" {
   name        = "meandr-mcp-archive-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
+
+  # Athena drops query results here and never cleans up.
+  prefix_expirations = { "athena-results/" = 1 }
 }
 
 module "archive_database" {

@@ -38,6 +38,18 @@ variable "retention_classes" {
   }
 }
 
+variable "prefix_expirations" {
+  description = <<-EOT
+    Map of key PREFIX -> days, one lifecycle rule each, for machinery
+    droppings: objects a service writes into the bucket (Athena query
+    results) that carry no retention tag and would otherwise live
+    forever. Prefixes must not contain retention-tagged objects — the
+    no-overlap rule above applies here too.
+  EOT
+  type        = map(number)
+  default     = {}
+}
+
 variable "abort_incomplete_days" {
   description = "Days before an incomplete multipart upload is aborted. Abandoned parts are invisible in listings and billed forever, and this design expects abandonment (drain timeouts, SIGKILL, incidents). 1 is the doc's figure and there is no reason to wait longer — a segment that has not completed within a day is never completing."
   type        = number
