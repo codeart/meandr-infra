@@ -247,6 +247,9 @@ module "api" {
   hostname  = "staging-api.meandr.com"
   image_tag = "develop"
 
+  # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
+  extra_hostnames = ["staging-mcp.meandr.com"]
+
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
   public_subnet_ids      = module.vpc.public_subnet_ids
@@ -383,6 +386,12 @@ module "mcp" {
   # off the production-shaped hostname and lets us roll DNS / certs on
   # meandr.live without touching production's apex.
   dns_zone_name = "meandr.live"
+
+  # The authorization server lives on BE's zone, not the tenant wildcard
+  # above — see the module's oauth_issuer_host. Kept dark until the record
+  # resolves and BE answers on it; flipping the flag is the whole switch.
+  oauth_issuer_host       = "staging-mcp.meandr.com"
+  oauth_discovery_enabled = false
 
   event_stream_node_type = "cache.t4g.micro"
   proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }

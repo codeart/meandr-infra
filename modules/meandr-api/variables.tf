@@ -64,6 +64,26 @@ variable "dns_zone_name" {
   default     = "meandr.com"
 }
 
+variable "extra_hostnames" {
+  description = <<-EOT
+    Additional public hostnames this API front answers on, beyond `hostname`.
+    Each gets a Route 53 alias to the same ALB and joins the listener rule's
+    host_header condition.
+
+    Today: the OAuth 2.1 issuer host — `mcp.meandr.com` (prod),
+    `staging-mcp.meandr.com` (staging) — which MCP clients reach after
+    reading the proxy's RFC 9728 metadata. It lives HERE rather than in the
+    MCP zone because *.meandr.io is the tenant wildcard, and an issuer there
+    would need a permanently reserved slug to stop a tenant from serving
+    their own metadata at it.
+
+    Must stay inside the cert's coverage (*.meandr.com by default), or the
+    TLS handshake fails before any of this matters.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "cert_domain" {
   description = "Cert primary domain. Default wildcard covers `*.meandr.com`."
   type        = string

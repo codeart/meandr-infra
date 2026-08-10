@@ -17,31 +17,31 @@ output "task_role_arn" {
 
 # --- Services -----------------------------------------------------------
 
-output "puma_service_name"   { value = module.puma.service_name }
-output "jobs_service_name"   { value = module.jobs.service_name }
+output "puma_service_name" { value = module.puma.service_name }
+output "jobs_service_name" { value = module.jobs.service_name }
 output "ingest_service_name" { value = module.ingest.service_name }
 output "migrate_task_family" { value = module.migrate.task_definition_family }
 
 # --- Networking / ALB ---------------------------------------------------
 
-output "alb_arn"                  { value = aws_lb.main.arn }
-output "alb_dns_name"             { value = aws_lb.main.dns_name }
-output "alb_zone_id"              { value = aws_lb.main.zone_id }
-output "alb_security_group_id"    { value = aws_security_group.alb.id }
+output "alb_arn" { value = aws_lb.main.arn }
+output "alb_dns_name" { value = aws_lb.main.dns_name }
+output "alb_zone_id" { value = aws_lb.main.zone_id }
+output "alb_security_group_id" { value = aws_security_group.alb.id }
 output "worker_security_group_id" { value = aws_security_group.worker.id }
-output "puma_security_group_id"   { value = aws_security_group.puma.id }
+output "puma_security_group_id" { value = aws_security_group.puma.id }
 
 # --- Hostname + cert ---------------------------------------------------
 
-output "hostname"        { value = var.hostname }
+output "hostname" { value = var.hostname }
 output "certificate_arn" { value = module.cert.certificate_arn }
 
 # --- Data tier ---------------------------------------------------------
 
-output "rds_endpoint"           { value = module.rds.endpoint }
-output "rds_internal_dns_name"  { value = module.rds.internal_dns_name }
-output "rds_secret_arn"         { value = module.rds.secret_arn }
-output "rds_db_name"            { value = module.rds.db_name }
+output "rds_endpoint" { value = module.rds.endpoint }
+output "rds_internal_dns_name" { value = module.rds.internal_dns_name }
+output "rds_secret_arn" { value = module.rds.secret_arn }
+output "rds_db_name" { value = module.rds.db_name }
 
 # --- Secrets ----------------------------------------------------------
 

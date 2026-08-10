@@ -321,20 +321,24 @@ variable "oauth_discovery_enabled" {
 
 variable "oauth_issuer_host" {
   description = <<-EOT
-    Hostname BE serves the authorization server on. Null (default) derives
-    `mcp.<dns_zone_name>` — meandr.io in production, meandr.live in staging —
-    so the issuer cannot drift from the zone. A SPECIFIC Route 53 record for
-    this name overrides the proxy's tenant wildcard; meandr-api owns it.
+    Hostname BE serves the authorization server on: `mcp.meandr.com` in
+    production, `staging-mcp.meandr.com` in staging. Must be in BE's zone and
+    listed in that module's `extra_hostnames`, so the ALB routes it.
+
+    Deliberately NOT derived from dns_zone_name. That zone is the tenant
+    wildcard (*.meandr.io); an issuer inside it would require reserving the
+    slug forever, because a tenant who registered it could serve their own
+    metadata at the issuer URL — on the one string that is write-once.
 
     The resulting `https://<host>` must match BE's RFC 8414 `issuer` and RFC
     9207 `iss` byte-for-byte: canonical, no trailing slash. Changing it after
-    clients register invalidates every one of them — treat as write-once.
+    clients register invalidates every one of them.
 
     NOT the resource identifier: that is derived per-request from the Host the
     client used, so tokens bind to the tenant hostname, never to this.
   EOT
   type        = string
-  default     = null
+  default     = ""
 }
 
 variable "payloads_bucket_arn" {

@@ -764,7 +764,7 @@ resource "aws_lb_listener_rule" "puma" {
 
   condition {
     host_header {
-      values = [var.hostname]
+      values = concat([var.hostname], var.extra_hostnames)
     }
   }
 
@@ -980,6 +980,25 @@ resource "aws_route53_record" "public" {
 
   zone_id = data.aws_route53_zone.public.zone_id
   name    = var.hostname
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
+}
+
+# Additional names on the same front — today the OAuth issuer host, which
+# MCP clients resolve from the proxy's RFC 9728 metadata. Same ALB, same
+# target group; the wildcard cert already covers *.meandr.com, so a name
+# here needs a record and a listener condition, nothing more.
+resource "aws_route53_record" "extra" {
+  for_each = toset(var.extra_hostnames)
+  provider = aws.dns
+
+  zone_id = data.aws_route53_zone.public.zone_id
+  name    = each.value
   type    = "A"
 
   alias {

@@ -44,15 +44,17 @@ locals {
     production = "prd"
   }[var.env]
 
-  # OAuth issuer: derived from the zone, not typed per env, so it cannot
-  # drift from the host BE actually serves. `mcp.<zone>` is a SPECIFIC
-  # record on BE's front and therefore overrides our tenant wildcard.
+  # OAuth issuer. NOT derived from dns_zone_name: that is the tenant
+  # wildcard zone (*.meandr.io), and the authorization server lives on
+  # BE's zone instead — putting it in the tenant namespace would mean
+  # reserving a slug forever to stop a tenant serving metadata at the
+  # issuer URL. The caller instantiates both modules and passes BE's
+  # host explicitly.
   #
   # Empty until oauth_discovery_enabled, because advertising an issuer
   # BE does not serve yet is worse than advertising none: clients would
   # discover it, fail, and cache the failure.
-  oauth_issuer_host = coalesce(var.oauth_issuer_host, "mcp.${var.dns_zone_name}")
-  oauth_issuer      = var.oauth_discovery_enabled ? "https://${local.oauth_issuer_host}" : ""
+  oauth_issuer = var.oauth_discovery_enabled ? "https://${var.oauth_issuer_host}" : ""
 
   base_tags = merge({
     "meandr:env"        = var.env
