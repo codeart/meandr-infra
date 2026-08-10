@@ -44,6 +44,16 @@ locals {
     production = "prd"
   }[var.env]
 
+  # OAuth issuer: derived from the zone, not typed per env, so it cannot
+  # drift from the host BE actually serves. `mcp.<zone>` is a SPECIFIC
+  # record on BE's front and therefore overrides our tenant wildcard.
+  #
+  # Empty until oauth_discovery_enabled, because advertising an issuer
+  # BE does not serve yet is worse than advertising none: clients would
+  # discover it, fail, and cache the failure.
+  oauth_issuer_host = coalesce(var.oauth_issuer_host, "mcp.${var.dns_zone_name}")
+  oauth_issuer      = var.oauth_discovery_enabled ? "https://${local.oauth_issuer_host}" : ""
+
   base_tags = merge({
     "meandr:env"        = var.env
     "meandr:app"        = "meandr-mcp"
@@ -101,11 +111,8 @@ locals {
     MEANDR_SESSION_TTL = var.session_ttl
 
     # OAuth discovery. Empty = dark: no WWW-Authenticate hint on 401s
-    # and the RFC 9728 well-known route 404s. Set it only once BE serves
-    # the authorization server, and with the SAME canonical string BE
-    # reports as RFC 8414 `issuer` — changing it later invalidates every
-    # client registered against the old value.
-    MEANDR_OAUTH_ISSUER = var.oauth_issuer
+    # and the RFC 9728 well-known route 404s.
+    MEANDR_OAUTH_ISSUER = local.oauth_issuer
   }
 
   # Proxy task def secrets — keyed by env-var name, valueFrom is the SM

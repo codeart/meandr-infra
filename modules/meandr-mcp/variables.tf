@@ -302,23 +302,39 @@ variable "payloads_bucket" {
   default     = ""
 }
 
-variable "oauth_issuer" {
+variable "oauth_discovery_enabled" {
   description = <<-EOT
-    OAuth 2.1 authorization-server URL BE serves, advertised to MCP clients
-    via RFC 9728 Protected Resource Metadata and the WWW-Authenticate hint
-    on 401s. Empty (default) leaves discovery DARK — the well-known route
-    404s and no hint is sent — which is correct until BE ships the issuer.
+    Advertise BE's OAuth 2.1 authorization server to MCP clients — RFC 9728
+    Protected Resource Metadata plus the WWW-Authenticate hint on 401s.
 
-    Must match BE's RFC 8414 `issuer` / RFC 9207 `iss` byte-for-byte:
-    canonical, no trailing slash. Changing it after clients register
-    invalidates every one of them, so treat it as write-once per env.
-    Planned: https://mcp.meandr.io (prod), https://mcp.meandr.live (staging).
+    Default false leaves discovery DARK (well-known 404s, no hint), which is
+    correct until BE actually serves the issuer host: a client that discovers
+    an issuer and fails may cache that failure, so advertising early is worse
+    than advertising nothing.
 
-    NOT the resource identifier — that is derived per-request from the Host
-    the client used, so tokens bind to the tenant hostname, not to this.
+    Turn on only once `mcp.<dns_zone_name>` resolves to BE's front AND its
+    certificate covers that name.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "oauth_issuer_host" {
+  description = <<-EOT
+    Hostname BE serves the authorization server on. Null (default) derives
+    `mcp.<dns_zone_name>` — meandr.io in production, meandr.live in staging —
+    so the issuer cannot drift from the zone. A SPECIFIC Route 53 record for
+    this name overrides the proxy's tenant wildcard; meandr-api owns it.
+
+    The resulting `https://<host>` must match BE's RFC 8414 `issuer` and RFC
+    9207 `iss` byte-for-byte: canonical, no trailing slash. Changing it after
+    clients register invalidates every one of them — treat as write-once.
+
+    NOT the resource identifier: that is derived per-request from the Host the
+    client used, so tokens bind to the tenant hostname, never to this.
   EOT
   type        = string
-  default     = ""
+  default     = null
 }
 
 variable "payloads_bucket_arn" {
