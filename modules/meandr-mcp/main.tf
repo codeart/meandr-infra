@@ -99,6 +99,13 @@ locals {
     MEANDR_CAPTURE_BUCKET = var.payloads_bucket
 
     MEANDR_SESSION_TTL = var.session_ttl
+
+    # OAuth discovery. Empty = dark: no WWW-Authenticate hint on 401s
+    # and the RFC 9728 well-known route 404s. Set it only once BE serves
+    # the authorization server, and with the SAME canonical string BE
+    # reports as RFC 8414 `issuer` — changing it later invalidates every
+    # client registered against the old value.
+    MEANDR_OAUTH_ISSUER = var.oauth_issuer
   }
 
   # Proxy task def secrets — keyed by env-var name, valueFrom is the SM

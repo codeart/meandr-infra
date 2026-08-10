@@ -302,6 +302,25 @@ variable "payloads_bucket" {
   default     = ""
 }
 
+variable "oauth_issuer" {
+  description = <<-EOT
+    OAuth 2.1 authorization-server URL BE serves, advertised to MCP clients
+    via RFC 9728 Protected Resource Metadata and the WWW-Authenticate hint
+    on 401s. Empty (default) leaves discovery DARK — the well-known route
+    404s and no hint is sent — which is correct until BE ships the issuer.
+
+    Must match BE's RFC 8414 `issuer` / RFC 9207 `iss` byte-for-byte:
+    canonical, no trailing slash. Changing it after clients register
+    invalidates every one of them, so treat it as write-once per env.
+    Planned: https://mcp.meandr.io (prod), https://mcp.meandr.live (staging).
+
+    NOT the resource identifier — that is derived per-request from the Host
+    the client used, so tokens bind to the tenant hostname, not to this.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "payloads_bucket_arn" {
   description = "Payloads bucket ARN, to scope the task role's S3 grant to this bucket alone."
   type        = string
