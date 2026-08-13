@@ -391,7 +391,7 @@ module "mcp" {
   # above — see the module's oauth_issuer_host. Kept dark until the record
   # resolves and BE answers on it; flipping the flag is the whole switch.
   oauth_issuer_host       = "staging-mcp.meandr.com"
-  oauth_discovery_enabled = false
+  oauth_discovery_enabled = true
 
   event_stream_node_type = "cache.t4g.micro"
   proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
