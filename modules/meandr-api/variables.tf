@@ -232,6 +232,17 @@ variable "cred_encryption_key_alias" {
   default     = ""
 }
 
+variable "acme_dns_role_arn" {
+  description = "ARN of the ACME DNS role in the Shared account (`meandr-acme-dns-<env>`, output by shared/acme.tf). Goes into MEANDR_ACME_DNS_ROLE_ARN and is the sole Resource of the task role's sts:AssumeRole grant. Empty disables both — Meandr::Acme reads it lazily, so only a real cert order notices."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.acme_dns_role_arn == "" || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.acme_dns_role_arn))
+    error_message = "acme_dns_role_arn must be an IAM role ARN, or empty."
+  }
+}
+
 # --- Valkey endpoints (created elsewhere; meandr-api just consumes) -----
 #
 # BE needs two Valkey planes:

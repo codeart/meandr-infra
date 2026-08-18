@@ -250,6 +250,12 @@ module "api" {
   # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
   extra_hostnames = ["staging-mcp.meandr.com"]
 
+  # ACME DNS-01 into meandr.live, whose zone lives in Shared. Created by
+  # shared/acme.tf (apply that first); hardcoded rather than remote-state
+  # read to keep this stack's only cross-account dependency the provider
+  # alias. `terraform -chdir=shared output acme_dns_role_arns`.
+  acme_dns_role_arn = "arn:aws:iam::303529433558:role/meandr-acme-dns-staging"
+
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
   public_subnet_ids      = module.vpc.public_subnet_ids

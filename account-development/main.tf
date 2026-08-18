@@ -68,8 +68,12 @@ resource "aws_iam_user" "dev" {
 # region-agnostic (`secretsmanager:*:`). Grants that name regional
 # resources live beside those resources, in development/<region>.
 resource "aws_iam_policy" "dev_secretsmanager" {
-  name        = "meandr-dev-secrets-manager"
-  path        = "/dev/"
+  name = "meandr-dev-secrets-manager"
+  path = "/dev/"
+  # NOTE: description is ForceNew on aws_iam_policy (IAM has no update
+  # API for it), so editing this string replaces the policy and its
+  # attachment — a window with no access. Policy STATEMENTS update in
+  # place; leave the description alone when adding permissions.
   description = "Secrets Manager access for local BE (tenant secrets + cert installs)"
   tags        = local.tags
 
@@ -104,6 +108,28 @@ resource "aws_iam_policy" "dev_secretsmanager" {
         Effect   = "Allow"
         Action   = "secretsmanager:ListSecrets"
         Resource = "*"
+      },
+      # READ-ONLY on the Let's Encrypt account at
+      # meandr/acme/development/account — provisioned by hand, never by
+      # the app. Kept out of the CRUD statement above deliberately; same
+      # shape the ECS task role gets for staging/production.
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+        ]
+        Resource = "arn:aws:secretsmanager:*:${local.account_id}:secret:meandr/acme/development/*"
+      },
+      # Assume the DNS role in the Shared account to write ACME challenge
+      # TXT records into meandr.dev. Cross-account assume needs BOTH
+      # sides: the role's trust policy (shared/acme.tf) names this user,
+      # and this statement lets the user act on it. Every Route 53
+      # permission lives over there, on the role — none here.
+      {
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
+        Resource = "arn:aws:iam::303529433558:role/meandr-acme-dns-development"
       },
     ]
   })

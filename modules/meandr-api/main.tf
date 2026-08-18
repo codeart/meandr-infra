@@ -93,6 +93,11 @@ locals {
     # See docs/credential_store.md for the BE-side responsibilities.
     MEANDR_CRED_TABLE_NAME    = var.creds_table_name
     MEANDR_CRED_KMS_KEY_ALIAS = var.cred_encryption_key_alias
+
+    # Cross-account role for ACME DNS-01 challenge writes; the zones live
+    # in the Shared account. Meandr::Acme reads this LAZILY, so an empty
+    # value only fails an actual certificate order, never boot.
+    MEANDR_ACME_DNS_ROLE_ARN = var.acme_dns_role_arn
   }
 
   app_secrets = merge({
@@ -362,6 +367,55 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
         Resource = "*"
       },
     ]
+  })
+}
+
+# Let's Encrypt account at meandr/acme/<env>/account — the ACME account
+# private key plus its registration data, one JSON secret in the same
+# store as the certs it issues. READ-ONLY: the account is registered and
+# stored by hand, and the app only ever reads it to sign ACME requests.
+# Env-scoped, so staging cannot read production's account key.
+#
+# Separate from task_tenant_secrets because that one is CRUD and this
+# must not be. The trailing /* is required: SM appends a random six-char
+# suffix to every secret ARN.
+# The only grant needed on this side of the ACME split: permission to
+# assume the env's DNS role in the Shared account. Every Route 53
+# permission lives over there, on the role itself — see shared/acme.tf.
+# Gated on the ARN being set so an env without ACME wiring gets no
+# policy at all rather than one naming an empty resource.
+resource "aws_iam_role_policy" "task_acme_dns_assume" {
+  count = var.acme_dns_role_arn == "" ? 0 : 1
+
+  name = "acme-dns-assume"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "AssumeAcmeDnsRole"
+      Effect   = "Allow"
+      Action   = "sts:AssumeRole"
+      Resource = var.acme_dns_role_arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "task_acme_account" {
+  name = "acme-account"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "AcmeAccountRead"
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+      ]
+      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/acme/${var.env}/*"
+    }]
   })
 }
 
