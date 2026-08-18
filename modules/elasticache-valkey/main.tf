@@ -89,7 +89,12 @@ resource "aws_security_group_rule" "egress_all" {
 # is also in-place; never forces a recreate.
 
 resource "aws_elasticache_parameter_group" "main" {
-  name        = var.name
+  # Name carries the family so a MAJOR engine bump (8->9) creates the new-family
+  # group BESIDE the old one (create_before_destroy) instead of trying to delete
+  # an in-use group under a fixed name. The replication group then re-points to
+  # the new group in the SAME modify as the engine upgrade — which ElastiCache
+  # requires for a major change — and the old group is dropped afterward.
+  name        = "${var.name}-${var.parameter_group_family}"
   family      = var.parameter_group_family
   description = "Pinned parameters for ${var.name}"
 
@@ -99,6 +104,10 @@ resource "aws_elasticache_parameter_group" "main" {
   }
 
   tags = var.tags
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # --- Replication group ---------------------------------------------------

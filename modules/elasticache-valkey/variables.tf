@@ -22,9 +22,9 @@ variable "description" {
 # without touching app config.
 
 variable "engine_version" {
-  description = "Valkey engine version. `8.1` is the current default — has per-field hash TTL (HEXPIRE) which meandr's rate-limit + cache layers will eventually use. AWS supports 7.2 / 8.0 / 8.1 as of 2025."
+  description = "Valkey engine version. `9.1` is the current default. Has per-field hash TTL (HEXPIRE) which meandr's rate-limit + cache layers will eventually use. Bumping the major requires bumping parameter_group_family to match (valkey9 for 9.x)."
   type        = string
-  default     = "8.1"
+  default     = "9.1"
 }
 
 variable "node_type" {
@@ -69,9 +69,9 @@ variable "snapshot_retention_days" {
 }
 
 variable "parameter_group_family" {
-  description = "Parameter-group family — must match the major of engine_version (`valkey8` for 8.x, `valkey7` for 7.x). When bumping engine to a new major, bump this too."
+  description = "Parameter-group family — must match the major of engine_version (`valkey9` for 9.x, `valkey8` for 8.x). When bumping engine to a new major, bump this too."
   type        = string
-  default     = "valkey8"
+  default     = "valkey9"
 }
 
 variable "maxmemory_policy" {

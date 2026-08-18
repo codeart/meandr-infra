@@ -151,7 +151,7 @@ module "event_stream" {
   name        = "meandr-event-stream"
   description = "Event-stream Valkey - proxy writes counters/streams/locks, BE consumes streams"
 
-  engine_version = "8.1"
+  engine_version = "9.1"
   node_type      = var.event_stream_node_type
 
   num_cache_clusters         = var.event_stream_replicas

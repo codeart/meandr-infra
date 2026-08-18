@@ -201,7 +201,7 @@ module "config_stream" {
   name        = "meandr-config-stream"
   description = "Config-stream Valkey staging - BE writes config + inbound events, proxy reads config + consumes inbound events"
 
-  engine_version = "8.1"
+  engine_version = "9.1"
   node_type      = "cache.t4g.micro"
 
   num_cache_clusters         = 1

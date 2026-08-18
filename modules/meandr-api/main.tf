@@ -133,7 +133,7 @@ module "api_valkey" {
   name        = "meandr-api-redis"
   description = "API-owned Redis: ActionCable + persistent state"
 
-  engine_version = "8.1"
+  engine_version = "9.1"
   node_type      = var.api_redis_node_type
 
   num_cache_clusters         = 1

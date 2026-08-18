@@ -163,7 +163,7 @@ module "config_stream" {
   name        = "meandr-config-stream"
   description = "Config-stream Valkey production - BE writes config + inbound events, proxy reads config + consumes inbound events"
 
-  engine_version = "8.1"
+  engine_version = "9.1"
   node_type      = "cache.r7g.large"
 
   num_cache_clusters         = 2
