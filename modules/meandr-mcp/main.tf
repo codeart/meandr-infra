@@ -110,6 +110,10 @@ locals {
     # nothing and `log` policies degrade to metadata-only.
     MEANDR_CAPTURE_BUCKET = var.payloads_bucket
 
+    # Required — the proxy refuses to boot without it (payloadcrypt has
+    # no plaintext fallback).
+    MEANDR_PAYLOAD_KMS_KEY_ALIAS = var.payload_encryption_key_alias
+
     MEANDR_SESSION_TTL = var.session_ttl
 
     # OAuth discovery. Empty = dark: no WWW-Authenticate hint on 401s

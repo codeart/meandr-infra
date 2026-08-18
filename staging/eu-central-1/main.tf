@@ -382,10 +382,11 @@ module "mcp" {
   # the proxy has capture code — nothing reads MEANDR_CAPTURE_BUCKET yet
   # — but wiring them now means the writer ships without a second task
   # definition revision and a second rolling restart.
-  capture_enabled            = true
-  payloads_bucket            = module.payloads_bucket.bucket
-  payloads_bucket_arn        = module.payloads_bucket.arn
-  payload_encryption_key_arn = module.payload_encryption_key.key_arn
+  capture_enabled              = true
+  payloads_bucket              = module.payloads_bucket.bucket
+  payloads_bucket_arn          = module.payloads_bucket.arn
+  payload_encryption_key_arn   = module.payload_encryption_key.key_arn
+  payload_encryption_key_alias = module.payload_encryption_key.alias_name
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic

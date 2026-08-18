@@ -1,5 +1,5 @@
 output "key_arn" {
-  description = "CMK ARN. Used by consumer modules to scope IAM policies (proxy GenerateDataKey + Decrypt, BE Decrypt-on-user-view). Also goes into the proxy's MEANDR_PAYLOAD_KMS_KEY_ALIAS env var as the alias form for stability across rotations."
+  description = "CMK ARN. Used by consumer modules to scope IAM policies (proxy GenerateDataKey + Decrypt, BE Decrypt-on-user-view). The proxy's MEANDR_PAYLOAD_KMS_KEY_ALIAS takes `alias_name`, not this."
   value       = aws_kms_key.main.arn
 }
 

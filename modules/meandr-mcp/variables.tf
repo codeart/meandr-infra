@@ -352,3 +352,8 @@ variable "payload_encryption_key_arn" {
   type        = string
   default     = ""
 }
+
+variable "payload_encryption_key_alias" {
+  description = "Payload CMK alias (with `alias/` prefix). Goes into MEANDR_PAYLOAD_KMS_KEY_ALIAS. No default — the proxy won't boot without it, so a missing value must fail the plan."
+  type        = string
+}
