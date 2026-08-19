@@ -325,7 +325,21 @@ resource "aws_iam_role_policy" "execution_secrets" {
   })
 }
 
-# Task role — the runtime identity Rails code runs as.
+# Task roles — the runtime identities Rails code runs as.
+#
+# `task`      — puma, ingest, migrate.
+# `task_acme` — jobs, and jobs alone. Identical to `task` plus the three
+#               ACME grants below (acme-dns-assume, acme-account,
+#               cert-write). Named for what makes it different.
+#
+# Split because certificate issuance must not be reachable from a
+# request-serving process: on one role, an RCE or SSRF in puma could
+# PutSecretValue a certificate whose private key the attacker holds, and
+# the proxy would serve it to every customer on that apex.
+#
+# The shared grants are managed policies rather than inline so each is
+# written once and ATTACHED to both roles explicitly — every grant is a
+# readable line, nothing is computed.
 resource "aws_iam_role" "task" {
   name = "meandr-api-task-${var.env}"
 
@@ -341,9 +355,23 @@ resource "aws_iam_role" "task" {
   tags = merge(local.base_tags, { Name = "meandr-api task role" })
 }
 
-resource "aws_iam_role_policy" "task_tenant_secrets" {
-  name = "tenant-secrets"
-  role = aws_iam_role.task.id
+resource "aws_iam_role" "task_acme" {
+  name = "meandr-api-acme-${var.env}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = merge(local.base_tags, { Name = "meandr-api ACME task role" })
+}
+
+resource "aws_iam_policy" "tenant_secrets" {
+  name = "meandr-api-tenant-secrets-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -370,25 +398,35 @@ resource "aws_iam_role_policy" "task_tenant_secrets" {
   })
 }
 
-# Let's Encrypt account at meandr/acme/<env>/account — the ACME account
-# private key plus its registration data, one JSON secret in the same
-# store as the certs it issues. READ-ONLY: the account is registered and
-# stored by hand, and the app only ever reads it to sign ACME requests.
-# Env-scoped, so staging cannot read production's account key.
+resource "aws_iam_role_policy_attachment" "task_tenant_secrets" {
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.tenant_secrets.arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_tenant_secrets" {
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.tenant_secrets.arn
+}
+
+# --- Certificate issuance — JOBS ROLE ONLY ------------------------------
 #
-# Separate from task_tenant_secrets because that one is CRUD and this
-# must not be. The trailing /* is required: SM appends a random six-char
-# suffix to every secret ARN.
-# The only grant needed on this side of the ACME split: permission to
-# assume the env's DNS role in the Shared account. Every Route 53
-# permission lives over there, on the role itself — see shared/acme.tf.
-# Gated on the ARN being set so an env without ACME wiring gets no
-# policy at all rather than one naming an empty resource.
-resource "aws_iam_role_policy" "task_acme_dns_assume" {
+# The whole ACME chain lives here and nowhere else: assume the Shared
+# account's DNS role to answer the challenge, read the Let's Encrypt
+# account key to sign with, write the issued cert where the proxy reads
+# it. Inline on task_acme so it CANNOT be attached to another role by
+# accident.
+#
+# In development the meandr-dev user holds the same three grants (see
+# account-development/main.tf) — a human runs the same flow locally.
+
+# Route 53 access itself lives on the role in the Shared account; this is
+# only permission to assume it. Gated on the ARN so an env with no ACME
+# wiring gets no policy rather than one naming an empty resource.
+resource "aws_iam_role_policy" "acme_dns_assume" {
   count = var.acme_dns_role_arn == "" ? 0 : 1
 
   name = "acme-dns-assume"
-  role = aws_iam_role.task.id
+  role = aws_iam_role.task_acme.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -401,9 +439,12 @@ resource "aws_iam_role_policy" "task_acme_dns_assume" {
   })
 }
 
-resource "aws_iam_role_policy" "task_acme_account" {
+# The account key at meandr/acme/<env>/account. Read-only — registered
+# and stored by hand; the app only signs with it. Env-scoped, so staging
+# cannot read production's key.
+resource "aws_iam_role_policy" "acme_account" {
   name = "acme-account"
-  role = aws_iam_role.task.id
+  role = aws_iam_role.task_acme.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -419,16 +460,41 @@ resource "aws_iam_role_policy" "task_acme_account" {
   })
 }
 
+# Where issued certs land: meandr/certs/<env>/<apex>, which the proxy
+# reads on cold-miss handshakes (read-only, modules/meandr-mcp).
+# CreateSecret on first issuance, PutSecretValue on renewal; GetSecretValue
+# so a renewal can check the stored cert's expiry rather than reissuing
+# blind. No DeleteSecret. Env-scoped.
+resource "aws_iam_role_policy" "acme_cert_write" {
+  name = "cert-write"
+  role = aws_iam_role.task_acme.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "CertIssueAndRenew"
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:TagResource",
+      ]
+      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/certs/${var.env}/*"
+    }]
+  })
+}
+
 # Cred-store: DynamoDB R/W on the cred table + KMS GenerateDataKey/Decrypt
 # on the CMK + SM C/R/U on the dated-key path. Gated on the bool var so
 # the policy is omitted entirely when cred-store isn't wired (e.g. envs
 # where BE doesn't manage creds yet). Same pattern reason as the Redis
 # AUTH IAM in meandr-mcp — count needs a known-at-plan-time bool.
-resource "aws_iam_role_policy" "task_cred_store" {
+resource "aws_iam_policy" "cred_store" {
   count = var.cred_store_enabled ? 1 : 0
 
-  name = "cred-store"
-  role = aws_iam_role.task.id
+  name = "meandr-api-cred-store-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -478,11 +544,10 @@ resource "aws_iam_role_policy" "task_cred_store" {
 #
 # ListBucket is not optional for Athena: it enumerates partitions before
 # it scans.
-resource "aws_iam_role_policy" "task_capture" {
+resource "aws_iam_policy" "capture" {
   count = var.capture_enabled ? 1 : 0
 
-  name = "capture-buckets"
-  role = aws_iam_role.task.id
+  name = "meandr-api-capture-buckets-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -546,13 +611,12 @@ resource "aws_iam_role_policy" "task_capture" {
 # from the Rails models; a web process that can drop catalog tables is a
 # worse default than an occasional manual step. The database itself is a
 # Terraform resource in the region stack.
-resource "aws_iam_role_policy" "task_archive_query" {
+resource "aws_iam_policy" "archive_query" {
   # Same gate as capture-buckets: querying an archive this environment
   # does not write is not a thing to grant.
   count = var.capture_enabled ? 1 : 0
 
-  name = "archive-query"
-  role = aws_iam_role.task.id
+  name = "meandr-api-archive-query-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -593,9 +657,8 @@ resource "aws_iam_role_policy" "task_archive_query" {
   })
 }
 
-resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
-  name = "cloudwatch-metrics"
-  role = aws_iam_role.task.id
+resource "aws_iam_policy" "cloudwatch_metrics" {
+  name = "meandr-api-cloudwatch-metrics-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -612,9 +675,8 @@ resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
   })
 }
 
-resource "aws_iam_role_policy" "task_ssm_exec" {
-  name = "ssm-exec"
-  role = aws_iam_role.task.id
+resource "aws_iam_policy" "ssm_exec" {
+  name = "meandr-api-ssm-exec-${var.env}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -629,6 +691,67 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
       Resource = "*"
     }]
   })
+}
+
+# --- Attachments — who gets what, one readable line each ----------------
+#
+# Both roles get every shared policy. The difference between them is the
+# three ACME grants above, which are inline on task_acme only.
+
+resource "aws_iam_role_policy_attachment" "task_cred_store" {
+  count      = var.cred_store_enabled ? 1 : 0
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.cred_store[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_cred_store" {
+  count      = var.cred_store_enabled ? 1 : 0
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.cred_store[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "task_capture" {
+  count      = var.capture_enabled ? 1 : 0
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.capture[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_capture" {
+  count      = var.capture_enabled ? 1 : 0
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.capture[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "task_archive_query" {
+  count      = var.capture_enabled ? 1 : 0
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.archive_query[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_archive_query" {
+  count      = var.capture_enabled ? 1 : 0
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.archive_query[0].arn
+}
+
+resource "aws_iam_role_policy_attachment" "task_cloudwatch_metrics" {
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.cloudwatch_metrics.arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_cloudwatch_metrics" {
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.cloudwatch_metrics.arn
+}
+
+resource "aws_iam_role_policy_attachment" "task_ssm_exec" {
+  role       = aws_iam_role.task.name
+  policy_arn = aws_iam_policy.ssm_exec.arn
+}
+
+resource "aws_iam_role_policy_attachment" "acme_ssm_exec" {
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.ssm_exec.arn
 }
 
 # --- RAILS_MASTER_KEY secret -------------------------------------------
@@ -904,7 +1027,10 @@ module "jobs" {
   name               = "meandr-api-jobs"
   cluster_arn        = module.cluster.cluster_arn
   execution_role_arn = module.cluster.execution_role_arn
-  task_role_arn      = aws_iam_role.task.arn
+
+  # The ACME role, not the shared one — jobs is the only task that issues
+  # certificates. puma, ingest and migrate stay on aws_iam_role.task.
+  task_role_arn = aws_iam_role.task_acme.arn
 
   image   = local.image
   command = ["bundle", "exec", "good_job", "start"]
