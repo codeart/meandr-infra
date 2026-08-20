@@ -21,9 +21,20 @@
 resource "aws_ecs_cluster" "main" {
   name = var.name
 
+  # OFF. It bills per metric SERIES per month — one per metric name per
+  # cluster/service/task — so an idle environment pays the same as a busy
+  # one. On staging that was 136 series and effectively the entire
+  # CloudWatch bill (~$25/mo), against ~$1/mo of logs.
+  #
+  # Service- and cluster-level CPU/memory stay free in AWS/ECS. What's
+  # lost is per-task granularity plus network/disk bytes — questions worth
+  # asking across dozens of tasks, not two. Flip back deliberately when
+  # production has the task count to make them meaningful; for anything
+  # specific before then, publish to the meandr/api namespace instead
+  # (already granted, currently unused) at $0.30 per metric.
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
 
   configuration {
@@ -61,9 +72,9 @@ resource "aws_iam_role" "execution" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ecs-tasks.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 
