@@ -77,6 +77,21 @@ resource "aws_ecs_task_definition" "main" {
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
 
+  # Graviton — ~20% cheaper per vCPU-hour for identical work, and ECS
+  # compute is the line that grows fastest as traffic does.
+  #
+  # PINNED, not left to Fargate's X86_64 default: an unset runtime_platform
+  # silently keeps every task on amd64 no matter what the image contains,
+  # so the saving would depend on a default rather than a decision.
+  #
+  # Both images are multi-arch during the transition, so this apply and
+  # the image pushes can land in any order. Once every service is here,
+  # the builds drop linux/amd64.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
   container_definitions = jsonencode([local.container_def])
 
   tags = merge(var.tags, {
