@@ -26,6 +26,15 @@ resource "aws_ecs_task_definition" "main" {
   execution_role_arn       = var.execution_role_arn
   task_role_arn            = var.task_role_arn
 
+  # Must match ecs-fargate-service: these run the same image as the
+  # services, and both apps build linux/arm64 only. Left at Fargate's
+  # X86_64 default this would place nowhere, and the failure surfaces
+  # as a stuck deploy rather than a bad task definition.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
   container_definitions = jsonencode([{
     name      = var.container_name
     image     = var.image
