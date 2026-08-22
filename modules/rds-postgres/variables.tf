@@ -6,7 +6,7 @@ variable "name" {
 variable "engine_version" {
   description = "Postgres major.minor version. We standardize on PG 18 end-to-end (UUIDv7 support is the driver — see meandr-api savepoint 2026-05-09)."
   type        = string
-  default     = "18.4"
+  default     = "18.6"
 }
 
 variable "instance_class" {

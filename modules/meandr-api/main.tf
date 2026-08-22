@@ -166,7 +166,7 @@ module "rds" {
 
   name           = "meandr-api"
   db_name        = local.db_name
-  engine_version = "18.4"
+  engine_version = "18.6"
 
   instance_class           = var.db_instance_class
   allocated_storage_gb     = var.db_allocated_storage_gb
