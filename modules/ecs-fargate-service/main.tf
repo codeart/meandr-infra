@@ -84,9 +84,8 @@ resource "aws_ecs_task_definition" "main" {
   # silently keeps every task on amd64 no matter what the image contains,
   # so the saving would depend on a default rather than a decision.
   #
-  # Both images are multi-arch during the transition, so this apply and
-  # the image pushes can land in any order. Once every service is here,
-  # the builds drop linux/amd64.
+  # Both apps now build linux/arm64 only — an image that predates this
+  # will not run here.
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "ARM64"
