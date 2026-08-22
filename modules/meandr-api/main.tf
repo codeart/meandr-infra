@@ -328,9 +328,10 @@ resource "aws_iam_role_policy" "execution_secrets" {
 # Task roles — the runtime identities Rails code runs as.
 #
 # `task`      — puma, ingest, migrate.
-# `task_acme` — jobs, and jobs alone. Identical to `task` plus the three
-#               ACME grants below (acme-dns-assume, acme-account,
-#               cert-write). Named for what makes it different.
+# `task_acme` — jobs, and jobs alone. Everything `task` has, plus the
+#               three ACME grants below (acme-dns-assume, acme-account,
+#               cert-write) and catalog DDL. Named for the first thing
+#               that made it different, not the only one.
 #
 # Split because certificate issuance must not be reachable from a
 # request-serving process: on one role, an RCE or SSRF in puma could
@@ -606,11 +607,11 @@ resource "aws_iam_policy" "capture" {
 # (Meandr::Athena). S3 and KMS come from capture-buckets above; this adds
 # the query engine and the catalog.
 #
-# READ-ONLY on the catalog, deliberately. Tables are provisioned by an
-# operator running `rake archive:provision`, whose columns are derived
-# from the Rails models; a web process that can drop catalog tables is a
-# worse default than an occasional manual step. The database itself is a
-# Terraform resource in the region stack.
+# READ-ONLY on the catalog. `rake archive:provision` creates the tables
+# and needs DDL, granted separately to the jobs role alone
+# (archive_provision below) so a request-serving process can never
+# reshape a table under a live query. The database itself is a Terraform
+# resource in the region stack.
 resource "aws_iam_policy" "archive_query" {
   # Same gate as capture-buckets: querying an archive this environment
   # does not write is not a thing to grant.
@@ -657,6 +658,40 @@ resource "aws_iam_policy" "archive_query" {
   })
 }
 
+# Catalog DDL for `rake archive:provision` — JOBS ROLE ONLY.
+#
+# Split from archive_query so puma and ingest keep a read-only catalog:
+# the risk that mattered was a REQUEST-SERVING process able to reshape
+# tables under a live query, and jobs serves no requests.
+#
+# CREATE and UPDATE, never DELETE. Provisioning adds tables and widens
+# them as the Rails models change; removing one is an operator action,
+# so the blast radius of a bug in the rake task stops at a wrong column.
+resource "aws_iam_policy" "archive_provision" {
+  count = var.capture_enabled ? 1 : 0
+
+  name = "meandr-api-archive-provision-${var.env}"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "glue:CreateTable",
+        "glue:UpdateTable",
+        "glue:GetDatabase",
+      ]
+      # The catalog itself is required: Glue authorizes DDL against the
+      # catalog resource before it reaches the database or table.
+      Resource = [
+        "arn:aws:glue:${local.region}:${var.account_id}:catalog",
+        "arn:aws:glue:${local.region}:${var.account_id}:database/meandr_${var.env}",
+        "arn:aws:glue:${local.region}:${var.account_id}:table/meandr_${var.env}/*",
+      ]
+    }]
+  })
+}
+
 resource "aws_iam_policy" "cloudwatch_metrics" {
   name = "meandr-api-cloudwatch-metrics-${var.env}"
 
@@ -695,8 +730,9 @@ resource "aws_iam_policy" "ssm_exec" {
 
 # --- Attachments — who gets what, one readable line each ----------------
 #
-# Both roles get every shared policy. The difference between them is the
-# three ACME grants above, which are inline on task_acme only.
+# Both roles get every shared policy. task_acme additionally holds the
+# three inline ACME grants and archive_provision — jobs is where every
+# privileged, non-request-serving capability lands.
 
 resource "aws_iam_role_policy_attachment" "task_cred_store" {
   count      = var.cred_store_enabled ? 1 : 0
@@ -732,6 +768,13 @@ resource "aws_iam_role_policy_attachment" "acme_archive_query" {
   count      = var.capture_enabled ? 1 : 0
   role       = aws_iam_role.task_acme.name
   policy_arn = aws_iam_policy.archive_query[0].arn
+}
+
+# No task_ counterpart, and that asymmetry is the point — see the policy.
+resource "aws_iam_role_policy_attachment" "acme_archive_provision" {
+  count      = var.capture_enabled ? 1 : 0
+  role       = aws_iam_role.task_acme.name
+  policy_arn = aws_iam_policy.archive_provision[0].arn
 }
 
 resource "aws_iam_role_policy_attachment" "task_cloudwatch_metrics" {
