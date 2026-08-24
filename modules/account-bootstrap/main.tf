@@ -4,6 +4,7 @@
 # Creates the per-account plumbing CI needs to deploy:
 #   - GitHub OIDC provider in this account
 #   - IAM role `gh-actions-deploy` scoped to ECS service updates only
+#   - Session Manager shell preferences
 #
 # Workload resources (VPC, ECS cluster, task defs, etc.) live in the
 # per-region module under <env>/<region>/. This module is account-scope.

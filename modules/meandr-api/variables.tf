@@ -47,7 +47,7 @@ variable "internal_dns_zone_id" {
 }
 
 variable "internal_dns_zone_name" {
-  description = "Internal zone name (e.g. `staging.meandr.local`). Suffix for CNAMEs."
+  description = "Internal zone name (e.g. `staging.meandr.internal`). Suffix for CNAMEs."
   type        = string
 }
 

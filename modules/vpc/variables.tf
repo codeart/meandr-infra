@@ -15,7 +15,18 @@ variable "enable_nat" {
 }
 
 variable "internal_dns_zone" {
-  description = "Name of the Route 53 private hosted zone created for this VPC. Used for internal service discovery — RDS, ElastiCache, etc. get CNAMEs here. Use the convention `<env>.meandr.local` (e.g. `staging.meandr.local`)."
+  description = <<-EOT
+    Name of the Route 53 private hosted zone created for this VPC. Used for
+    internal service discovery — RDS, ElastiCache, Valkey and friends live
+    here. Convention: `<env>.meandr.internal` (e.g. `staging.meandr.internal`).
+
+    `.internal`, not `.local`. RFC 6762 reserves `.local` for mDNS, so a
+    resolver is entitled to answer those from multicast rather than from
+    us — and our own dev machines already wildcard `*.meandr.local` to
+    127.0.0.1. ICANN reserved `.internal` in 2024 for exactly this: never
+    delegated, guaranteed NXDOMAIN in public DNS, so a query that escapes
+    fails instead of leaking a hostname or resolving to a stranger.
+  EOT
   type        = string
 }
 

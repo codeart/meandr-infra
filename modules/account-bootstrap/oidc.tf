@@ -139,9 +139,9 @@ data "aws_iam_policy_document" "ecs_deploy" {
 
   # Read ECR (pull existing image manifests for task-def registration).
   statement {
-    sid     = "ECRAccess"
-    effect  = "Allow"
-    actions = ["ecr:GetAuthorizationToken", "ecr:DescribeImages", "ecr:BatchGetImage"]
+    sid       = "ECRAccess"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken", "ecr:DescribeImages", "ecr:BatchGetImage"]
     resources = ["*"]
   }
 
@@ -150,8 +150,8 @@ data "aws_iam_policy_document" "ecs_deploy" {
   # (or succeeds, when debugging). Scoped to /aws/ecs/meandr-* so we can't
   # poke at unrelated log groups that may land in the account later.
   statement {
-    sid     = "ReadMeandrLogs"
-    effect  = "Allow"
+    sid    = "ReadMeandrLogs"
+    effect = "Allow"
     actions = [
       "logs:DescribeLogGroups",
       "logs:DescribeLogStreams",

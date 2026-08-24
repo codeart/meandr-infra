@@ -51,7 +51,7 @@ variable "internal_dns_zone_id" {
 }
 
 variable "internal_dns_zone_name" {
-  description = "Internal zone name (e.g. `staging.meandr.local`)."
+  description = "Internal zone name (e.g. `staging.meandr.internal`)."
   type        = string
 }
 

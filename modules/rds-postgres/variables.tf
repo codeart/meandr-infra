@@ -83,12 +83,12 @@ variable "private_subnet_ids" {
 }
 
 variable "internal_dns_zone_id" {
-  description = "Route 53 private hosted zone ID. A CNAME `pg.<env>.meandr.local` → RDS endpoint is created here so connection strings stay stable across instance recreations."
+  description = "Route 53 private hosted zone ID. A CNAME `pg.<env>.meandr.internal` → RDS endpoint is created here so connection strings stay stable across instance recreations."
   type        = string
 }
 
 variable "internal_dns_zone_name" {
-  description = "Internal DNS zone name (e.g. `staging.meandr.local`). The CNAME record name will be `pg.<zone_name>`."
+  description = "Internal DNS zone name (e.g. `staging.meandr.internal`). The CNAME record name will be `pg.<zone_name>`."
   type        = string
 }
 

@@ -139,7 +139,7 @@ module "vpc" {
   cidr_block        = "10.20.0.0/16"
   azs               = ["${local.region}a", "${local.region}b"]
   enable_nat        = true
-  internal_dns_zone = "${local.env}.meandr.local"
+  internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags
 }

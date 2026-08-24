@@ -23,6 +23,22 @@ locals {
   region     = "eu-central-1"
   account_id = "259534890849"
 
+  # Source-built, not packaged. AL2023 carries valkey 8.0.1/8.0.2/8.0.3 and
+  # nothing newer (verified 2026-08-23 against the aarch64 repo), while
+  # hash-field TTLs — HEXPIRE, which the event tier's rate-limit windows
+  # depend on — landed in 9.x. Redis is not the escape hatch: redis.io
+  # publishes no aarch64 RPMs for RHEL9, so on Graviton both forks require
+  # a build either way, and only one of them is BSD-3.
+  #
+  # Upgrade order is replicas first, master last: a replica newer than its
+  # master is safe, the reverse is not.
+  valkey_version = "9.1.1"
+
+  # The vendored source, and its digest computed from the file itself —
+  # nothing to publish by hand and no digest to remember on a version bump.
+  # A version with no vendored tarball fails at plan.
+  valkey_source_path = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
+
   # Is this the env's PRIMARY region? The archive is written by BE from
   # Postgres, which is central, so there is ONE archive per env and it
   # lives here. Secondary regions are mcp-only: they get a payloads
@@ -55,7 +71,7 @@ module "vpc" {
   cidr_block        = "10.10.0.0/16"
   azs               = ["${local.region}a", "${local.region}b"]
   enable_nat        = true
-  internal_dns_zone = "${local.env}.meandr.local"
+  internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags
 }
@@ -229,6 +245,219 @@ module "config_stream" {
 moved {
   from = module.config_valkey
   to   = module.config_stream
+}
+
+# --- Self-hosted Valkey (config tier) -----------------------------------
+#
+# Runs ALONGSIDE config_stream, not instead of it. Nothing points at these
+# nodes yet: the proxy cannot verify our CA until internal/rdb learns to
+# take a RootCAs bundle, so this stands the fleet up to be watched —
+# replication, a deliberate failover — while the live path is untouched.
+# Cutover is a separate, reversible change once both sides are ready.
+
+# How vendored source reaches an instance. User-data caps at 16 KB and the
+# Valkey tarball is megabytes, so it cannot ride inline; this is the
+# transport.
+#
+# In THIS account and region on purpose. A gateway endpoint only routes to
+# the regional S3 service, so a bucket anywhere else would mean NAT egress
+# on every boot — putting the internet back on the path we vendored the
+# source to keep it off. Re-uploading 4 MB per environment is the cheaper
+# side of that trade.
+#
+# Not the capture or payloads buckets: those hold customer data under a
+# retention policy, and a blob read by an instance role at boot has no
+# business sharing either.
+resource "aws_s3_bucket" "artifacts" {
+  bucket = "meandr-artifacts-${local.env}-${local.region}"
+  tags   = local.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# Versioned so that overwriting a key cannot destroy the source a running
+# node would fetch if it were replaced today.
+resource "aws_s3_bucket_versioning" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# The vendored Valkey source, uploaded by the same apply that creates the
+# nodes — so a node can never boot against a version that was never
+# published. source_hash re-uploads when the vendored file changes; without
+# it Terraform compares only metadata and a re-vendored tarball would sit
+# in the repo while the old bytes stayed in the bucket.
+resource "aws_s3_object" "valkey_source" {
+  bucket      = aws_s3_bucket.artifacts.id
+  key         = "valkey/${local.valkey_version}/valkey-src.tar.gz"
+  source      = local.valkey_source_path
+  source_hash = filemd5(local.valkey_source_path)
+
+  tags = local.tags
+}
+
+# Capacity reservations for both Valkey fleets — config and events, one
+# master and one replica per AZ.
+#
+# Billed at the on-demand rate whether occupied or not, so for nodes that
+# run continuously this is not extra cost. It guarantees the slot across
+# the instance replacement that every user-data change triggers.
+#
+# "open" match: any t4g.micro launched in the AZ uses it, no per-instance
+# wiring.
+resource "aws_ec2_capacity_reservation" "valkey" {
+  for_each = toset(["${local.region}a", "${local.region}b"])
+
+  instance_type           = "t4g.micro"
+  instance_platform       = "Linux/UNIX"
+  availability_zone       = each.value
+  instance_count          = 2
+  end_date_type           = "unlimited"
+  instance_match_criteria = "open"
+
+  tags = merge(local.tags, { Name = "valkey-${each.value}" })
+}
+
+module "valkey_tls" {
+  source = "../../modules/valkey-tls"
+
+  env           = local.env
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  # No replicas yet — one region. Add the second region here when it lands,
+  # or its nodes cannot read the secret at all.
+  replica_regions = []
+
+  tags = local.tags
+}
+
+module "valkey_config_a" {
+  source = "../../modules/valkey-node"
+
+  fleet = "config"
+  node  = "a"
+
+  # Bootstrap tie-break only — see the module's variable doc. This node may
+  # take the master role when no record resolves, which happens exactly
+  # once. On every later boot, including its own replacement, the record
+  # decides.
+  role = "master"
+
+  # Vendor the source BEFORE an apply that changes the version — the node
+  # compiles `valkey/<version>/…` from the bucket and aborts user-data if it
+  # is missing or the digest does not match.
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  # Both nodes must match: they swap roles on failover.
+  instance_type = "t4g.micro"
+
+  # Fail fast so an outer retry loop drives the cadence, rather than the
+  # provider retrying silently for over an hour.
+  create_timeout = "2m"
+
+  # Sentinel runs on every node, here and in every later region — confining
+  # it to promotable nodes would cap the fleet at two voters forever.
+  #
+  # Quorum 2 of 2 today means NO automatic failover: an isolated master
+  # leaves one voter, which can never agree with itself. Deliberate —
+  # quorum 1 across two partitioned Sentinels lets both promote, which is
+  # worse than promoting neither. Manual `SENTINEL FAILOVER config` is
+  # forced and needs no agreement, so it works meanwhile.
+  #
+  # SECOND REGION: 4 nodes → 4 Sentinels → quorum 3, set on EVERY node.
+  # Sentinel authorises a failover by majority of the whole set whatever
+  # quorum says, so 4-with-quorum-3 tolerates one loss — the same as 3
+  # would. The even count buys availability, not fault tolerance.
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
+
+  # The whole VPC for now: ECS tasks and the peer node both live here.
+  # Narrows to the task subnets once the client set is settled.
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "config" })
+}
+
+module "valkey_config_b" {
+  source = "../../modules/valkey-node"
+
+  fleet = "config"
+  node  = "b"
+
+  # Bootstrap tie-break only: before the master record exists, this node
+  # waits rather than racing valkey-a for the role. Afterwards every boot
+  # derives its role from the record, so replacing either node is safe
+  # regardless of which one is master at the time.
+  role = "replica"
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  # Both nodes must match: they swap roles on failover.
+  instance_type = "t4g.micro"
+
+  # Fail fast so an outer retry loop drives the cadence, rather than the
+  # provider retrying silently for over an hour.
+  create_timeout = "2m"
+
+  # Must carry the SAME quorum as every other node — Sentinels that
+  # disagree about what agreement means do not agree about anything.
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b — the point of the pair
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "config" })
+}
+
+# The master record, created ONCE and then left alone.
+#
+# Terraform has to bootstrap it — Sentinel only writes the record on a
+# FAILOVER, so without this the first replica has no master to resolve and
+# nothing ever converges. But ownership passes to Sentinel the moment it
+# exists: ignore_changes is what stops the next apply from pointing every
+# writer back at a node that was demoted hours ago.
+resource "aws_route53_record" "valkey_config_master" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = module.valkey_config_a.master_hostname
+  type    = "CNAME"
+  # 5s: this record follows a failover, so its TTL is how long a client
+  # keeps dialling the demoted node.
+  ttl     = 5
+  records = [module.valkey_config_a.hostname]
+
+  lifecycle {
+    ignore_changes = [records]
+  }
 }
 
 # --- meandr-api --------------------------------------------------------

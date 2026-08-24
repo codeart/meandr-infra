@@ -13,7 +13,7 @@
 #
 # Internal DNS: one Route 53 private hosted zone per VPC. Future RDS / ElastiCache
 # / EC2 modules add CNAMEs/A records here so connection strings can use friendly,
-# env-tagged hostnames like `pg.staging.meandr.local`.
+# env-tagged hostnames like `pg.staging.meandr.internal`.
 
 locals {
   # Subnet CIDRs derived from the VPC's /16:
@@ -212,7 +212,7 @@ resource "aws_nat_gateway" "main" {
 #
 # Private hosted zone scoped to this VPC. Future modules (RDS, ElastiCache,
 # EC2 Redis) add records here. Connection strings use env-tagged hostnames
-# like `pg.staging.meandr.local` so cross-env config accidents are obvious.
+# like `pg.staging.meandr.internal` so cross-env config accidents are obvious.
 
 resource "aws_route53_zone" "internal" {
   name = var.internal_dns_zone

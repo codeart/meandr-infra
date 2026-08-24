@@ -24,7 +24,7 @@ output "internal_dns_zone_id" {
 }
 
 output "internal_dns_zone_name" {
-  description = "Internal DNS zone name (e.g. `staging.meandr.local`). Use as a suffix when constructing record names."
+  description = "Internal DNS zone name (e.g. `staging.meandr.internal`). Use as a suffix when constructing record names."
   value       = aws_route53_zone.internal.name
 }
 

@@ -26,8 +26,8 @@
 # --- Networking ----------------------------------------------------------
 
 resource "aws_elasticache_subnet_group" "main" {
-  name       = var.name
-  subnet_ids = var.private_subnet_ids
+  name        = var.name
+  subnet_ids  = var.private_subnet_ids
   description = "Subnets for ${var.name}"
 
   tags = merge(var.tags, {

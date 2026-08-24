@@ -19,7 +19,7 @@ output "port" {
 }
 
 output "internal_dns_name" {
-  description = "Internal DNS hostname for the DB (e.g. `pg.staging.meandr.local`). Use this in app config; survives instance replacements."
+  description = "Internal DNS hostname for the DB (e.g. `pg.staging.meandr.internal`). Use this in app config; survives instance replacements."
   value       = aws_route53_record.pg.fqdn
 }
 
