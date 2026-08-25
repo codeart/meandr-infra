@@ -78,8 +78,36 @@ variable "internal_dns_zone_name" {
 # wildcard TLS cert verifies cleanly.
 
 variable "config_reader_endpoint" {
-  description = "Reader (replica) endpoint of `meandr-config-stream`. AWS-internal hostname. Proxy uses this for ALL config-stream traffic: config-record reads + inbound `<env>:in` XREAD. The replica is correct because every operation on this cluster is read-only — see the comment above for the load-bearing reasoning."
+  description = "Reader endpoint for config-stream traffic: config-record reads + inbound `<env>:in` XREAD. Every operation on this plane is read-only — see the comment above for the load-bearing reasoning. On ElastiCache this is the replica endpoint; on the self-hosted fleet it is the master record, which a replica-scoped record can replace once one exists."
   type        = string
+}
+
+variable "event_writer_endpoint" {
+  description = <<-EOT
+    Event-stream writer. EMPTY keeps the in-module ElastiCache cluster,
+    which is still the default; set it to the self-hosted fleet's master
+    record to cut over.
+
+    Exists only for the cutover: once BE can present a client
+    certificate and both planes have moved, the ElastiCache cluster and
+    this variable go together.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "valkey_client_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN holding `{ca_crt, client_crt, client_key}` — the
+    CLIENT half of the self-hosted Valkey PKI.
+
+    Required to reach that fleet at all: the nodes run
+    `tls-auth-clients yes`, so a connection without a certificate is
+    refused rather than downgraded. Empty is correct while a plane still
+    points at ElastiCache, whose public cert needs no client half.
+  EOT
+  type        = string
+  default     = ""
 }
 
 # --- Public DNS ---------------------------------------------------------

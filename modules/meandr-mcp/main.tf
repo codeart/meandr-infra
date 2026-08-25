@@ -97,7 +97,7 @@ locals {
     MEANDR_REDIS_CONFIG_READER_ADDR    = "${var.config_reader_endpoint}:6379"
     MEANDR_REDIS_CONFIG_READER_USE_TLS = "true"
 
-    MEANDR_REDIS_EVENT_WRITER_ADDR    = "${module.event_stream.primary_endpoint_address}:6379"
+    MEANDR_REDIS_EVENT_WRITER_ADDR    = "${local.event_writer_host}:6379"
     MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
 
     # Cred-store wiring. Empty value = "no cred-store" — proxy's
@@ -131,10 +131,29 @@ locals {
       MEANDR_REDIS_CONFIG_READER_PASSWORD = var.redis_auth_secret_arn
       MEANDR_REDIS_EVENT_WRITER_PASSWORD  = var.redis_auth_secret_arn
     } : {},
+    # mTLS material for the self-hosted fleet, given to BOTH planes
+    # whenever it is configured. Safe for a plane still on ElastiCache:
+    # the proxy ADDS this CA to the system pool rather than replacing it,
+    # so a public-PKI endpoint still verifies, and ElastiCache never asks
+    # for a client certificate. That means the two planes can cut over
+    # independently without a per-plane switch.
+    var.valkey_client_secret_arn == "" ? {} : {
+      MEANDR_REDIS_CONFIG_READER_CA_CERT     = "${var.valkey_client_secret_arn}:ca_crt::"
+      MEANDR_REDIS_CONFIG_READER_CLIENT_CERT = "${var.valkey_client_secret_arn}:client_crt::"
+      MEANDR_REDIS_CONFIG_READER_CLIENT_KEY  = "${var.valkey_client_secret_arn}:client_key::"
+
+      MEANDR_REDIS_EVENT_WRITER_CA_CERT     = "${var.valkey_client_secret_arn}:ca_crt::"
+      MEANDR_REDIS_EVENT_WRITER_CLIENT_CERT = "${var.valkey_client_secret_arn}:client_crt::"
+      MEANDR_REDIS_EVENT_WRITER_CLIENT_KEY  = "${var.valkey_client_secret_arn}:client_key::"
+    },
     {
       MEANDR_SESSION_SIGNING_KEY = var.session_signing_key_secret_arn
     },
   )
+
+  # Empty keeps the in-module ElastiCache cluster; set means the
+  # self-hosted fleet.
+  event_writer_host = var.event_writer_endpoint != "" ? var.event_writer_endpoint : module.event_stream.primary_endpoint_address
 }
 
 # --- Event-stream Valkey (per-region, no replication) -----------------

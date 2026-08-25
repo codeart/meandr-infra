@@ -14,6 +14,7 @@ set -euo pipefail
 RECIPE_FILES="${RECIPE_FILES:-}"
 INSTANCE_IDS="${INSTANCE_IDS:-}"
 WAIT_SECONDS="${WAIT_SECONDS:-300}"
+REGISTER_WAIT="${REGISTER_WAIT:-600}"
 LEDGER=/var/lib/meandr/recipes-applied
 
 if [ -z "${RECIPE_FILES// /}" ]; then
@@ -25,11 +26,61 @@ if [ -z "${INSTANCE_IDS// /}" ]; then
   exit 0
 fi
 
+# Wait for SSM to see every target before sending.
+#
+# Terraform considers an instance created the moment EC2 returns, but the
+# agent registers a minute or two later. Since a NEW node is exactly what
+# re-triggers this resource, sending immediately fails every time on the
+# case recipes exist for — `InvalidInstanceId: Instances not in a valid
+# state`.
+wait_for_ssm() {
+  local deadline=$((SECONDS + REGISTER_WAIT)) online missing
+
+  while :; do
+    online="$(aws ssm describe-instance-information \
+      --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+      --query 'InstanceInformationList[?PingStatus==`Online`].InstanceId' \
+      --output text 2>/dev/null | tr '\t' '\n' | sort -u)"
+
+    missing=""
+    for id in $INSTANCE_IDS; do
+      grep -qxF "$id" <<<"$online" || missing="$missing $id"
+    done
+
+    [ -z "${missing// /}" ] && return 0
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "recipes: not registered with SSM after ${REGISTER_WAIT}s:$missing" >&2
+      return 1
+    fi
+    echo "recipes: waiting for SSM —$missing"
+    sleep 15
+  done
+}
+
+wait_for_ssm || exit 1
+
 # The node-side program. Each recipe arrives base64'd so no quoting of
 # recipe content can break the payload.
 payload() {
   cat <<'PROLOGUE'
 set -uo pipefail
+
+# Never run mid-boot. SSM registers about a minute in, while user-data is
+# still compiling Valkey for several more — and a node without its build
+# has no `valkey` user and no /var/log/valkey, so a recipe touching
+# either fails for a reason that has nothing to do with the recipe.
+#
+# Non-zero also covers the case worth catching: user-data that ERRORED.
+# Refusing here reports a broken node instead of layering a confusing
+# second failure on top of it.
+if command -v cloud-init >/dev/null 2>&1; then
+  if ! cloud-init status --wait >/dev/null 2>&1; then
+    echo "boot did not complete cleanly — refusing to apply recipes"
+    exit 1
+  fi
+fi
+
 LEDGER=/var/lib/meandr/recipes-applied
 mkdir -p "$(dirname "$LEDGER")"
 touch "$LEDGER"
@@ -98,11 +149,22 @@ echo "recipes: command $CID"
 
 rc=0
 for id in $INSTANCE_IDS; do
-  # Returns non-zero when the invocation failed, which is a result we
-  # want to report rather than an error that should abort the loop.
-  aws ssm wait command-executed \
-    --profile "$AWS_PROFILE" --region "$AWS_REGION" \
-    --command-id "$CID" --instance-id "$id" >/dev/null 2>&1 || true
+  # Polled rather than `aws ssm wait command-executed`, which gives up
+  # after ~100s. The payload waits out cloud-init, so on a fresh node it
+  # legitimately runs for minutes and the built-in waiter would call a
+  # still-running command failed.
+  deadline=$((SECONDS + WAIT_SECONDS))
+  while :; do
+    state="$(aws ssm get-command-invocation \
+      --profile "$AWS_PROFILE" --region "$AWS_REGION" \
+      --command-id "$CID" --instance-id "$id" \
+      --query Status --output text 2>/dev/null || echo Pending)"
+    case "$state" in
+      Success | Failed | Cancelled | TimedOut | Undeliverable | Terminated) break ;;
+    esac
+    [ "$SECONDS" -ge "$deadline" ] && break
+    sleep 10
+  done
 
   # Queried on its own. Asking for Status alongside the output fields
   # returns them TAB-separated on one line, so any attempt to read the

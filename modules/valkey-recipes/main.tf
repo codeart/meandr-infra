@@ -42,12 +42,13 @@ resource "null_resource" "recipes" {
     command     = "${path.module}/files/apply-recipes.sh"
 
     environment = {
-      RECIPES_DIR  = local.dir
-      RECIPE_FILES = join(" ", local.files)
-      INSTANCE_IDS = join(" ", sort(var.instance_ids))
-      AWS_PROFILE  = var.aws_profile
-      AWS_REGION   = var.aws_region
-      WAIT_SECONDS = tostring(var.timeout_seconds)
+      RECIPES_DIR   = local.dir
+      RECIPE_FILES  = join(" ", local.files)
+      INSTANCE_IDS  = join(" ", sort(var.instance_ids))
+      AWS_PROFILE   = var.aws_profile
+      AWS_REGION    = var.aws_region
+      WAIT_SECONDS  = tostring(var.timeout_seconds)
+      REGISTER_WAIT = tostring(var.register_timeout_seconds)
     }
   }
 }

@@ -33,6 +33,21 @@ variable "aws_region" {
   type        = string
 }
 
+variable "register_timeout_seconds" {
+  description = <<-EOT
+    How long to wait for every target to appear Online in SSM before
+    giving up.
+
+    Terraform calls an instance created when EC2 returns, but the agent
+    registers a minute or two later — and a NEW node is precisely what
+    re-triggers this resource, so without the wait the first run always
+    races. Generous: a node that is also compiling Valkey has other
+    things competing for a small CPU.
+  EOT
+  type        = number
+  default     = 600
+}
+
 variable "timeout_seconds" {
   description = "How long to wait for a node to finish its recipes before giving up on it. Generous: a recipe that installs a package pays for a dnf transaction."
   type        = number

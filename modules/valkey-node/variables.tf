@@ -60,6 +60,27 @@ variable "role" {
   }
 }
 
+variable "master_record_label" {
+  description = <<-EOT
+    Leftmost label of this fleet's master record. Empty derives
+    `<fleet>-master`.
+
+    Set it for a fleet that exists ONCE PER REGION — `events-master-euc1`
+    — because the DNS zone is shared across regions while the fleet is
+    not, so the derived name would collide between regions and silently
+    point one region's nodes at another's master.
+
+    Leave it empty for a fleet with a single master across all regions
+    (`config`), where the whole point is that one name means one node
+    everywhere.
+
+    This does NOT change the Sentinel master name, which stays the fleet
+    and only has to be unique within a Sentinel set.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "promotable" {
   description = <<-EOT
     Whether Sentinel may ever promote this node to master.

@@ -724,7 +724,7 @@ locals {
   # What clients and replicas connect to. Deliberately NOT a Terraform
   # record: it moves on promotion, and Terraform reverting it on the next
   # apply would silently point everything at a demoted node.
-  master_record = "${var.fleet}-master.${local.dns_root}"
+  master_record = "${var.master_record_label != "" ? var.master_record_label : "${var.fleet}-master"}.${local.dns_root}"
 
   # What Sentinel knows the master by, and what an operator types in
   # `SENTINEL FAILOVER <name>`. Derived, not configurable: it must match

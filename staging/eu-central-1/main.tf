@@ -414,7 +414,7 @@ module "valkey_config_a" {
   source = "../../modules/valkey-node"
 
   fleet = "config"
-  node  = "a"
+  node  = "euc1a"
 
   # Bootstrap tie-break only — see the module's variable doc. This node may
   # take the master role when no record resolves, which happens exactly
@@ -473,7 +473,7 @@ module "valkey_config_b" {
   source = "../../modules/valkey-node"
 
   fleet = "config"
-  node  = "b"
+  node  = "euc1b"
 
   # Bootstrap tie-break only: before the master record exists, this node
   # waits rather than racing valkey-a for the role. Afterwards every boot
@@ -554,8 +554,15 @@ module "valkey_events_a" {
   source = "../../modules/valkey-node"
 
   fleet = "events"
-  node  = "a"
+  node  = "euc1a"
   role  = "master"
+
+  # Region-qualified: events is one fleet PER REGION, and the DNS zone is
+  # shared across regions. The derived `events-master` would name a
+  # different node in every region while resolving to whichever one wrote
+  # it last. `config` needs no such label — it has one master globally,
+  # which is the whole point of that fleet.
+  master_record_label = "events-master-euc1"
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
@@ -587,8 +594,10 @@ module "valkey_events_b" {
   source = "../../modules/valkey-node"
 
   fleet = "events"
-  node  = "b"
+  node  = "euc1b"
   role  = "replica"
+
+  master_record_label = "events-master-euc1"
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
@@ -642,7 +651,7 @@ module "valkey_api_a" {
   source = "../../modules/valkey-node"
 
   fleet = "api"
-  node  = "a"
+  node  = "euc1a"
   role  = "master"
 
   maxmemory_policy  = "allkeys-lru"
@@ -675,7 +684,7 @@ module "valkey_api_b" {
   source = "../../modules/valkey-node"
 
   fleet = "api"
-  node  = "b"
+  node  = "euc1b"
   role  = "replica"
 
   maxmemory_policy  = "allkeys-lru"
@@ -740,7 +749,7 @@ module "valkey_config_c" {
   source = "../../modules/valkey-node"
 
   fleet = "config"
-  node  = "c"
+  node  = "euc1c"
 
   # Bootstrap tie-break only, and for an arbiter it can only ever mean
   # "wait" — there is no server here to promote.
@@ -780,8 +789,10 @@ module "valkey_events_c" {
   source = "../../modules/valkey-node"
 
   fleet = "events"
-  node  = "c"
+  node  = "euc1c"
   role  = "replica"
+
+  master_record_label = "events-master-euc1"
 
   sentinel_only   = true
   run_sentinel    = true
@@ -814,7 +825,7 @@ module "valkey_api_c" {
   source = "../../modules/valkey-node"
 
   fleet = "api"
-  node  = "c"
+  node  = "euc1c"
   role  = "replica"
 
   sentinel_only   = true
