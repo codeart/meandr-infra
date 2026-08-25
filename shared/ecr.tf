@@ -49,10 +49,10 @@ resource "aws_ecr_lifecycle_policy" "service" {
         rulePriority = 2
         description  = "Keep last 50 commit-SHA-tagged images (dev cycles)"
         selection = {
-          tagStatus   = "tagged"
+          tagStatus      = "tagged"
           tagPatternList = ["sha-*"]
-          countType   = "imageCountMoreThan"
-          countNumber = 50
+          countType      = "imageCountMoreThan"
+          countNumber    = 50
         }
         action = { type = "expire" }
       },
@@ -94,7 +94,7 @@ data "aws_iam_policy_document" "ecr_cross_account_pull" {
     effect = "Allow"
 
     principals {
-      type = "AWS"
+      type        = "AWS"
       identifiers = [for acct in var.workload_account_ids : "arn:aws:iam::${acct}:root"]
     }
 

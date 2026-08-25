@@ -73,9 +73,9 @@ resource "aws_iam_role" "gh_actions_ecr_push" {
 
 data "aws_iam_policy_document" "ecr_push" {
   statement {
-    sid     = "AuthorizeToECR"
-    effect  = "Allow"
-    actions = ["ecr:GetAuthorizationToken"]
+    sid       = "AuthorizeToECR"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
     resources = ["*"]
   }
   statement {

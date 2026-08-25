@@ -41,7 +41,7 @@ output "region" {
 # Convenience: prints the exact backend block to paste into other modules.
 output "backend_config_example" {
   description = "Copy-paste this into other modules' terraform { backend \"s3\" { ... } } block, substituting the correct key path."
-  value = <<-EOT
+  value       = <<-EOT
     terraform {
       backend "s3" {
         bucket         = "${aws_s3_bucket.tfstate.id}"
