@@ -150,6 +150,24 @@ resource "aws_iam_role_policy" "metrics" {
   })
 }
 
+# Write-only, and only under this fleet's prefix: a node has no reason to
+# read a backup back, and less to touch another fleet's.
+resource "aws_iam_role_policy" "backup" {
+  count = var.backup_bucket != "" ? 1 : 0
+
+  name = "valkey-backup"
+  role = aws_iam_role.main.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "s3:PutObject"
+      Resource = "arn:aws:s3:::${var.backup_bucket}/${var.fleet}/*"
+    }]
+  })
+}
+
 # Sentinel's reconfig script repoints the master record on promotion, and
 # without this it fails — silently, into a log nobody reads, on the one
 # day it matters. Every edge replica would stay pointed at a node that is

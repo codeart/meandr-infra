@@ -116,8 +116,8 @@ locals {
     # last year, and on whatever a third party decides to serve. The source
     # rides in the repo, is uploaded by the same apply that made this node,
     # and arrives over the VPC's S3 gateway endpoint — no NAT, no internet.
-    aws s3 cp '${local.source_uri}' /tmp/valkey-src.tar.gz
-    echo '${var.valkey_source_sha256}  /tmp/valkey-src.tar.gz' | sha256sum -c -
+    aws s3 cp '${local.source_uri}' /var/tmp/valkey-src.tar.gz
+    echo '${var.valkey_source_sha256}  /var/tmp/valkey-src.tar.gz' | sha256sum -c -
 
     # 2 GiB of swap, permanently — it has two jobs.
     #
@@ -205,9 +205,13 @@ locals {
     systemctl daemon-reload
     systemctl enable --now disable-thp
 
-    mkdir -p /tmp/valkey-src
-    tar -xzf /tmp/valkey-src.tar.gz -C /tmp/valkey-src --strip-components=1
-    cd /tmp/valkey-src
+    # /var/tmp, not /tmp: /tmp is tmpfs, so it is RAM sized by instance
+    # type — 207 MiB on a nano — and LTO exhausts it at link time.
+    # TMPDIR moves cc1 and lto1 scratch files off it too.
+    export TMPDIR=/var/tmp
+    mkdir -p /var/tmp/valkey-src
+    tar -xzf /var/tmp/valkey-src.tar.gz -C /var/tmp/valkey-src --strip-components=1
+    cd /var/tmp/valkey-src
 
     # BUILD_TLS because the fleet has no plaintext listener at all.
     # USE_SYSTEMD so the server answers READY=1 only once it has finished
@@ -224,7 +228,7 @@ locals {
     make install PREFIX=/usr/local
 
     cd /
-    rm -rf /tmp/valkey-src /tmp/valkey-src.tar.gz
+    rm -rf /var/tmp/valkey-src /var/tmp/valkey-src.tar.gz
 
     # Supplied by the package until we stopped using it.
     getent group valkey >/dev/null || groupadd --system valkey
@@ -264,10 +268,10 @@ locals {
     # maxmemory from the instance's ACTUAL memory rather than a lookup
     # table keyed on instance type — the table goes stale the moment
     # somebody resizes, and the failure is an OOM kill rather than an
-    # error. 70% leaves room for the OS, replication buffers, and the
+    # error. ${var.maxmemory_percent}% leaves room for the OS, replication buffers, and the
     # copy-on-write spike a full resync causes.
     MEM_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
-    MAXMEM_MB="$(( MEM_KB * 70 / 100 / 1024 ))"
+    MAXMEM_MB="$(( MEM_KB * ${var.maxmemory_percent} / 100 / 1024 ))"
 
     # I/O threading, only where it earns its keep. Valkey executes commands
     # on ONE thread whatever this says — io-threads parallelises socket
@@ -392,12 +396,8 @@ locals {
     $IO_THREADS
 
     maxmemory $${MAXMEM_MB}mb
-    # NOEVICTION is a contract, not a preference: the eventbus refuses to
-    # start against anything else (internal/eventbus/bus.go), because the
-    # lossless stream cannot uphold durability on a store that silently
-    # drops entries under pressure. A full instance must fail writes
-    # loudly instead.
-    maxmemory-policy noeviction
+    ${local.maxmemory_note}
+    maxmemory-policy ${var.maxmemory_policy}
 
     # Decides whether a WAN blip costs a partial resync or a full one. A
     # full cross-region resync ships the whole dataset again.
@@ -415,9 +415,11 @@ locals {
     ${local.systemd_units}
 
     systemctl daemon-reload
-    systemctl enable --now valkey
+    ${var.sentinel_only ? "# arbiter: Sentinel only, no valkey-server" : "systemctl enable --now valkey"}
 
-    ${local.monitoring_setup}
+    ${var.sentinel_only ? local.sentinel_monitoring_setup : local.monitoring_setup}
+
+    ${var.backup_bucket != "" ? local.backup_setup : "# backups not enabled on this node"}
 
     ${var.run_sentinel ? local.sentinel_setup : "# no Sentinel on this node"}
   BASH
@@ -551,6 +553,46 @@ locals {
     systemctl enable --now valkey-metrics.timer
   BASH
 
+  # The arbiter's half of the above: OS metrics, no INFO script.
+  #
+  # It runs no valkey-server, so the Valkey-specific numbers have nothing
+  # to read — but memory, swap and disk apply here exactly as they do
+  # anywhere, and this is the node that can least afford to be unwatched:
+  # it contributes nothing until a failover, so a dead one looks identical
+  # to a healthy fleet until the moment it isn't. procstat follows
+  # valkey-sentinel, the only process that matters on this box.
+  #
+  # Duplicated rather than factored: the data-node config above must
+  # render byte-for-byte as it does today or every node is replaced to
+  # share a string.
+  sentinel_monitoring_setup = <<-BASH
+    dnf install -y amazon-cloudwatch-agent
+
+    cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWCONF'
+    {
+      "agent": { "metrics_collection_interval": 60 },
+      "metrics": {
+        "namespace": "meandr/valkey",
+        "append_dimensions": { "InstanceId": "$${aws:InstanceId}" },
+        "metrics_collected": {
+          "mem":  { "measurement": ["mem_used_percent", "mem_available"] },
+          "swap": { "measurement": ["swap_used_percent", "swap_used"] },
+          "cpu":  { "measurement": ["cpu_usage_active", "cpu_usage_iowait"], "totalcpu": true },
+          "disk": { "measurement": ["used_percent"], "resources": ["/"] },
+          "net":  { "measurement": ["bytes_sent", "bytes_recv"] },
+          "procstat": [
+            { "exe": "valkey-sentinel", "measurement": ["cpu_usage", "memory_rss"] }
+          ]
+        }
+      }
+    }
+    CWCONF
+
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+      -a fetch-config -m ec2 -s \
+      -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+  BASH
+
   # A master that cannot see a replica stops accepting writes.
   #
   # Without this, a master partitioned from BOTH its peer AZ and the
@@ -565,6 +607,14 @@ locals {
   # and this costs nothing. The window where it does cost something — two
   # nodes, mid-maintenance — is a staging transient, and a knob defaulted
   # off "until later" is a knob nobody remembers to turn on.
+  maxmemory_note = var.maxmemory_policy == "noeviction" ? join("\n", [
+    "# NOEVICTION is a contract, not a preference: the eventbus refuses to",
+    "# start against anything else (internal/eventbus/bus.go), because the",
+    "# lossless stream cannot uphold durability on a store that silently",
+    "# drops entries under pressure. A full instance must fail writes",
+    "# loudly instead.",
+  ]) : "# Cache: evicting the coldest key is the intended behaviour here."
+
   split_brain_guard = <<-CONF
     min-replicas-to-write 1
     min-replicas-max-lag 10
@@ -584,6 +634,37 @@ locals {
   # master is down and then find nothing they are allowed to promote. The
   # failover attempt dies for want of a candidate rather than splitting the
   # fleet, which is the outcome we want from that partition.
+  backup_setup = <<-BASH
+    base64 -d >/usr/local/bin/valkey-backup.sh <<'B64'
+    ${base64encode(file("${path.module}/files/valkey-backup.sh"))}
+    B64
+    chmod 0755 /usr/local/bin/valkey-backup.sh
+
+    cat >/etc/systemd/system/valkey-backup.service <<UNIT
+    [Service]
+    Type=oneshot
+    Environment=AUTH_SECRET=${var.auth_secret_arn}
+    Environment=BACKUP_BUCKET=${var.backup_bucket}
+    Environment=FLEET=${var.fleet}
+    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.name}
+    ExecStart=/usr/local/bin/valkey-backup.sh
+    UNIT
+
+    cat >/etc/systemd/system/valkey-backup.timer <<UNIT
+    [Timer]
+    OnCalendar=${var.backup_schedule}
+    # Both nodes hold the timer because roles swap; the script exits early
+    # on the master. The spread keeps them off the same second anyway.
+    RandomizedDelaySec=300
+    Persistent=true
+    [Install]
+    WantedBy=timers.target
+    UNIT
+
+    systemctl daemon-reload
+    systemctl enable --now valkey-backup.timer
+  BASH
+
   sentinel_setup = <<-BASH
     cat >/etc/valkey/sentinel.conf <<CONF
     port 0

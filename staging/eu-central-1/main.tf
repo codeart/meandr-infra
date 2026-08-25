@@ -39,6 +39,10 @@ locals {
   # A version with no vendored tarball fails at plan.
   valkey_source_path = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
 
+  # A literal, not the bucket's id: the node module gates its backup IAM on
+  # a count, and count must be knowable at plan time.
+  valkey_backup_bucket = "meandr-valkey-backups-${local.env}-${local.region}"
+
   # Is this the env's PRIMARY region? The archive is written by BE from
   # Postgres, which is central, so there is ONE archive per env and it
   # lives here. Secondary regions are mcp-only: they get a payloads
@@ -63,13 +67,27 @@ locals {
   }
 }
 
+# Applications run in a and b ONLY. Zone c exists for the Sentinel arbiter,
+# so that losing a zone never costs two of three votes — putting a third
+# Sentinel in a zone that already holds one would defeat the purpose.
+#
+# Everything that takes a whole subnet list gets these, not the module's
+# outputs: an ALB or ECS service handed three subnets would spread into c
+# and quietly make it a third app zone.
+locals {
+  app_public_subnet_ids  = slice(module.vpc.public_subnet_ids, 0, 2)
+  app_private_subnet_ids = slice(module.vpc.private_subnet_ids, 0, 2)
+}
+
 # --- VPC ---------------------------------------------------------------
 
 module "vpc" {
   source = "../../modules/vpc"
 
-  cidr_block        = "10.10.0.0/16"
-  azs               = ["${local.region}a", "${local.region}b"]
+  cidr_block = "10.10.0.0/16"
+  # APPEND only. Subnet ids are output in this order and callers index them
+  # positionally, so inserting an AZ would move existing nodes.
+  azs               = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat        = true
   internal_dns_zone = "${local.env}.meandr.internal"
 
@@ -233,7 +251,7 @@ module "config_stream" {
 
   vpc_id             = module.vpc.vpc_id
   vpc_cidr_block     = module.vpc.vpc_cidr_block
-  private_subnet_ids = module.vpc.private_subnet_ids
+  private_subnet_ids = local.app_private_subnet_ids
 
   tags = merge(local.tags, { "meandr:plane" = "config" })
 }
@@ -306,26 +324,73 @@ resource "aws_s3_object" "valkey_source" {
   tags = local.tags
 }
 
-# Capacity reservations for both Valkey fleets — config and events, one
-# master and one replica per AZ.
+# Capacity for every Valkey node in the region: three per AZ — the config,
+# events and api members in a and b, the three arbiters in c. Nine slots.
+#
+# One resource rather than one per fleet because a reservation matches on
+# type and zone, not on purpose. Every node is a t4g.nano, so a single pool
+# per AZ covers whichever of them lands there.
 #
 # Billed at the on-demand rate whether occupied or not, so for nodes that
 # run continuously this is not extra cost. It guarantees the slot across
 # the instance replacement that every user-data change triggers.
 #
-# "open" match: any t4g.micro launched in the AZ uses it, no per-instance
-# wiring.
-resource "aws_ec2_capacity_reservation" "valkey" {
-  for_each = toset(["${local.region}a", "${local.region}b"])
+# "open" match: any t4g.nano launched in the AZ uses it, with no
+# per-instance wiring. Nothing binds an instance to a reservation, so the
+# only thing that makes one count is existing BEFORE the launch — apply it
+# first and on its own:
+#
+#   terraform apply -target=aws_ec2_capacity_reservation.valkey_nano
+#
+# NOT with depends_on on the valkey modules. A module-level depends_on
+# defers every data source inside it, which makes local.user_data unknown
+# at plan time; user_data_replace_on_change can only compare known values,
+# so it silently stops firing and a user-data change plans as an in-place
+# update. User-data runs once per instance, so that update would never
+# take effect — the node keeps its old config and nothing says so.
+#
+# eu-central-1c ran dry of t4g.nano for hours on 2026-08-25.
+resource "aws_ec2_capacity_reservation" "valkey_nano" {
+  for_each = toset(["${local.region}a", "${local.region}b", "${local.region}c"])
 
-  instance_type           = "t4g.micro"
+  instance_type           = "t4g.nano"
   instance_platform       = "Linux/UNIX"
   availability_zone       = each.value
-  instance_count          = 2
+  instance_count          = 3
   end_date_type           = "unlimited"
   instance_match_criteria = "open"
 
-  tags = merge(local.tags, { Name = "valkey-${each.value}" })
+  tags = merge(local.tags, { Name = "valkey-nano-${each.value}" })
+}
+
+
+# RDB backups, written by whichever node is currently the replica.
+#
+# Lifecycle rather than versioning: keys are timestamped and never
+# overwritten, so there is nothing to version — only to expire.
+resource "aws_s3_bucket" "valkey_backups" {
+  bucket = local.valkey_backup_bucket
+  tags   = local.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "valkey_backups" {
+  bucket = aws_s3_bucket.valkey_backups.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "valkey_backups" {
+  bucket = aws_s3_bucket.valkey_backups.id
+
+  rule {
+    id     = "expire"
+    status = "Enabled"
+    filter {}
+    expiration { days = 30 }
+  }
 }
 
 module "valkey_tls" {
@@ -360,7 +425,10 @@ module "valkey_config_a" {
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
   # Both nodes must match: they swap roles on failover.
-  instance_type = "t4g.micro"
+  instance_type     = "t4g.nano"
+  maxmemory_percent = 50 # nano: 512 MiB total, the OS takes ~250 of them
+
+  backup_bucket = local.valkey_backup_bucket
 
   # Fail fast so an outer retry loop drives the cadence, rather than the
   # provider retrying silently for over an hour.
@@ -369,16 +437,15 @@ module "valkey_config_a" {
   # Sentinel runs on every node, here and in every later region — confining
   # it to promotable nodes would cap the fleet at two voters forever.
   #
-  # Quorum 2 of 2 today means NO automatic failover: an isolated master
-  # leaves one voter, which can never agree with itself. Deliberate —
-  # quorum 1 across two partitioned Sentinels lets both promote, which is
-  # worse than promoting neither. Manual `SENTINEL FAILOVER config` is
-  # forced and needs no agreement, so it works meanwhile.
+  # Quorum 2 of 3, counting the AZ-c arbiter: automatic failover now
+  # survives the loss of any one zone. Sentinel authorises by MAJORITY OF
+  # THE WHOLE SET whatever quorum says, which is why a third voter — not a
+  # lower quorum — is what fixed it. Quorum 1 across a partition would let
+  # both sides promote, which is worse than promoting neither.
   #
-  # SECOND REGION: 4 nodes → 4 Sentinels → quorum 3, set on EVERY node.
-  # Sentinel authorises a failover by majority of the whole set whatever
-  # quorum says, so 4-with-quorum-3 tolerates one loss — the same as 3
-  # would. The even count buys availability, not fault tolerance.
+  # SECOND REGION: 4 Sentinels → quorum 3, set on EVERY node. Still one
+  # tolerated loss, same as 3 — the even count buys availability, not fault
+  # tolerance.
   run_sentinel    = true
   sentinel_quorum = 2
 
@@ -414,7 +481,10 @@ module "valkey_config_b" {
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
   # Both nodes must match: they swap roles on failover.
-  instance_type = "t4g.micro"
+  instance_type     = "t4g.nano"
+  maxmemory_percent = 50 # nano: 512 MiB total, the OS takes ~250 of them
+
+  backup_bucket = local.valkey_backup_bucket
 
   # Fail fast so an outer retry loop drives the cadence, rather than the
   # provider retrying silently for over an hour.
@@ -460,6 +530,319 @@ resource "aws_route53_record" "valkey_config_master" {
   }
 }
 
+# --- Self-hosted Valkey (events tier) -----------------------------------
+#
+# The proxy→BE bus: proxy writes events, BE reads them. Per region and
+# NEVER replicated across regions — an event belongs to the region that
+# produced it, and shipping the stream transatlantically would put write
+# volume on a link the config tier needs for reads.
+#
+# Its own fleet rather than a database on the config nodes: the profiles
+# are opposites. Config is read-heavy with a small projection; events are
+# write-heavy and carry the rate-limit hashes whose per-field TTLs are why
+# the whole fleet runs 9.x.
+#
+# Shares the CA, the vendored source and the capacity reservations with
+# the config tier. Everything else — subdomain, master record, Sentinel
+# group — is fleet-scoped and therefore separate by construction.
+
+module "valkey_events_a" {
+  source = "../../modules/valkey-node"
+
+  fleet = "events"
+  node  = "a"
+  role  = "master"
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  maxmemory_percent    = 50 # nano: 512 MiB total, the OS takes ~250 of them
+  create_timeout       = "2m"
+
+  backup_bucket = local.valkey_backup_bucket
+
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "events" })
+}
+
+module "valkey_events_b" {
+  source = "../../modules/valkey-node"
+
+  fleet = "events"
+  node  = "b"
+  role  = "replica"
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  maxmemory_percent    = 50 # nano: 512 MiB total, the OS takes ~250 of them
+  create_timeout       = "2m"
+
+  backup_bucket = local.valkey_backup_bucket
+
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "events" })
+}
+
+resource "aws_route53_record" "valkey_events_master" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = module.valkey_events_a.master_hostname
+  type    = "CNAME"
+  ttl     = 5
+  records = [module.valkey_events_a.hostname]
+
+  lifecycle {
+    ignore_changes = [records]
+  }
+}
+
+# --- Self-hosted Valkey (api tier) --------------------------------------
+#
+# Rails-owned: ActionCable pub/sub, and cache later. allkeys-lru because
+# dropping the coldest key IS the behaviour here — the opposite of the
+# other two fleets, where the eventbus refuses to start against anything
+# but noeviction.
+#
+# Gains a replica and failover, which the ElastiCache instance it replaces
+# does not have (num_cache_clusters = 1, automatic_failover disabled).
+
+module "valkey_api_a" {
+  source = "../../modules/valkey-node"
+
+  fleet = "api"
+  node  = "a"
+  role  = "master"
+
+  maxmemory_policy  = "allkeys-lru"
+  maxmemory_percent = 50
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  create_timeout       = "2m"
+
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "api" })
+}
+
+module "valkey_api_b" {
+  source = "../../modules/valkey-node"
+
+  fleet = "api"
+  node  = "b"
+  role  = "replica"
+
+  maxmemory_policy  = "allkeys-lru"
+  maxmemory_percent = 50
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  create_timeout       = "2m"
+
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "api" })
+}
+
+resource "aws_route53_record" "valkey_api_master" {
+  zone_id = module.vpc.internal_dns_zone_id
+  name    = module.valkey_api_a.master_hostname
+  type    = "CNAME"
+  ttl     = 5
+  records = [module.valkey_api_a.hostname]
+
+  lifecycle {
+    ignore_changes = [records]
+  }
+}
+
+# --- Sentinel arbiters (AZ-c) -------------------------------------------
+#
+# One per fleet, and the reason is arithmetic: Sentinel authorises a
+# failover by MAJORITY OF THE WHOLE SET, not by the quorum setting. Two
+# Sentinels have a majority of two, so losing either one left the fleet
+# with no automatic failover at all — the pair could detect a dead master
+# and still be unable to replace it.
+#
+# A third vote in a third zone makes the majority reachable after any
+# single-AZ loss. Quorum stays 2 precisely because it was already right;
+# what changes is how many Sentinels survive to reach it.
+#
+# `sentinel_only` means no valkey-server: these hold no data, take no
+# backups, run no metrics timer, and are never a promotion target. A nano
+# is sufficient for a fleet of any size, which is why the third zone costs
+# three small instances rather than three more replicas.
+#
+# AZ-c deliberately holds nothing else. Apps stay in a and b; this zone
+# exists so a zone failure cannot take two of three votes with it.
+
+module "valkey_config_c" {
+  source = "../../modules/valkey-node"
+
+  fleet = "config"
+  node  = "c"
+
+  # Bootstrap tie-break only, and for an arbiter it can only ever mean
+  # "wait" — there is no server here to promote.
+  role = "replica"
+
+  sentinel_only = true
+  run_sentinel  = true
+  # Unchanged from the pair: three Sentinels, majority still 2.
+  sentinel_quorum = 2
+
+  # Inert while sentinel_only holds — carried so clearing that flag yields
+  # a node sized like its fleet, not one on the 70% default a nano cannot
+  # afford.
+  maxmemory_percent = 50
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  create_timeout       = "2m"
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c — the third zone IS the point
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "config" })
+}
+
+module "valkey_events_c" {
+  source = "../../modules/valkey-node"
+
+  fleet = "events"
+  node  = "c"
+  role  = "replica"
+
+  sentinel_only   = true
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  # Inert while sentinel_only holds — see valkey_config_c.
+  maxmemory_percent = 50
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  create_timeout       = "2m"
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "events" })
+}
+
+module "valkey_api_c" {
+  source = "../../modules/valkey-node"
+
+  fleet = "api"
+  node  = "c"
+  role  = "replica"
+
+  sentinel_only   = true
+  run_sentinel    = true
+  sentinel_quorum = 2
+
+  # Inert while sentinel_only holds — carried so that clearing that flag
+  # yields a node matching its fleet rather than one silently on the
+  # noeviction default.
+  maxmemory_policy  = "allkeys-lru"
+  maxmemory_percent = 50
+
+  valkey_version       = local.valkey_version
+  valkey_source_bucket = aws_s3_bucket.artifacts.id
+  valkey_source_sha256 = filesha256(local.valkey_source_path)
+  instance_type        = "t4g.nano"
+  create_timeout       = "2m"
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.valkey_tls.node_secret_arn
+
+  vpc_id    = module.vpc.vpc_id
+  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
+
+  client_cidrs = [module.vpc.vpc_cidr_block]
+
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = merge(local.tags, { "meandr:plane" = "api" })
+}
+
 # --- meandr-api --------------------------------------------------------
 
 module "api" {
@@ -487,8 +870,8 @@ module "api" {
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
-  public_subnet_ids      = module.vpc.public_subnet_ids
-  private_subnet_ids     = module.vpc.private_subnet_ids
+  public_subnet_ids      = local.app_public_subnet_ids
+  private_subnet_ids     = local.app_private_subnet_ids
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
@@ -589,8 +972,8 @@ module "mcp" {
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
-  public_subnet_ids      = module.vpc.public_subnet_ids
-  private_subnet_ids     = module.vpc.private_subnet_ids
+  public_subnet_ids      = local.app_public_subnet_ids
+  private_subnet_ids     = local.app_private_subnet_ids
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 

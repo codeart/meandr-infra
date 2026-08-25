@@ -176,6 +176,70 @@ variable "instance_type" {
   default     = "t4g.micro"
 }
 
+variable "sentinel_only" {
+  description = <<-EOT
+    Run Sentinel and no Valkey — an arbiter.
+
+    Its whole job is to be the third vote. Two Sentinels can never agree
+    when one is gone, so a two-node fleet has no automatic failover at all;
+    a third makes quorum reachable. Put it in a THIRD zone, or losing one
+    zone still costs two of three votes.
+
+    Cheap because it holds no data: a nano arbiter serves a fleet of any
+    size. It still compiles Valkey — valkey-sentinel comes from the same
+    build — and still needs the CA, AUTH and the master record.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "backup_bucket" {
+  description = <<-EOT
+    Bucket for RDB backups. Empty disables them entirely — no script, no
+    timer, no IAM.
+
+    Leave empty for edge regions: their nodes are read-only copies of a
+    fleet the API region already backs up, so a second copy buys nothing
+    and ships the dataset across a WAN to do it.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "backup_schedule" {
+  description = "systemd OnCalendar expression for the backup timer. Ignored unless backup_bucket is set."
+  type        = string
+  default     = "daily"
+}
+
+variable "maxmemory_percent" {
+  description = <<-EOT
+    Share of the instance's real memory given to Valkey.
+
+    70 suits a gibibyte and up. Drop it on very small nodes — a t4g.nano
+    has 512 MiB and the OS takes 200-250 of them, so 70% would price the
+    dataset above what is actually free and turn a full resync into an
+    OOM kill.
+  EOT
+  type        = number
+  default     = 70
+}
+
+variable "maxmemory_policy" {
+  description = <<-EOT
+    What happens when the instance reaches maxmemory.
+
+    `noeviction` for any fleet carrying a lossless stream — the eventbus
+    refuses to start against anything else, because a store that silently
+    drops entries under pressure cannot uphold durability. A full instance
+    must fail writes loudly instead.
+
+    `allkeys-lru` for a cache, where dropping the coldest key is the point.
+  EOT
+  type        = string
+  default     = "noeviction"
+}
+
 variable "create_timeout" {
   description = "How long to wait for the instance to launch. Short values fail fast on InsufficientInstanceCapacity instead of letting the provider retry silently for over an hour."
   type        = string
