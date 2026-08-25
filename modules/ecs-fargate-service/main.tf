@@ -46,12 +46,48 @@ locals {
   rds_cert_dir  = module.rds_ca.dir
   rds_cert_file = module.rds_ca.filename
 
-  # Writes the bundle, then exits. Reuses the app image so the task pulls
-  # nothing extra, and Fargate bills the task rather than the container,
-  # so this costs neither a pull nor a cent.
+  # The self-hosted Valkey PKI, injected the same way but sourced
+  # differently: these are PRIVATE, so they arrive through ECS `secrets`
+  # rather than `environment`. A client key in `environment` sits in
+  # plaintext in every describe-task-definition, forever.
+  #
+  # Empty ARN skips the whole thing — a task whose planes are still on
+  # ElastiCache needs no client half.
+  #
+  # The init container exists to write files. A task that needs no files
+  # should not have one — and CANNOT, if its image is distroless: there
+  # is no /bin/sh to run, the container fails to start, and because the
+  # app depends on it the whole task never starts.
+  init_enabled = var.inject_rds_ca
+
+  valkey_certs   = var.inject_rds_ca && var.valkey_client_secret_arn != ""
+  valkey_dir     = "/var/run/valkey"
+  valkey_ca_file = "${local.valkey_dir}/ca.pem"
+  valkey_crt     = "${local.valkey_dir}/client.crt"
+  valkey_key     = "${local.valkey_dir}/client.key"
+
+  # 0444 including the key. The volume is task-scoped and both containers
+  # are ours, so "world" is this task; the alternative is guessing each
+  # image's uid to chown to, which breaks the moment an image changes.
+  cert_init_cmds = concat(
+    [
+      "printf '%s' \"$RDS_CA_BUNDLE\" > ${local.rds_cert_file}",
+      "chmod 0444 ${local.rds_cert_file}",
+    ],
+    local.valkey_certs ? [
+      "printf '%s' \"$VALKEY_CA_CRT\" > ${local.valkey_ca_file}",
+      "printf '%s' \"$VALKEY_CLIENT_CRT\" > ${local.valkey_crt}",
+      "printf '%s' \"$VALKEY_CLIENT_KEY\" > ${local.valkey_key}",
+      "chmod 0444 ${local.valkey_ca_file} ${local.valkey_crt} ${local.valkey_key}",
+    ] : [],
+  )
+
+  # Writes the material, then exits. Reuses the app image so the task
+  # pulls nothing extra, and Fargate bills the task rather than the
+  # container, so this costs neither a pull nor a cent.
   cert_init_def = {
     name      = "rds-ca"
-    image     = var.image
+    image     = var.init_image != "" ? var.init_image : var.image
     essential = false
 
     # Root, overriding the image's USER. The volume's mount point is
@@ -61,17 +97,23 @@ locals {
     # user and mounts the result read-only.
     user = "0"
 
-    # 0444 so whichever uid the app image runs as can read it.
     entryPoint = ["/bin/sh", "-c"]
-    command    = ["printf '%s' \"$RDS_CA_BUNDLE\" > ${local.rds_cert_file} && chmod 0444 ${local.rds_cert_file}"]
+    command    = [join(" && ", local.cert_init_cmds)]
 
     environment = [
       { name = "RDS_CA_BUNDLE", value = module.rds_ca.pem }
     ]
 
-    mountPoints = [
-      { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = false }
-    ]
+    secrets = local.valkey_certs ? [
+      { name = "VALKEY_CA_CRT", valueFrom = "${var.valkey_client_secret_arn}:ca_crt::" },
+      { name = "VALKEY_CLIENT_CRT", valueFrom = "${var.valkey_client_secret_arn}:client_crt::" },
+      { name = "VALKEY_CLIENT_KEY", valueFrom = "${var.valkey_client_secret_arn}:client_key::" },
+    ] : []
+
+    mountPoints = concat(
+      [{ sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = false }],
+      local.valkey_certs ? [{ sourceVolume = "valkey-ca", containerPath = local.valkey_dir, readOnly = false }] : [],
+    )
 
     logConfiguration = {
       logDriver = "awslogs"
@@ -92,17 +134,18 @@ locals {
       stopTimeout = var.stop_timeout
 
       # Read-only: the app consumes the trust store, it does not curate it.
-      mountPoints = [
-        { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = true }
-      ]
+      mountPoints = local.init_enabled ? concat(
+        [{ sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = true }],
+        local.valkey_certs ? [{ sourceVolume = "valkey-ca", containerPath = local.valkey_dir, readOnly = true }] : [],
+      ) : []
 
       # SUCCESS, not COMPLETE — COMPLETE only means the init container
       # exited, whatever its status, so a failed write would still start
       # the app and surface later as a certificate error that reads like a
       # database outage. Fail the task where the cause is visible.
-      dependsOn = [
+      dependsOn = local.init_enabled ? [
         { containerName = "rds-ca", condition = "SUCCESS" }
-      ]
+      ] : null
 
       portMappings = concat(
         var.target_group_arn != null ? [
@@ -119,12 +162,13 @@ locals {
         ],
       )
 
-      # PGSSLROOTCERT is added for EVERY task, not opted into. libpq reads
-      # it with no application wiring, so a service that connects to
-      # Postgres verifies the certificate by default rather than because
-      # someone remembered to. A caller may still override it.
+      # PGSSLROOTCERT is added for every task that HAS the bundle, not
+      # opted into. libpq reads it with no application wiring, so a
+      # service that connects to Postgres verifies the certificate by
+      # default rather than because someone remembered to. A caller may
+      # still override it.
       environment = [
-        for k, v in merge({ PGSSLROOTCERT = local.rds_cert_file }, var.environment) :
+        for k, v in merge(local.init_enabled ? { PGSSLROOTCERT = local.rds_cert_file } : {}, var.environment) :
         { name = k, value = v }
       ]
 
@@ -172,11 +216,26 @@ resource "aws_ecs_task_definition" "main" {
   # writes the trust store and the app that reads it. Ephemeral by
   # design: it is rebuilt from the task definition on every start, so
   # there is no state to drift and nothing to rotate.
-  volume {
-    name = "rds-ca"
+  dynamic "volume" {
+    for_each = local.init_enabled ? [1] : []
+    content {
+      name = "rds-ca"
+    }
   }
 
-  container_definitions = jsonencode([local.container_def, local.cert_init_def])
+  dynamic "volume" {
+    for_each = local.valkey_certs ? [1] : []
+    content {
+      name = "valkey-ca"
+    }
+  }
+
+  # concat, not a conditional: Terraform requires both branches of a
+  # ternary to share a type, and a 2-tuple never matches a 1-tuple.
+  container_definitions = jsonencode(concat(
+    [local.container_def],
+    local.init_enabled ? [local.cert_init_def] : [],
+  ))
 
   tags = merge(var.tags, {
     Name = var.name

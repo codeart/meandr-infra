@@ -191,3 +191,52 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "inject_rds_ca" {
+  description = <<-EOT
+    Run the init container that writes the RDS trust store (and, when
+    configured, the Valkey client material) into the task.
+
+    FALSE for a service that never opens a Postgres connection — it buys
+    nothing and costs a serialized container start on every task. It is
+    also REQUIRED false for a distroless image: the init container needs
+    /bin/sh, and without it the task cannot start at all.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "init_image" {
+  description = <<-EOT
+    Image for the cert-writing init container. Empty reuses the app
+    image, which costs no extra pull.
+
+    Set it when the app image has NO SHELL. A distroless runtime fails
+    with `exec: "/bin/sh": no such file or directory` and, because the
+    app depends on the init container succeeding, the whole task never
+    starts — a deployment that retries forever while the previous
+    revision keeps serving.
+
+    Any image with `/bin/sh` and `chmod` works. Prefer one on public ECR
+    over Docker Hub, which rate-limits anonymous pulls.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "valkey_client_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN holding `{ca_crt, client_crt, client_key}` — the
+    CLIENT half of the self-hosted Valkey PKI, written into every task at
+    /var/run/valkey/.
+
+    Empty skips it entirely, which is correct while a task's Redis planes
+    still point at ElastiCache: that endpoint is on public PKI and never
+    asks for a client certificate.
+
+    Arrives via ECS `secrets`, never `environment` — a private key in
+    `environment` is plaintext in every describe-task-definition.
+  EOT
+  type        = string
+  default     = ""
+}

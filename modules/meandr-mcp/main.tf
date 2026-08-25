@@ -100,6 +100,29 @@ locals {
     MEANDR_REDIS_EVENT_WRITER_ADDR    = "${local.event_writer_host}:6379"
     MEANDR_REDIS_EVENT_WRITER_USE_TLS = "true"
 
+    # Sentinel makes the ADDRs above a bootstrap fallback rather than the
+    # source of truth: the client asks who the master is and follows a
+    # failover instead of waiting out a DNS TTL.
+    #
+    # LOCAL sentinels only. Sentinel answers with a node HOSTNAME, so a
+    # cross-region sentinel would name something this VPC cannot resolve —
+    # the proxy only ever needs its own region on both planes.
+    MEANDR_REDIS_CONFIG_READER_SENTINEL_ADDRS = join(",", var.config_sentinel_addrs)
+    MEANDR_REDIS_CONFIG_READER_MASTER_NAME    = var.config_sentinel_master
+    MEANDR_REDIS_EVENT_WRITER_SENTINEL_ADDRS  = join(",", var.event_sentinel_addrs)
+    MEANDR_REDIS_EVENT_WRITER_MASTER_NAME     = var.event_sentinel_master
+
+    # The proxy never writes config, so reads go to a replica and fall
+    # back to the master when Sentinel reports none — a replica down for
+    # maintenance degrades rather than fails. The event plane is writes,
+    # so it takes the master and no such flag.
+    MEANDR_REDIS_CONFIG_READER_PREFER_REPLICA = "true"
+
+    # No *_CA_CERT_FILE here: the runtime image is distroless, so there is
+    # no init container to write files. The PEMs arrive inline through
+    # proxy_secrets below — see there for why that is not the same as
+    # putting them in the task definition.
+
     # Cred-store wiring. Empty value = "no cred-store" — proxy's
     # cred-resolution falls back to the legacy per-server SM path
     # (via Server.cred_ref) until BE bumps cred_version. See
@@ -131,12 +154,20 @@ locals {
       MEANDR_REDIS_CONFIG_READER_PASSWORD = var.redis_auth_secret_arn
       MEANDR_REDIS_EVENT_WRITER_PASSWORD  = var.redis_auth_secret_arn
     } : {},
-    # mTLS material for the self-hosted fleet, given to BOTH planes
-    # whenever it is configured. Safe for a plane still on ElastiCache:
-    # the proxy ADDS this CA to the system pool rather than replacing it,
-    # so a public-PKI endpoint still verifies, and ElastiCache never asks
-    # for a client certificate. That means the two planes can cut over
-    # independently without a per-plane switch.
+    # mTLS material for the self-hosted fleet, both planes.
+    #
+    # `secrets`, not `environment`: the task definition stores only the
+    # Secrets Manager ARN and the agent injects the value at start, so no
+    # PEM — least of all the client key — is readable via
+    # describe-task-definition.
+    #
+    # Inline rather than a file because the runtime image is distroless.
+    # Writing files would need an init container with a shell, and the Go
+    # client reads either shape.
+    #
+    # Safe to hand a plane still on ElastiCache: the proxy ADDS this CA to
+    # the system pool rather than replacing it, and ElastiCache never asks
+    # for a client certificate. So the planes can cut over independently.
     var.valkey_client_secret_arn == "" ? {} : {
       MEANDR_REDIS_CONFIG_READER_CA_CERT     = "${var.valkey_client_secret_arn}:ca_crt::"
       MEANDR_REDIS_CONFIG_READER_CLIENT_CERT = "${var.valkey_client_secret_arn}:client_crt::"
@@ -154,6 +185,7 @@ locals {
   # Empty keeps the in-module ElastiCache cluster; set means the
   # self-hosted fleet.
   event_writer_host = var.event_writer_endpoint != "" ? var.event_writer_endpoint : module.event_stream.primary_endpoint_address
+
 }
 
 # --- Event-stream Valkey (per-region, no replication) -----------------
@@ -497,6 +529,10 @@ resource "aws_iam_role_policy" "execution_secrets" {
       Resource = compact([
         var.session_signing_key_secret_arn,
         var.redis_auth_enabled ? var.redis_auth_secret_arn : "",
+        # The Valkey client PEMs. Missing this fails the task at LAUNCH
+        # with a secret-fetch error, which reads nothing like the TLS
+        # problem it would otherwise be mistaken for.
+        var.valkey_client_secret_arn,
       ])
     }]
   })
@@ -600,6 +636,12 @@ module "proxy" {
 
   image          = local.image
   container_port = var.proxy_port
+
+  # No init container. The proxy never opens a Postgres connection, so
+  # the RDS trust store buys it nothing — and the runtime image is
+  # distroless, so the container could not start anyway: no /bin/sh, and
+  # the app depends on it succeeding.
+  inject_rds_ca = false
 
   cpu    = var.proxy.cpu
   memory = var.proxy.memory

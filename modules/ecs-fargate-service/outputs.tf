@@ -22,3 +22,12 @@ output "log_group_name" {
   description = "CloudWatch log group containing the service's logs."
   value       = aws_cloudwatch_log_group.main.name
 }
+
+output "valkey_cert_paths" {
+  description = "Where the Valkey client material lands in the task, so a caller sets its app env vars from one source rather than repeating literals."
+  value = {
+    ca_file   = local.valkey_ca_file
+    cert_file = local.valkey_crt
+    key_file  = local.valkey_key
+  }
+}

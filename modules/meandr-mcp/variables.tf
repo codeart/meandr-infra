@@ -82,6 +82,37 @@ variable "config_reader_endpoint" {
   type        = string
 }
 
+variable "config_sentinel_addrs" {
+  description = <<-EOT
+    Sentinel endpoints for the config fleet, `host:26379`. Empty keeps
+    plain address dialling.
+
+    LOCAL region only. Sentinel answers with a node HOSTNAME, so pointing
+    at another region's Sentinels yields a name this VPC cannot resolve —
+    the failure would look like a dial timeout rather than what it is.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "config_sentinel_master" {
+  description = "Sentinel master name for the config fleet — the fleet name, which is what `sentinel monitor` was given. Unique within a Sentinel set, not globally."
+  type        = string
+  default     = ""
+}
+
+variable "event_sentinel_addrs" {
+  description = "Sentinel endpoints for this region's event fleet, `host:26379`. Events is per-region, so these are always local by construction."
+  type        = list(string)
+  default     = []
+}
+
+variable "event_sentinel_master" {
+  description = "Sentinel master name for the event fleet."
+  type        = string
+  default     = ""
+}
+
 variable "event_writer_endpoint" {
   description = <<-EOT
     Event-stream writer. EMPTY keeps the in-module ElastiCache cluster,

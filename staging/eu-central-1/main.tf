@@ -1023,7 +1023,31 @@ module "mcp" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  config_reader_endpoint = module.config_stream.reader_endpoint_address
+  # Self-hosted fleets. The ADDRs are bootstrap only — Sentinel is what
+  # the client actually follows, so a failover moves it without waiting
+  # on a DNS TTL.
+  #
+  # Local Sentinels by necessity: Sentinel answers with a node HOSTNAME,
+  # so another region's set would name something this VPC cannot resolve.
+  config_reader_endpoint = module.valkey_config_a.master_hostname
+  config_sentinel_addrs = [
+    "${module.valkey_config_a.hostname}:26379",
+    "${module.valkey_config_b.hostname}:26379",
+    "${module.valkey_config_c.hostname}:26379",
+  ]
+  config_sentinel_master = "config"
+
+  event_writer_endpoint = module.valkey_events_a.master_hostname
+  event_sentinel_addrs = [
+    "${module.valkey_events_a.hostname}:26379",
+    "${module.valkey_events_b.hostname}:26379",
+    "${module.valkey_events_c.hostname}:26379",
+  ]
+  event_sentinel_master = "events"
+
+  # Required to reach either fleet: the nodes run `tls-auth-clients yes`
+  # and refuse a connection with no client certificate.
+  valkey_client_secret_arn = module.valkey_tls.client_secret_arn
 
   redis_auth_enabled    = true
   redis_auth_token      = random_password.redis_auth.result
