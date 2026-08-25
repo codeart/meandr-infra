@@ -195,12 +195,6 @@ variable "redis_auth_enabled" {
   default     = false
 }
 
-variable "redis_auth_token" {
-  description = "Plaintext Redis AUTH token. Passed to the event-stream cluster's auth_token attribute when redis_auth_enabled = true; ignored otherwise."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
 
 variable "redis_auth_secret_arn" {
   description = "ARN of the SM secret holding the same AUTH token. Wired into the proxy task def as MEANDR_REDIS_CONFIG_READER_PASSWORD + MEANDR_REDIS_EVENT_WRITER_PASSWORD when redis_auth_enabled = true so the proxy authenticates to both Redis planes with one shared token."
@@ -265,26 +259,6 @@ variable "cred_encryption_key_arn" {
   description = "KMS CMK ARN. Proxy calls KMS.Decrypt directly on the ciphertext blob fetched from Dynamo. No Encrypt permission — that's BE-only."
   type        = string
   default     = ""
-}
-
-# --- Event-stream Valkey sizing ----------------------------------------
-
-variable "event_stream_node_type" {
-  description = "ElastiCache node type for the event-stream cluster. Single-region (never in GD), so any node family works including T-family."
-  type        = string
-  default     = "cache.t4g.micro"
-}
-
-variable "event_stream_replicas" {
-  description = "num_cache_clusters for the event-stream cluster. 1 = single node, no replication."
-  type        = number
-  default     = 1
-}
-
-variable "event_stream_snapshot_retention_days" {
-  description = "Daily RDB snapshots for the event-stream cluster. 1 for staging; consider 7+ for production."
-  type        = number
-  default     = 1
 }
 
 # --- Proxy service sizing -----------------------------------------------

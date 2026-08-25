@@ -182,61 +182,22 @@ locals {
     },
   )
 
-  # Empty keeps the in-module ElastiCache cluster; set means the
-  # self-hosted fleet.
-  event_writer_host = var.event_writer_endpoint != "" ? var.event_writer_endpoint : module.event_stream.primary_endpoint_address
+  # Bootstrap fallback only — Sentinel is what the client follows.
+  event_writer_host = var.event_writer_endpoint
 
 }
 
-# --- Event-stream Valkey (per-region, no replication) -----------------
+# The event plane — counters (rl: hash), outbound/audit streams, dedup
+# locks — is a self-hosted Valkey fleet, one per region and never
+# replicated across them. The proxy writes; BE consumes the streams,
+# also from the master, because XREADGROUP needs a writable node.
 #
-# The event-stream half of the proxy/BE Redis topology: counters (rl:
-# hash), outbound/audit streams, dedup locks. Per-region, never GD-
-# replicated — each region has its own event cluster. Proxy writes
-# everything here (so connects to the writer/primary endpoint); BE
-# consumes the streams (also via the writer endpoint, because
-# XREADGROUP requires a writable node).
+# The `event_stream` ElastiCache cluster it replaced was removed
+# 2026-08-25, after both sides were verified on the fleet: zero commands
+# across every metric type, not merely zero connections, which never
+# reaches zero while ElastiCache health-checks itself.
 #
-# Both consumers dial the AWS-internal hostnames directly — no CNAME
-# indirection — so the cluster's wildcard cert verifies cleanly.
-
-module "event_stream" {
-  source = "../elasticache-valkey"
-
-  name        = "meandr-event-stream"
-  description = "Event-stream Valkey - proxy writes counters/streams/locks, BE consumes streams"
-
-  engine_version = "9.1"
-  node_type      = var.event_stream_node_type
-
-  num_cache_clusters         = var.event_stream_replicas
-  automatic_failover_enabled = false
-  multi_az_enabled           = false
-
-  # TLS-on from day 1 — AUTH requires TLS-in-transit which can't be
-  # enabled in-place after creation.
-  transit_encryption_enabled = true
-  at_rest_encryption_enabled = true
-
-  auth_token = var.redis_auth_token
-
-  snapshot_retention_days = var.event_stream_snapshot_retention_days
-
-  vpc_id             = var.vpc_id
-  vpc_cidr_block     = var.vpc_cidr_block
-  private_subnet_ids = var.private_subnet_ids
-
-  tags = merge(local.base_tags, { "meandr:plane" = "event" })
-}
-
-# Local-module rename in state. The underlying AWS resource ID also changed
-# (`meandr-writer` → `meandr-event-stream`), so this is a destroy/recreate,
-# not a state-only move — `moved` here just keeps `terraform plan`'s diff
-# tidy by addressing the old + new state nodes by the same logical name.
-moved {
-  from = module.writer_valkey
-  to   = module.event_stream
-}
+# See docs/valkey_fleets.md.
 
 # --- NLB (network load balancer) ---------------------------------------
 #

@@ -18,15 +18,15 @@ resource "null_resource" "account_guard" {
   }
 }
 
-# Cross-variable invariant: MEANDR_MCP_REGIONS and MEANDR_REDIS_INGRESS_URLS
-# are positionally paired; mismatched lengths would cause the BE-side
-# zip to silently drop entries. Inline `validation` blocks can only see
-# their own variable, so the check lives here.
+# Cross-variable invariant: MEANDR_MCP_REGIONS and
+# MEANDR_REDIS_INGRESS_SENTINELS are positionally paired; mismatched
+# lengths would make the BE-side zip drop entries silently. Inline
+# `validation` blocks can only see their own variable, so it lives here.
 resource "null_resource" "input_pairing_guard" {
   lifecycle {
     precondition {
-      condition     = length(var.regions) == length(var.event_writer_endpoints)
-      error_message = "regions and event_writer_endpoints must have the same length — they're positionally paired into MEANDR_MCP_REGIONS / MEANDR_REDIS_INGRESS_URLS."
+      condition     = length(var.regions) == length(var.event_sentinel_groups)
+      error_message = "regions and event_sentinel_groups must have the same length — they're positionally paired into MEANDR_MCP_REGIONS / MEANDR_REDIS_INGRESS_SENTINELS."
     }
   }
 }
@@ -53,6 +53,21 @@ locals {
 
   db_name = "meandr_${var.env}"
 
+  # Where ecs-fargate-service / ecs-oneoff-task write the Valkey client
+  # material. Literals because a module cannot read its own child's
+  # output to build that child's input; the service module owns them and
+  # exposes valkey_cert_paths for anyone who can consume it.
+  #
+  # Empty with no client secret, which BE reads as "not on Sentinel" and
+  # falls back to the direct URLs.
+  valkey_cert_paths = var.valkey_client_secret_arn == "" ? {
+    ca = "", crt = "", key = ""
+    } : {
+    ca  = "/var/run/valkey/ca.pem"
+    crt = "/var/run/valkey/client.crt"
+    key = "/var/run/valkey/client.key"
+  }
+
   base_tags = merge({
     "meandr:env"        = var.env
     "meandr:app"        = "meandr-api"
@@ -62,6 +77,12 @@ locals {
 
   # Shared container env. Every service / task uses the same set; the Rails
   # CMD chooses what to read.
+  #
+  # No MEANDR_REDIS_*_URL: every plane is on Sentinel, and a URL cannot
+  # carry a client certificate, so against a fleet running
+  # `tls-auth-clients yes` it could never connect. Keeping one would look
+  # like a fallback while being unusable. BE's direct-URL path stays for
+  # local development, where the environment does not come from here.
   app_environment = {
     RAILS_ENV                = var.env
     RAILS_LOG_TO_STDOUT      = "true"
@@ -77,16 +98,36 @@ locals {
     # paired — BE zips them into [[region, url], ...] to know which
     # event-stream writer corresponds to which proxy region. Lengths
     # must match (enforced by the input_pairing_guard below).
-    MEANDR_REDIS_EGRESS_URL   = "rediss://${var.config_writer_endpoint}:6379"
-    MEANDR_MCP_REGIONS        = join(",", var.regions)
-    MEANDR_REDIS_INGRESS_URLS = join(",", [for h in var.event_writer_endpoints : "rediss://${h}:6379"])
+    MEANDR_MCP_REGIONS = join(",", var.regions)
 
     # API's own Redis — ActionCable pub/sub today, future API-owned
     # persistent state (anything we need to keep that isn't worth a
     # Postgres table). Separate from the proxy planes by intent: those
     # are GD-replicated (egress) or per-region writer-only (ingress);
     # neither is appropriate for arbitrary API data.
-    MEANDR_REDIS_URL = "rediss://${module.api_valkey.primary_endpoint_address}:6379"
+
+    # Self-hosted fleets, via Sentinel. Present ⇒ BE uses discovery and
+    # mTLS; absent ⇒ it falls back to the *_URL shapes above, which is
+    # what keeps dev and test working and what kept staging on
+    # ElastiCache until these were set. See docs/valkey_fleets.md §5.
+    #
+    # INGRESS is `;`-separated groups, positional with MEANDR_MCP_REGIONS
+    # exactly like MEANDR_REDIS_INGRESS_URLS — one convention for one
+    # concept, and both are generated from the same ordered region list
+    # so they cannot disagree.
+    MEANDR_REDIS_EGRESS_SENTINEL_ADDRS = join(",", var.config_sentinel_addrs)
+    MEANDR_REDIS_EGRESS_MASTER_NAME    = var.config_sentinel_master
+    MEANDR_REDIS_INGRESS_SENTINELS     = join(";", var.event_sentinel_groups)
+    MEANDR_REDIS_INGRESS_MASTER_NAME   = var.event_sentinel_master
+    MEANDR_REDIS_SENTINEL_ADDRS        = join(",", var.api_sentinel_addrs)
+    MEANDR_REDIS_MASTER_NAME           = var.api_sentinel_master
+
+    # Written into every task by ecs-fargate-service / ecs-oneoff-task.
+    # One PKI, so one set of paths across all three planes. Empty when
+    # there is no client secret — BE reads that as "not on Sentinel".
+    MEANDR_VALKEY_CA_FILE          = local.valkey_cert_paths.ca
+    MEANDR_VALKEY_CLIENT_CERT_FILE = local.valkey_cert_paths.crt
+    MEANDR_VALKEY_CLIENT_KEY_FILE  = local.valkey_cert_paths.key
 
     # Cred-store wiring. Empty values are harmless — Rails treats them
     # as "cred-store not configured here" and skips the encrypt path.
@@ -135,32 +176,10 @@ locals {
 # TLS-on for consistency with the other Valkeys. AT-rest encryption on
 # since the cable subscription identifiers may surface internal IDs.
 
-module "api_valkey" {
-  source = "../elasticache-valkey"
-
-  name        = "meandr-api-redis"
-  description = "API-owned Redis: ActionCable + persistent state"
-
-  engine_version = "9.1"
-  node_type      = var.api_redis_node_type
-
-  num_cache_clusters         = 1
-  automatic_failover_enabled = false
-  multi_az_enabled           = false
-
-  transit_encryption_enabled = true
-  at_rest_encryption_enabled = true
-
-  auth_token = var.redis_auth_token
-
-  snapshot_retention_days = 1
-
-  vpc_id             = var.vpc_id
-  vpc_cidr_block     = var.vpc_cidr_block
-  private_subnet_ids = var.private_subnet_ids
-
-  tags = merge(local.base_tags, { "meandr:cluster" = "api" })
-}
+# The API's own Redis — ActionCable pub/sub and presence — is a
+# self-hosted Valkey fleet like the other two, reached through
+# api_sentinel_addrs. The `api_valkey` ElastiCache cluster it replaced was
+# removed 2026-08-25 once BE was verified on the fleet.
 
 # --- RDS Postgres -------------------------------------------------------
 
@@ -321,6 +340,10 @@ resource "aws_iam_role_policy" "execution_secrets" {
         aws_secretsmanager_secret.encryption.arn,
         aws_secretsmanager_secret.ops.arn,
         var.redis_auth_secret_arn,
+        # The Valkey client PEMs. Missing this fails tasks at LAUNCH with
+        # a secret-fetch error, before any application log — which reads
+        # nothing like the TLS problem it gets mistaken for.
+        var.valkey_client_secret_arn,
       ])
     }]
   })
@@ -1011,6 +1034,8 @@ module "puma" {
   command        = ["bundle", "exec", "puma", "-C", "config/puma.rb"]
   container_port = 3000
 
+  valkey_client_secret_arn = var.valkey_client_secret_arn
+
   cpu    = var.puma.cpu
   memory = var.puma.memory
 
@@ -1079,6 +1104,8 @@ module "jobs" {
   image   = local.image
   command = ["bundle", "exec", "good_job", "start"]
 
+  valkey_client_secret_arn = var.valkey_client_secret_arn
+
   cpu    = var.jobs.cpu
   memory = var.jobs.memory
 
@@ -1129,6 +1156,8 @@ module "ingest" {
   image   = local.image
   command = ["bundle", "exec", "bin/proxy-ingest", "start"]
 
+  valkey_client_secret_arn = var.valkey_client_secret_arn
+
   cpu    = var.ingest.cpu
   memory = var.ingest.memory
 
@@ -1177,6 +1206,11 @@ module "migrate" {
 
   image   = local.image
   command = ["bundle", "exec", "rails", "db:migrate"]
+
+  # Needed here too: Rails eager-loads Proxy::Bus, whose constants build
+  # Redis options at boot. A migrate task without the certificates fails
+  # before it reaches a migration.
+  valkey_client_secret_arn = var.valkey_client_secret_arn
 
   cpu    = var.migrate.cpu
   memory = var.migrate.memory

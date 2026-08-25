@@ -8,6 +8,22 @@ variable "execution_role_arn" {
   type        = string
 }
 
+variable "valkey_client_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN holding `{ca_crt, client_crt, client_key}`,
+    written into the task as files alongside the RDS bundle.
+
+    A one-off task needs these whenever the app builds Redis clients at
+    BOOT — Rails eager-loads, so a migration fails before it reaches a
+    migration if the fleet demands a certificate it does not have.
+
+    Via ECS `secrets`, never `environment`: the task definition holds
+    only the ARN.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "task_role_arn" {
   description = "Task IAM role ARN. The role the migration / seed code runs as."
   type        = string

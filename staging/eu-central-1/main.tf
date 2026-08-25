@@ -233,49 +233,15 @@ resource "aws_secretsmanager_secret_version" "session_signing_key" {
 # second region. TLS-on from day 1 — required for Global Datastore
 # eligibility, can't be toggled in place.
 
-module "config_stream" {
-  source = "../../modules/elasticache-valkey"
-
-  name        = "meandr-config-stream"
-  description = "Config-stream Valkey staging - BE writes config + inbound events, proxy reads config + consumes inbound events"
-
-  engine_version = "9.1"
-  node_type      = "cache.t4g.micro"
-
-  num_cache_clusters         = 1
-  automatic_failover_enabled = false
-  multi_az_enabled           = false
-
-  transit_encryption_enabled = true
-  at_rest_encryption_enabled = true
-
-  auth_token = random_password.redis_auth.result
-
-  snapshot_retention_days = 1
-
-  vpc_id             = module.vpc.vpc_id
-  vpc_cidr_block     = module.vpc.vpc_cidr_block
-  private_subnet_ids = local.app_private_subnet_ids
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-# Local-module rename in state. The AWS replication_group_id also changes
-# (`meandr-reader` → `meandr-config-stream`), so the underlying cluster
-# gets destroyed and recreated — `moved` here just keeps the state-tree
-# addressing consistent across the rename.
-moved {
-  from = module.config_valkey
-  to   = module.config_stream
-}
-
 # --- Self-hosted Valkey (config tier) -----------------------------------
 #
-# Runs ALONGSIDE config_stream, not instead of it. Nothing points at these
-# nodes yet: the proxy cannot verify our CA until internal/rdb learns to
-# take a RootCAs bundle, so this stands the fleet up to be watched —
-# replication, a deliberate failover — while the live path is untouched.
-# Cutover is a separate, reversible change once both sides are ready.
+# Replaced the `config_stream` ElastiCache cluster, removed 2026-08-25
+# once both sides had cut over — verified zero commands across every
+# metric type before deletion, not merely zero connections, which never
+# reaches zero while ElastiCache health-checks itself.
+#
+# Both the proxy and BE reach these through Sentinel over mTLS. See
+# docs/valkey_fleets.md.
 
 # How vendored source reaches an instance. User-data caps at 16 KB and the
 # Valkey tarball is megabytes, so it cannot ride inline; this is the
@@ -921,18 +887,41 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  config_writer_endpoint          = module.config_stream.primary_endpoint_address
-  config_stream_security_group_id = module.config_stream.security_group_id
+  # State-plane regions BE consumes streams from. Just our own region
+  # today; expand when more come online with meandr-mcp. In a multi-region
+  # production setup the extra regions' groups arrive via
+  # terraform_remote_state.
+  regions = [local.region]
 
-  # State-plane regions BE should consume streams from. Just our own
-  # region today; expand when more regions come online with meandr-mcp.
-  # event_writer_endpoints is positional with regions — first region's
-  # event-stream writer, second region's, etc. In a multi-region prod
-  # setup the extra regions' endpoints come via terraform_remote_state.
-  regions                = [local.region]
-  event_writer_endpoints = [module.mcp.event_writer_endpoint]
+  # BE reaches every fleet through Sentinel — no URL fallback, because a
+  # URL cannot carry a client certificate and the fleets refuse a
+  # connection without one.
+  #
+  # EVERY region's event group, unlike the proxy which only needs its
+  # own: BE consumes every region's stream. Positional with `regions`.
+  config_sentinel_addrs = [
+    "${module.valkey_config_a.hostname}:26379",
+    "${module.valkey_config_b.hostname}:26379",
+    "${module.valkey_config_c.hostname}:26379",
+  ]
+  config_sentinel_master = "config"
 
-  redis_auth_token      = random_password.redis_auth.result
+  event_sentinel_groups = [join(",", [
+    "${module.valkey_events_a.hostname}:26379",
+    "${module.valkey_events_b.hostname}:26379",
+    "${module.valkey_events_c.hostname}:26379",
+  ])]
+  event_sentinel_master = "events"
+
+  api_sentinel_addrs = [
+    "${module.valkey_api_a.hostname}:26379",
+    "${module.valkey_api_b.hostname}:26379",
+    "${module.valkey_api_c.hostname}:26379",
+  ]
+  api_sentinel_master = "api"
+
+  valkey_client_secret_arn = module.valkey_tls.client_secret_arn
+
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
   cred_store_enabled        = true
@@ -1050,7 +1039,6 @@ module "mcp" {
   valkey_client_secret_arn = module.valkey_tls.client_secret_arn
 
   redis_auth_enabled    = true
-  redis_auth_token      = random_password.redis_auth.result
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
   session_signing_key_secret_arn = aws_secretsmanager_secret.session_signing_key.arn
@@ -1082,8 +1070,7 @@ module "mcp" {
   oauth_issuer_host       = "staging-mcp.meandr.com"
   oauth_discovery_enabled = true
 
-  event_stream_node_type = "cache.t4g.micro"
-  proxy                  = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+  proxy = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
   log_retention_days = 7
 }
@@ -1095,8 +1082,12 @@ output "vpc_cidr_block" { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
-output "config_stream_writer_endpoint" { value = module.config_stream.primary_endpoint_address }
-output "config_stream_reader_endpoint" { value = module.config_stream.reader_endpoint_address }
+# Master RECORDS, not node names — they follow a promotion. Prefer the
+# Sentinel sets for anything that connects; these are for humans and for
+# a second region's bootstrap.
+output "valkey_config_master" { value = module.valkey_config_a.master_hostname }
+output "valkey_events_master" { value = module.valkey_events_a.master_hostname }
+output "valkey_api_master" { value = module.valkey_api_a.master_hostname }
 output "event_stream_writer_endpoint" { value = module.mcp.event_writer_endpoint }
 
 output "hostname" { value = module.api.hostname }

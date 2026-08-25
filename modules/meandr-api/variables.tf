@@ -153,31 +153,12 @@ variable "db_deletion_protection" {
   default     = false
 }
 
-# --- API Redis (ActionCable + other API-owned persistent state) ---------
-
-variable "api_redis_node_type" {
-  description = "ElastiCache node type for the API's own Redis (ActionCable pub/sub, future API-owned persistent state). Single-node, no replication; sized small. cache.t4g.micro is fine for staging."
-  type        = string
-  default     = "cache.t4g.micro"
-}
-
-# --- Redis AUTH (shared token across all three planes) -----------------
+# --- Redis AUTH (shared token across all three fleets) -----------------
 #
-# One token per env, used by config-stream, event-stream, and api-redis.
-# Network isolation stays the primary control; AUTH is defense-in-depth.
-# Caller owns the random_password + aws_secretsmanager_secret resources,
-# passes the plaintext to the cluster (here, the api_valkey internal)
-# and the secret ARN to the task def secrets so Rails can read it at boot.
-# See modules/elasticache-valkey/variables.tf `auth_token` for the full
-# enablement story; the canonical first-enable sequence is two applies
-# with `auth_token_update_strategy = "ROTATE"`.
-
-variable "redis_auth_token" {
-  description = "Plaintext Redis AUTH token. Passed to the api-redis cluster's auth_token attribute. Empty disables AUTH (single-control: network isolation only)."
-  type        = string
-  default     = ""
-  sensitive   = true
-}
+# One token per env. Network isolation and mTLS are the primary controls;
+# AUTH is defence in depth. Only the ARN travels — nodes and tasks both
+# read the value from Secrets Manager, so no plaintext passes through
+# Terraform.
 
 variable "redis_auth_secret_arn" {
   description = "ARN of the SM secret holding the same AUTH token. Wired into task defs as a secret named MEANDR_REDIS_PASSWORD so Rails reads it at boot. Empty disables the secret wiring; must be set when redis_auth_token is set."
@@ -255,29 +236,69 @@ variable "acme_dns_role_arn" {
 # runs only in the primary region today, so cross-region event-stream
 # writer endpoints come from each region's terraform_remote_state.
 #
-# Env-var wire names (MEANDR_REDIS_EGRESS_URL / MEANDR_REDIS_INGRESS_URLS)
-# are kept stable on the Rails side; only the TF input names follow the
-# new <plane>_<role>_endpoint convention.
+# How BE reaches the three Valkey fleets. Sentinel only — a plain URL
+# cannot carry a client certificate, and the fleets refuse a connection
+# without one. See docs/valkey_fleets.md §5.
 
-variable "config_writer_endpoint" {
-  description = "Writer (primary) endpoint of `meandr-config-stream`. AWS-internal hostname. BE writes config records and produces inbound events here. Maps onto MEANDR_REDIS_EGRESS_URL inside the container."
-  type        = string
-}
-
-variable "event_writer_endpoints" {
-  description = "Per-region writer (primary) endpoints of `meandr-event-stream`. AWS-internal hostnames. BE consumes outbound streams here (XREADGROUP needs the primary). Each entry becomes `rediss://<host>:6379` joined with commas into MEANDR_REDIS_INGRESS_URLS. Positionally paired with var.regions — entry N is the event-stream writer for region N."
+variable "config_sentinel_addrs" {
+  description = "Sentinel endpoints for the config fleet, `host:26379`. Singular — one config master globally, which is the point of that fleet."
   type        = list(string)
-  default     = []
 }
 
-variable "config_stream_security_group_id" {
-  description = "SG attached to the config-stream Valkey cluster. ECS task SGs need to be allowed to reach it (current pattern leans on VPC-CIDR ingress; kept here for future tightening)."
+variable "config_sentinel_master" {
+  description = "Sentinel master name for the config fleet — the fleet name. Unique within a Sentinel set, not globally."
   type        = string
-  default     = null
 }
+
+variable "event_sentinel_groups" {
+  description = <<-EOT
+    Per-region Sentinel groups for the event fleets. Each entry is one
+    region's comma-separated `host:26379` list; entries are joined with
+    `;` into MEANDR_REDIS_INGRESS_SENTINELS.
+
+    Positionally paired with var.regions — entry N is region N's group,
+    enforced by input_pairing_guard.
+
+    BE reads EVERY region's group, unlike the proxy which only ever needs
+    its own: BE consumes every region's event stream.
+  EOT
+  type        = list(string)
+}
+
+variable "event_sentinel_master" {
+  description = "Sentinel master name for the event fleets. The same in every region — Sentinel names only have to be unique within a set."
+  type        = string
+}
+
+variable "api_sentinel_addrs" {
+  description = "Sentinel endpoints for the api fleet (ActionCable pub/sub + presence)."
+  type        = list(string)
+}
+
+variable "api_sentinel_master" {
+  description = "Sentinel master name for the api fleet."
+  type        = string
+}
+
+variable "valkey_client_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN holding `{ca_crt, client_crt, client_key}` — the
+    CLIENT half of the self-hosted Valkey PKI.
+
+    Required to reach those fleets at all: nodes run `tls-auth-clients
+    yes` and refuse a connection without a certificate. Written into
+    every task as FILES, since the Rails image has a shell and a file
+    keeps the key out of the process environment.
+
+    Empty leaves BE on ElastiCache.
+  EOT
+  type        = string
+  default     = ""
+}
+
 
 variable "regions" {
-  description = "Region codes where the proxy fleet runs — every region with a `meandr-mcp` deployment that BE consumes streams from. Joined with commas into MEANDR_MCP_REGIONS. Positionally paired with var.event_writer_endpoints — entry N labels the writer endpoint at event_writer_endpoints[N]."
+  description = "Region codes where the proxy fleet runs — every region with a `meandr-mcp` deployment that BE consumes streams from. Joined with commas into MEANDR_MCP_REGIONS. Positionally paired with var.event_sentinel_groups — entry N labels the group at event_sentinel_groups[N]."
   type        = list(string)
 }
 
