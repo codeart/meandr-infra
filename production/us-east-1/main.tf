@@ -375,7 +375,6 @@ output "puma_service_name"    { value = module.api.puma_service_name }
 output "jobs_service_name"    { value = module.api.jobs_service_name }
 output "migrate_task_family"  { value = module.api.migrate_task_family }
 output "worker_sg_id"         { value = module.api.worker_security_group_id }
-output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
 
 WORKLOAD-DEFERRED END (outputs) */
 

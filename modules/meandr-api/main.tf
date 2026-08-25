@@ -98,6 +98,9 @@ locals {
     # in the Shared account. Meandr::Acme reads this LAZILY, so an empty
     # value only fails an actual certificate order, never boot.
     MEANDR_ACME_DNS_ROLE_ARN = var.acme_dns_role_arn
+
+    # No PGSSLROOTCERT here: ecs-fargate-service injects the RDS trust
+    # store into every task and sets the path itself.
   }
 
   app_secrets = merge({
@@ -177,11 +180,9 @@ module "rds" {
   deletion_protection   = var.db_deletion_protection
   skip_final_snapshot   = var.env != "production"
 
-  vpc_id                 = var.vpc_id
-  vpc_cidr_block         = var.vpc_cidr_block
-  private_subnet_ids     = var.private_subnet_ids
-  internal_dns_zone_id   = var.internal_dns_zone_id
-  internal_dns_zone_name = var.internal_dns_zone_name
+  vpc_id             = var.vpc_id
+  vpc_cidr_block     = var.vpc_cidr_block
+  private_subnet_ids = var.private_subnet_ids
 
   secret_name = "meandr/db/${var.env}/master"
 

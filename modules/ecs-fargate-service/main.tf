@@ -23,7 +23,66 @@ resource "aws_cloudwatch_log_group" "main" {
 
 # --- Task definition ----------------------------------------------------
 
+module "rds_ca" {
+  source = "../rds-ca"
+  region = var.region
+}
+
 locals {
+  # RDS trust store, injected rather than baked into an image.
+  #
+  # `sslmode=verify-full` needs a root the OS does not carry: the RDS
+  # roots are a PRIVATE Amazon PKI, self-signed and absent from every
+  # public trust store. Putting the bundle here means the app images stay
+  # unaware of it and any future task gets it for free.
+  #
+  # Not a secret — it is a public certificate — so it rides the task
+  # definition directly. That also sidesteps Secrets Manager's 64 KB cap,
+  # which the 165 KB global bundle would exceed. The REGIONAL bundle is
+  # the right scope anyway: a task only reaches RDS in its own region.
+  #
+  # Vendored per region by modules/rds-ca; a region with no bundle fails
+  # at plan.
+  rds_cert_dir  = module.rds_ca.dir
+  rds_cert_file = module.rds_ca.filename
+
+  # Writes the bundle, then exits. Reuses the app image so the task pulls
+  # nothing extra, and Fargate bills the task rather than the container,
+  # so this costs neither a pull nor a cent.
+  cert_init_def = {
+    name      = "rds-ca"
+    image     = var.image
+    essential = false
+
+    # Root, overriding the image's USER. The volume's mount point is
+    # created root-owned 0755, so the app image's non-root user cannot
+    # create a file in it — the write fails with EACCES and the task
+    # never starts. Only this container is root; the app keeps its own
+    # user and mounts the result read-only.
+    user = "0"
+
+    # 0444 so whichever uid the app image runs as can read it.
+    entryPoint = ["/bin/sh", "-c"]
+    command    = ["printf '%s' \"$RDS_CA_BUNDLE\" > ${local.rds_cert_file} && chmod 0444 ${local.rds_cert_file}"]
+
+    environment = [
+      { name = "RDS_CA_BUNDLE", value = module.rds_ca.pem }
+    ]
+
+    mountPoints = [
+      { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = false }
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.main.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }
+
   container_def = merge(
     {
       name        = var.container_name
@@ -31,6 +90,19 @@ locals {
       essential   = true
       command     = length(var.command) > 0 ? var.command : null
       stopTimeout = var.stop_timeout
+
+      # Read-only: the app consumes the trust store, it does not curate it.
+      mountPoints = [
+        { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = true }
+      ]
+
+      # SUCCESS, not COMPLETE — COMPLETE only means the init container
+      # exited, whatever its status, so a failed write would still start
+      # the app and surface later as a certificate error that reads like a
+      # database outage. Fail the task where the cause is visible.
+      dependsOn = [
+        { containerName = "rds-ca", condition = "SUCCESS" }
+      ]
 
       portMappings = concat(
         var.target_group_arn != null ? [
@@ -47,8 +119,13 @@ locals {
         ],
       )
 
+      # PGSSLROOTCERT is added for EVERY task, not opted into. libpq reads
+      # it with no application wiring, so a service that connects to
+      # Postgres verifies the certificate by default rather than because
+      # someone remembered to. A caller may still override it.
       environment = [
-        for k, v in var.environment : { name = k, value = v }
+        for k, v in merge({ PGSSLROOTCERT = local.rds_cert_file }, var.environment) :
+        { name = k, value = v }
       ]
 
       secrets = [
@@ -91,7 +168,15 @@ resource "aws_ecs_task_definition" "main" {
     cpu_architecture        = "ARM64"
   }
 
-  container_definitions = jsonencode([local.container_def])
+  # Task-scoped scratch volume, shared between the init container that
+  # writes the trust store and the app that reads it. Ephemeral by
+  # design: it is rebuilt from the task definition on every start, so
+  # there is no state to drift and nothing to rotate.
+  volume {
+    name = "rds-ca"
+  }
+
+  container_definitions = jsonencode([local.container_def, local.cert_init_def])
 
   tags = merge(var.tags, {
     Name = var.name

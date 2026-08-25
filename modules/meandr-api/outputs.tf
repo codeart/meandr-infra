@@ -39,7 +39,6 @@ output "certificate_arn" { value = module.cert.certificate_arn }
 # --- Data tier ---------------------------------------------------------
 
 output "rds_endpoint" { value = module.rds.endpoint }
-output "rds_internal_dns_name" { value = module.rds.internal_dns_name }
 output "rds_secret_arn" { value = module.rds.secret_arn }
 output "rds_db_name" { value = module.rds.db_name }
 

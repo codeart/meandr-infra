@@ -1072,7 +1072,6 @@ output "jobs_service_name" { value = module.api.jobs_service_name }
 output "ingest_service_name" { value = module.api.ingest_service_name }
 output "migrate_task_family" { value = module.api.migrate_task_family }
 output "worker_sg_id" { value = module.api.worker_security_group_id }
-output "rds_internal_dns_name" { value = module.api.rds_internal_dns_name }
 
 output "mcp_cluster_name" { value = module.mcp.cluster_name }
 output "mcp_proxy_service_name" { value = module.mcp.proxy_service_name }

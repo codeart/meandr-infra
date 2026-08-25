@@ -45,11 +45,20 @@ resource "aws_secretsmanager_secret_version" "master" {
     dbname   = var.db_name
 
     # Pre-assembled connection URL — apps can inject this directly via
-    # ECS task `secrets` instead of composing from parts. Uses the internal
-    # CNAME (`pg.<env>.meandr.internal`) so the URL survives RDS instance
-    # replacements. `sslmode=require` opportunistically encrypts the
-    # in-VPC link; defense in depth at no cost.
-    url = "postgres://${var.master_username}:${urlencode(random_password.master.result)}@pg.${var.internal_dns_zone_name}:${aws_db_instance.main.port}/${var.db_name}?sslmode=require"
+    # ECS task `secrets` instead of composing from parts.
+    #
+    # The RDS ENDPOINT, not a CNAME. `verify-full` checks the hostname
+    # against the certificate and RDS issues only for the endpoint name,
+    # so an alias can never validate — which is why the alias is gone
+    # rather than merely unused. The cost is that recreating the instance
+    # changes this URL and tasks must restart to see it; the endpoint
+    # survives reboots and Multi-AZ failover, so that only happens during
+    # a deliberate replacement, which is disruptive regardless.
+    #
+    # No sslrootcert here: the RDS roots are a private Amazon PKI, so the
+    # trust store is a property of the CLIENT image. Each app points at
+    # its own vendored copy via PGSSLROOTCERT.
+    url = "postgres://${var.master_username}:${urlencode(random_password.master.result)}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/${var.db_name}?sslmode=verify-full"
   })
 }
 
@@ -149,12 +158,10 @@ resource "aws_db_instance" "main" {
   }
 }
 
-# --- Internal DNS --------------------------------------------------------
-
-resource "aws_route53_record" "pg" {
-  zone_id = var.internal_dns_zone_id
-  name    = "pg.${var.internal_dns_zone_name}"
-  type    = "CNAME"
-  ttl     = 60
-  records = [aws_db_instance.main.address]
-}
+# No internal CNAME for Postgres, deliberately.
+#
+# An alias cannot satisfy `verify-full` — RDS issues its certificate for
+# the endpoint name, so connecting through `pg.<env>.meandr.internal`
+# fails hostname verification no matter what is in the trust store.
+# Keeping the record would only invite someone to use it and quietly land
+# back on a weaker sslmode.

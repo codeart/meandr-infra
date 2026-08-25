@@ -17,6 +17,53 @@ resource "aws_cloudwatch_log_group" "main" {
   })
 }
 
+# RDS trust store, same injection as ecs-fargate-service and for the same
+# reason — see that module for why the bundle cannot come from the OS.
+#
+# It matters MORE here: a migration is the first thing a deploy runs and
+# the only one that writes schema. A migrate task that cannot verify the
+# certificate fails the deploy, which is the correct outcome but an
+# expensive way to discover a missing file.
+module "rds_ca" {
+  source = "../rds-ca"
+  region = var.region
+}
+
+locals {
+  rds_cert_dir  = module.rds_ca.dir
+  rds_cert_file = module.rds_ca.filename
+
+  cert_init_def = {
+    name      = "rds-ca"
+    image     = var.image
+    essential = false
+
+    # Root: the volume mount point is root-owned, so the image's non-root
+    # user cannot create a file in it. See ecs-fargate-service.
+    user = "0"
+
+    entryPoint = ["/bin/sh", "-c"]
+    command    = ["printf '%s' \"$RDS_CA_BUNDLE\" > ${local.rds_cert_file} && chmod 0444 ${local.rds_cert_file}"]
+
+    environment = [
+      { name = "RDS_CA_BUNDLE", value = module.rds_ca.pem }
+    ]
+
+    mountPoints = [
+      { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = false }
+    ]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.main.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "ecs"
+      }
+    }
+  }
+}
+
 resource "aws_ecs_task_definition" "main" {
   family                   = var.name
   cpu                      = var.cpu
@@ -35,29 +82,45 @@ resource "aws_ecs_task_definition" "main" {
     cpu_architecture        = "ARM64"
   }
 
-  container_definitions = jsonencode([{
-    name      = var.container_name
-    image     = var.image
-    command   = var.command
-    essential = true
+  volume {
+    name = "rds-ca"
+  }
 
-    environment = [
-      for k, v in var.environment : { name = k, value = v }
-    ]
+  container_definitions = jsonencode([
+    {
+      name      = var.container_name
+      image     = var.image
+      command   = var.command
+      essential = true
 
-    secrets = [
-      for k, v in var.secrets : { name = k, valueFrom = v }
-    ]
+      mountPoints = [
+        { sourceVolume = "rds-ca", containerPath = local.rds_cert_dir, readOnly = true }
+      ]
 
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        awslogs-group         = aws_cloudwatch_log_group.main.name
-        awslogs-region        = var.region
-        awslogs-stream-prefix = "ecs"
+      dependsOn = [
+        { containerName = "rds-ca", condition = "SUCCESS" }
+      ]
+
+      environment = [
+        for k, v in merge({ PGSSLROOTCERT = local.rds_cert_file }, var.environment) :
+        { name = k, value = v }
+      ]
+
+      secrets = [
+        for k, v in var.secrets : { name = k, valueFrom = v }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.main.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "ecs"
+        }
       }
-    }
-  }])
+    },
+    local.cert_init_def,
+  ])
 
   tags = merge(var.tags, {
     Name = var.name
