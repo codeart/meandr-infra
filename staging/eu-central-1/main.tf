@@ -4,7 +4,7 @@
 
 provider "aws" {
   region  = local.region
-  profile = "meandr-staging"
+  profile = local.aws_profile
 }
 
 # meandr.com + meandr.io hosted zones live in the Shared account — used for
@@ -22,6 +22,10 @@ locals {
   env        = "staging"
   region     = "eu-central-1"
   account_id = "259534890849"
+
+  # Named here because recipes run SSM calls from the OPERATOR's machine,
+  # where there is no provider to inherit credentials from.
+  aws_profile = "meandr-staging"
 
   # Source-built, not packaged. AL2023 carries valkey 8.0.1/8.0.2/8.0.3 and
   # nothing newer (verified 2026-08-23 against the aarch64 repo), while
@@ -841,6 +845,37 @@ module "valkey_api_c" {
   dns_zone_name = module.vpc.internal_dns_zone_name
 
   tags = merge(local.tags, { "meandr:plane" = "api" })
+}
+
+# --- Valkey recipes ----------------------------------------------------
+#
+# Ordered, once-per-node changes applied to RUNNING instances over SSM.
+#
+# The counterpart to user-data, not a replacement for it: anything
+# identity-level or restart-required stays in user-data and is worth the
+# instance replacement. Everything else — a logrotate file, a sysctl, a
+# unit tweak — lands here and costs nothing.
+#
+# Adding a recipe can never produce a plan that rebuilds the fleet,
+# because recipes are never embedded in user-data.
+
+module "valkey_recipes" {
+  source = "../../modules/valkey-recipes"
+
+  instance_ids = [
+    module.valkey_config_a.instance_id,
+    module.valkey_config_b.instance_id,
+    module.valkey_config_c.instance_id,
+    module.valkey_events_a.instance_id,
+    module.valkey_events_b.instance_id,
+    module.valkey_events_c.instance_id,
+    module.valkey_api_a.instance_id,
+    module.valkey_api_b.instance_id,
+    module.valkey_api_c.instance_id,
+  ]
+
+  aws_profile = local.aws_profile
+  aws_region  = local.region
 }
 
 # --- meandr-api --------------------------------------------------------
