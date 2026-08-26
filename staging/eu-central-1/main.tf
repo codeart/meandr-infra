@@ -81,6 +81,11 @@ locals {
   # edge. This is the one prerequisite that keeps the edge a single apply.
   edge_regions = ["us-east-1"]
 
+  # Public apex this environment's proxy serves. Drives both the NLB
+  # wildcard and the cert path the proxy reads at handshake time
+  # (meandr/certs/<env>/<apex>), so the two cannot disagree.
+  proxy_apex = "meandr.live"
+
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
@@ -179,6 +184,7 @@ module "payload_encryption_key" {
 
   env        = local.env
   alias_name = "meandr-payload-${local.env}"
+  purpose    = "SSE-KMS default for the payload + archive buckets"
 
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
@@ -230,6 +236,7 @@ module "action_encryption_key" {
 
   env        = local.env
   alias_name = "meandr-action-${local.env}"
+  purpose    = "AEAD envelope key for elicitation + approval form payloads"
 
   enable_key_rotation     = true
   deletion_window_in_days = 7
@@ -317,6 +324,40 @@ resource "aws_secretsmanager_secret" "session_signing_key" {
 resource "aws_secretsmanager_secret_version" "session_signing_key" {
   secret_id     = aws_secretsmanager_secret.session_signing_key.id
   secret_string = random_password.session_signing_key.result
+}
+
+# --- Proxy wildcard TLS cert -------------------------------------------
+#
+# Terraform owns the CONTAINER and its replication; BE owns the VALUE.
+# The cert is issued and renewed by the ACME pipeline (cert_store.md §5),
+# which writes through Meandr::Secrets — create_secret, falling back to
+# put_secret_value when it already exists. So declaring the shell here
+# costs BE nothing and needs no code change.
+#
+# This exists ONLY to make replication declarative. The proxy resolves its
+# cert by NAME against its own region's Secrets Manager, so an edge with
+# no local copy gets ResourceNotFound and fails the TLS handshake — it
+# would serve nothing, and only at the first request. A cert also renews
+# roughly every 60 days, so the alternative (a copy per region) would mean
+# an apply per region per renewal, failing silently on the one forgotten.
+#
+# NO aws_secretsmanager_secret_version here on purpose: the value is not
+# Terraform's, and writing one would fight the renewal cron.
+#
+# Only OUR apexes live in SM — one per environment. Customer certs move to
+# DynamoDB precisely because per-secret replication does not scale to
+# them (cert_store.md §4.1).
+resource "aws_secretsmanager_secret" "proxy_cert" {
+  name        = "meandr/certs/${local.env}/${local.proxy_apex}"
+  description = "TLS cert + key for *.${local.proxy_apex} (${local.env}). Written by the ACME pipeline; replication managed here."
+  tags        = local.tags
+
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
 }
 
 # --- Config-stream Valkey ----------------------------------------------
@@ -1183,7 +1224,10 @@ module "mcp" {
   # uses the module default *.meandr.io. The split keeps staging traffic
   # off the production-shaped hostname and lets us roll DNS / certs on
   # meandr.live without touching production's apex.
-  dns_zone_name = "meandr.live"
+  #
+  # Single-sourced with the cert secret below it: the proxy derives its
+  # cert path from this apex, so the two cannot drift.
+  dns_zone_name = local.proxy_apex
 
   # The authorization server lives on BE's zone, not the tenant wildcard
   # above — see the module's oauth_issuer_host. Kept dark until the record

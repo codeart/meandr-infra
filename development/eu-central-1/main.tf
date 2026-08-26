@@ -106,6 +106,10 @@ module "payload_encryption_key" {
   env        = local.env
   alias_name = "meandr-payload-${local.env}"
 
+  # Dev has no separate action key, so this one key does both jobs. Say so
+  # rather than copying staging's text, where they are two distinct keys.
+  purpose = "SSE-KMS bucket default AND application envelope key"
+
   enable_key_rotation     = true
   deletion_window_in_days = 7
 

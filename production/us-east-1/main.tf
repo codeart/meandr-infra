@@ -117,6 +117,7 @@ module "payload_encryption_key" {
 
   env        = local.env
   alias_name = "meandr-payload-${local.env}"
+  purpose    = "SSE-KMS default for the payload + archive buckets"
 
   # BUCKET-AT-REST ONLY, and regional on purpose. Each region encrypts
   # only objects it reads itself, and S3 replication decrypts with the

@@ -54,7 +54,7 @@
 data "aws_caller_identity" "current" {}
 
 resource "aws_kms_key" "main" {
-  description             = "AEAD envelope key for ${var.env} approval-flow tool-call payloads (meandr-payload-${var.env})"
+  description             = "${var.purpose} — ${var.env} (${var.alias_name})"
   deletion_window_in_days = var.deletion_window_in_days
   enable_key_rotation     = var.enable_key_rotation
   multi_region            = var.multi_region
