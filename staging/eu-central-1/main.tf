@@ -507,8 +507,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "valkey_backups" {
   }
 }
 
-module "valkey_tls" {
-  source = "../../modules/valkey-tls"
+# Renamed from valkey_tls: the ROOT it issues is environment-wide, not a
+# Valkey thing. A module-level moved block relocates every resource inside
+# it, so nothing is destroyed and no certificate is reissued.
+moved {
+  from = module.valkey_tls
+  to   = module.internal_pki
+}
+
+module "internal_pki" {
+  source = "../../modules/internal-pki"
 
   env           = local.env
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -578,7 +586,7 @@ module "valkey_config_a" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
@@ -624,7 +632,7 @@ module "valkey_config_b" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b — the point of the pair
@@ -701,7 +709,7 @@ module "valkey_events_a" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
@@ -736,7 +744,7 @@ module "valkey_events_b" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
@@ -791,7 +799,7 @@ module "valkey_api_a" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
@@ -824,7 +832,7 @@ module "valkey_api_b" {
   sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
@@ -896,7 +904,7 @@ module "valkey_config_c" {
   create_timeout       = "2m"
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c — the third zone IS the point
@@ -932,7 +940,7 @@ module "valkey_events_c" {
   create_timeout       = "2m"
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
@@ -969,7 +977,7 @@ module "valkey_api_c" {
   create_timeout       = "2m"
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.valkey_tls.node_secret_arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
 
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
@@ -1078,7 +1086,7 @@ module "api" {
   ]
   api_sentinel_master = "api"
 
-  valkey_client_secret_arn = module.valkey_tls.client_secret_arn
+  valkey_client_secret_arn = module.internal_pki.client_secret_arn
 
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
@@ -1209,7 +1217,7 @@ module "mcp" {
 
   # Required to reach either fleet: the nodes run `tls-auth-clients yes`
   # and refuse a connection with no client certificate.
-  valkey_client_secret_arn = module.valkey_tls.client_secret_arn
+  valkey_client_secret_arn = module.internal_pki.client_secret_arn
 
   redis_auth_enabled    = true
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
@@ -1267,6 +1275,14 @@ output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 # Master RECORDS, not node names — they follow a promotion. Prefer the
 # Sentinel sets for anything that connects; these are for humans and for
 # a second region's bootstrap.
+# The environment's internal root, for any consumer that needs to verify an
+# internally-issued certificate. Valkey clients do NOT use this — they take
+# ca_crt from their own bundle; this is for everything else.
+output "internal_ca_secret_arn" {
+  description = "Secrets Manager ARN of the environment internal root CA (public cert only)."
+  value       = module.internal_pki.ca_secret_arn
+}
+
 output "valkey_config_master" { value = module.valkey_config_a.master_hostname }
 output "valkey_events_master" { value = module.valkey_events_a.master_hostname }
 output "valkey_api_master" { value = module.valkey_api_a.master_hostname }

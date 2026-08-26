@@ -1,5 +1,15 @@
-# The internal CA and node keypair for a Valkey fleet, plus the two
-# secrets that distribute them.
+# The environment's internal CA, plus the leaf keypairs and the secrets
+# that distribute them.
+#
+# The ROOT is environment-wide and deliberately not named for any service:
+# it is published at `meandr/pki/<env>/ca` so a future consumer that has
+# nothing to do with Valkey can verify against it without digging a
+# certificate out of some other service's bundle.
+#
+# The LEAVES are per-service and correctly named for the one they belong to
+# — `meandr/valkey/<env>/{node,client}` are the certs OF Valkey nodes and
+# FOR Valkey clients. Adding a second service means adding leaves here, not
+# a second CA.
 #
 # Separate from valkey-node because it is created ONCE per environment and
 # consumed by every node, in every region. Folding it into the node module
@@ -219,9 +229,16 @@ resource "aws_secretsmanager_secret_version" "node" {
   })
 }
 
+# The environment's internal root, on a service-neutral path.
+#
+# NOT read by the Valkey path: nodes, proxy and BE all take `ca_crt` from
+# their own bundle (`meandr/valkey/<env>/{node,client}`), which is why this
+# was previously an unread secret sitting under a `valkey/` prefix. It
+# exists so that a consumer with no Valkey bundle has somewhere legitimate
+# to get the root.
 resource "aws_secretsmanager_secret" "ca" {
-  name        = "meandr/valkey/${var.env}/ca"
-  description = "Valkey CA certificate only. Read by proxy and BE so they can verify the fleet; carries no private key."
+  name        = "meandr/pki/${var.env}/ca"
+  description = "Environment internal root CA (public certificate only, no private key). Verify any internally-issued leaf against this."
 
   dynamic "replica" {
     for_each = var.replica_regions
