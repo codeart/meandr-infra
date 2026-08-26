@@ -168,7 +168,7 @@ data "aws_region" "current" {}
 
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.private.id]
 
@@ -179,7 +179,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
+  service_name      = "com.amazonaws.${data.aws_region.current.region}.dynamodb"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.private.id]
 
@@ -274,5 +274,5 @@ resource "aws_route53_zone_association" "internal" {
 
   zone_id    = var.existing_zone_id
   vpc_id     = aws_vpc.main.id
-  vpc_region = data.aws_region.current.name
+  vpc_region = data.aws_region.current.region
 }

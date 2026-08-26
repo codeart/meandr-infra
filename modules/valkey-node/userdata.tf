@@ -537,7 +537,7 @@ locals {
     [Service]
     Type=oneshot
     Environment=AUTH_SECRET=${var.auth_secret_arn}
-    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.name}
+    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.region}
     ExecStart=/usr/local/bin/valkey-metrics.sh
     UNIT
 
@@ -645,7 +645,7 @@ locals {
     Environment=AUTH_SECRET=${var.auth_secret_arn}
     Environment=BACKUP_BUCKET=${var.backup_bucket}
     Environment=FLEET=${var.fleet}
-    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.name}
+    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.region}
     ExecStart=/usr/local/bin/valkey-backup.sh
     UNIT
 
@@ -712,7 +712,7 @@ locals {
     [Service]
     Environment=ZONE_ID=${var.dns_zone_id}
     Environment=MASTER_RECORD=${local.master_record}
-    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.name}
+    Environment=AWS_DEFAULT_REGION=${data.aws_region.current.region}
     UNIT
     chown valkey:valkey /etc/valkey/sentinel.conf
     chmod 0640 /etc/valkey/sentinel.conf

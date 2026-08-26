@@ -42,7 +42,7 @@ data "aws_route53_zone" "public" {
 # --- Locals -------------------------------------------------------------
 
 locals {
-  region = data.aws_region.current.name
+  region = data.aws_region.current.region
   image  = "${var.ecr_registry}/${var.image_repository}:${var.image_tag}"
 
   # 3-letter MEANDR_ENV per project_redis_topology convention.
