@@ -782,6 +782,30 @@ resource "aws_iam_role_policy_attachment" "acme_capture" {
   policy_arn = aws_iam_policy.capture[0].arn
 }
 
+# The ACTION-form key, granted SEPARATELY from capture and gated on the key
+# existing rather than on capture_enabled.
+#
+# BE unwraps upstream elicitation answers to show an approver what was
+# submitted. That has nothing to do with payload capture — but the grant
+# used to sit inside the capture policy, so turning capture off would have
+# silently stopped form decryption. Two features, one switch, no
+# relationship.
+resource "aws_iam_role_policy" "task_action_key" {
+  count = var.action_key_enabled ? 1 : 0
+
+  name = "action-form-key"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
+      Resource = var.envelope_encryption_key_arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "task_archive_query" {
   count      = var.capture_enabled ? 1 : 0
   role       = aws_iam_role.task.name

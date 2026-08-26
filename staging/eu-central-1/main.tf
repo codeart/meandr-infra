@@ -155,12 +155,54 @@ module "payload_encryption_key" {
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
 
-  # Staging single-region. Production is multi_region=true (planned
-  # multi-region rollout).
+  # BUCKET-AT-REST ONLY, and single-region on purpose.
   #
-  # TODO(staging-reset): same rationale as cred_encryption_key above —
-  # flip to `true` during the planned staging reset.
+  # S3 replication decrypts with the source key and re-encrypts with the
+  # destination's, so a per-region bucket key replicates fine — there is
+  # nothing to gain from a multi-region key here, and flipping the flag
+  # would recreate the CMK and orphan every payload and archive object
+  # already written under it.
+  #
+  # The application envelope moved to its own key (below), which is what
+  # actually needed to exist in more than one region.
   multi_region = false
+
+  tags = local.tags
+}
+
+# The ACTION-form key — payloadcrypt, which wraps the answer to an
+# UPSTREAM-initiated elicitation. Separate from the bucket key because the
+# two have different geography, not because they hold different secrets.
+#
+# Only upstream forms are encrypted. Our own approval form rides in
+# plaintext on purpose: it is an OTP and a comment, BE must read the OTP to
+# validate it, and encrypting it would hand BE kms:Decrypt over every form
+# to check a six-digit code. An upstream form can ask for anything — a
+# token, a card number — so it must never sit on the event stream in clear.
+# See buildResponded in internal/middleware/action_responded.go.
+#
+# A form is wrapped by whichever region's proxy handled the elicitation and
+# unwrapped by BE in the primary region. A region-local key would put a
+# transatlantic KMS call on one side or the other; a MULTI-REGION key has a
+# replica in each region, so both ends stay local.
+#
+# Splitting it costs nothing and loses nothing: the bucket key keeps every
+# object already written under it, and envelopes record their own CMK
+# (payloadcrypt.Envelope.CMK, passed to kms:Decrypt), so envelopes wrapped
+# by the older key keep decrypting for as long as it exists. Both keys are
+# granted to both consumers for exactly that reason.
+module "action_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-action-${local.env}"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+
+  # The whole point of this key. IMMUTABLE — created right the first time
+  # rather than flipped later, which is what the bucket key cannot do.
+  multi_region = true
 
   tags = local.tags
 }
@@ -946,6 +988,11 @@ module "api" {
   archive_bucket_arn         = one(module.archive_bucket[*].arn)
   payloads_bucket_arn        = module.payloads_bucket.arn
   payload_encryption_key_arn = module.payload_encryption_key.key_arn
+
+  # BE unwraps upstream form answers, which the proxy wrapped with the
+  # action key. Granted alongside the bucket key, not instead of it.
+  action_key_enabled          = true
+  envelope_encryption_key_arn = module.action_encryption_key.key_arn
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -1052,11 +1099,17 @@ module "mcp" {
   # the proxy has capture code — nothing reads MEANDR_CAPTURE_BUCKET yet
   # — but wiring them now means the writer ships without a second task
   # definition revision and a second rolling restart.
-  capture_enabled              = true
-  payloads_bucket              = module.payloads_bucket.bucket
-  payloads_bucket_arn          = module.payloads_bucket.arn
-  payload_encryption_key_arn   = module.payload_encryption_key.key_arn
-  payload_encryption_key_alias = module.payload_encryption_key.alias_name
+  capture_enabled            = true
+  payloads_bucket            = module.payloads_bucket.bucket
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
+
+  # The ALIAS is the action key — it is what payloadcrypt wraps with. The
+  # bucket key is granted above but never named in env: SSE-KMS is a
+  # property of the bucket, not something the proxy chooses per write.
+  action_key_enabled           = true
+  envelope_encryption_key_arn  = module.action_encryption_key.key_arn
+  payload_encryption_key_alias = module.action_encryption_key.alias_name
 
   # Staging customer-facing MCP traffic lands at *.meandr.live. Production
   # uses the module default *.meandr.io. The split keeps staging traffic

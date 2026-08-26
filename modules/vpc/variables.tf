@@ -14,6 +14,25 @@ variable "enable_nat" {
   default     = true
 }
 
+variable "existing_zone_id" {
+  description = <<-EOT
+    Zone id of the environment's private hosted zone. EMPTY creates it —
+    which exactly one region per environment should do.
+
+    Every later region passes the first region's zone id and ASSOCIATES
+    with it. A region that creates its own zone of the same name is the
+    collision this exists to prevent: names resolve locally, so a node
+    told to replicate from another region's host silently attaches to
+    whatever shares that name at home. No error, healthy-looking link,
+    wrong master.
+
+    Sentinel raises the stakes — it answers with hostnames, so every name
+    it can hand out has to mean the same node from anywhere.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "internal_dns_zone" {
   description = <<-EOT
     Name of the Route 53 private hosted zone created for this VPC. Used for

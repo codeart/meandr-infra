@@ -210,18 +210,57 @@ resource "aws_nat_gateway" "main" {
 
 # --- Internal DNS --------------------------------------------------------
 #
-# Private hosted zone scoped to this VPC. Future modules (RDS, ElastiCache,
-# EC2 Redis) add records here. Connection strings use env-tagged hostnames
-# like `pg.staging.meandr.internal` so cross-env config accidents are obvious.
+# ONE private hosted zone per environment, associated with every region's
+# VPC — not one zone per region sharing a name.
+#
+# That distinction is the whole design. Two same-named private zones on
+# peered VPCs is a collision, and the failure is silent rather than loud:
+# a node told to replicate from `config-euc1a.valkey.<zone>` resolves it in
+# its OWN zone and attaches to whatever lives there, with no error and a
+# healthy-looking replication link. Sentinel makes it worse, because it
+# answers with hostnames — so every name it can return has to mean the same
+# node everywhere, which is a property of the zone, not of any record.
+#
+# The FIRST region creates the zone. Every later region passes
+# existing_zone_id and associates instead. A region that creates its own is
+# the bug this is built to prevent.
+#
+# `moved` below, not a rewrite: adding count to a live zone would otherwise
+# read as destroy-and-recreate, taking every record with it.
 
 resource "aws_route53_zone" "internal" {
+  count = var.existing_zone_id == "" ? 1 : 0
+
   name = var.internal_dns_zone
 
   vpc {
     vpc_id = aws_vpc.main.id
   }
 
+  # The zone outlives any single region's VPC: a later region associates
+  # with it, and Terraform would otherwise try to drop those associations
+  # to match this block.
+  lifecycle {
+    ignore_changes = [vpc]
+  }
+
   tags = merge(var.tags, {
     Name = "Internal DNS"
   })
+}
+
+moved {
+  from = aws_route53_zone.internal
+  to   = aws_route53_zone.internal[0]
+}
+
+# A later region joins the environment's zone. vpc_region is explicit
+# because the zone is global while the VPC is not, and the provider's
+# region is not necessarily this VPC's.
+resource "aws_route53_zone_association" "internal" {
+  count = var.existing_zone_id == "" ? 0 : 1
+
+  zone_id    = var.existing_zone_id
+  vpc_id     = aws_vpc.main.id
+  vpc_region = data.aws_region.current.name
 }

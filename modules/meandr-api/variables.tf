@@ -414,7 +414,27 @@ variable "payloads_bucket_arn" {
 }
 
 variable "payload_encryption_key_arn" {
-  description = "Payload CMK ARN. Both buckets are SSE-KMS, so the caller needs GenerateDataKey to write and Decrypt to read."
+  description = "BUCKET-at-rest CMK ARN. Both buckets are SSE-KMS, so the caller needs GenerateDataKey to write and Decrypt to read."
+  type        = string
+  default     = ""
+}
+
+variable "action_key_enabled" {
+  description = "Explicit on/off gate for the action-form key grant. Separate from envelope_encryption_key_arn for the same reason redis_auth_enabled is separate from its secret ARN: `count` needs a value known at PLAN time, and the ARN of a not-yet-created KMS key is not one."
+  type        = bool
+  default     = false
+}
+
+variable "envelope_encryption_key_arn" {
+  description = <<-EOT
+    APPLICATION envelope CMK ARN — payloadcrypt. BE unwraps elicitation
+    form answers with it, wrapped by whichever region's proxy handled the
+    form, which is why it is multi-region while the bucket key is not.
+
+    Granted alongside the bucket key. Envelopes record their own CMK, so
+    ones wrapped by an older key keep decrypting as long as that key
+    exists and is still granted.
+  EOT
   type        = string
   default     = ""
 }

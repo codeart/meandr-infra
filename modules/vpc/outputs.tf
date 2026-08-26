@@ -19,13 +19,13 @@ output "private_subnet_ids" {
 }
 
 output "internal_dns_zone_id" {
-  description = "Route 53 private hosted zone ID. Downstream modules add records here."
-  value       = aws_route53_zone.internal.zone_id
+  description = "The environment's private hosted zone ID — created here in the first region, passed in and associated in every later one. Downstream modules add records without caring which."
+  value       = var.existing_zone_id != "" ? var.existing_zone_id : aws_route53_zone.internal[0].zone_id
 }
 
 output "internal_dns_zone_name" {
   description = "Internal DNS zone name (e.g. `staging.meandr.internal`). Use as a suffix when constructing record names."
-  value       = aws_route53_zone.internal.name
+  value       = var.internal_dns_zone
 }
 
 output "azs" {

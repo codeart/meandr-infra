@@ -381,12 +381,33 @@ variable "payloads_bucket_arn" {
 }
 
 variable "payload_encryption_key_arn" {
-  description = "Payload CMK ARN. Required because the bucket is SSE-KMS: an S3 PUT needs kms:GenerateDataKey from the CALLER, and a ranged GET on the approval replay path needs kms:Decrypt. Bucket keys cut the call VOLUME, not the permission."
+  description = "BUCKET-at-rest CMK ARN. Required because the bucket is SSE-KMS: an S3 PUT needs kms:GenerateDataKey from the CALLER, and a ranged GET on the approval replay path needs kms:Decrypt. Bucket keys cut the call VOLUME, not the permission."
+  type        = string
+  default     = ""
+}
+
+variable "action_key_enabled" {
+  description = "Explicit on/off gate for the action-form key grant. Separate from envelope_encryption_key_arn for the same reason redis_auth_enabled is separate from its secret ARN: `count` needs a value known at PLAN time, and the ARN of a not-yet-created KMS key is not one."
+  type        = bool
+  default     = false
+}
+
+variable "envelope_encryption_key_arn" {
+  description = <<-EOT
+    APPLICATION envelope CMK ARN — payloadcrypt. Distinct from the bucket
+    key because it must exist in every proxy region: a form is wrapped
+    here and unwrapped by BE in the primary region.
+
+    Granted ALONGSIDE the bucket key, not instead of it. The proxy needs
+    both — one to write SSE-KMS objects, one to wrap envelopes — and
+    envelopes carry their own CMK, so historical ones keep decrypting
+    against whichever key wrapped them.
+  EOT
   type        = string
   default     = ""
 }
 
 variable "payload_encryption_key_alias" {
-  description = "Payload CMK alias (with `alias/` prefix). Goes into MEANDR_PAYLOAD_KMS_KEY_ALIAS. No default — the proxy won't boot without it, so a missing value must fail the plan."
+  description = "Envelope CMK alias (with `alias/` prefix). Goes into MEANDR_PAYLOAD_KMS_KEY_ALIAS — the key payloadcrypt WRAPS with. No default: the proxy won't boot without it, so a missing value must fail the plan."
   type        = string
 }

@@ -473,6 +473,30 @@ resource "aws_iam_role_policy" "task_capture" {
   })
 }
 
+# The ACTION-form key, granted SEPARATELY from capture and gated on the key
+# existing rather than on capture_enabled.
+#
+# payloadcrypt wraps upstream elicitation answers, which has nothing to do
+# with payload capture — but the grant used to live in the capture policy,
+# so turning capture off would have left the proxy holding the alias
+# (MEANDR_PAYLOAD_KMS_KEY_ALIAS, which it refuses to boot without) and no
+# permission to use it. Two features, one switch, no relationship.
+resource "aws_iam_role_policy" "task_action_key" {
+  count = var.action_key_enabled ? 1 : 0
+
+  name = "action-form-key"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:GenerateDataKey", "kms:Decrypt", "kms:DescribeKey"]
+      Resource = var.envelope_encryption_key_arn
+    }]
+  })
+}
+
 # Execution role gets SM read on the proxy-side secrets we inject as task
 # def `secrets` (env-vars-from-SM). Distinct from the task role above —
 # task role is the runtime identity (proxy code), execution role is what
