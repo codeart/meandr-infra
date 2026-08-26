@@ -14,6 +14,33 @@ variable "enable_nat" {
   default     = true
 }
 
+variable "nat_pinned_azs" {
+  description = <<-EOT
+    AZs the regional NAT gateway holds an address in. One EIP each.
+
+    It SERVES every AZ regardless — an AZ with no address of its own is
+    processed by one that has it. So this is a cost and IP-stability
+    control, not a coverage one: pin the AZs that actually egress, and let
+    the rest ride.
+
+    Supplying this list puts the gateway in MANUAL mode, which disables
+    auto-expansion for good. That is deliberate. In automatic mode AWS
+    adds an address in any AZ where it detects an ENI, so the egress IP
+    set — and the bill — change on their own as workloads move, and a
+    customer's firewall allow-list silently stops being complete.
+
+    Staging pins one AZ; production pins two, so losing a zone leaves an
+    address behind.
+
+    EMPTY does not mean "no NAT" — that is `enable_nat`. Empty means
+    AUTOMATIC mode: AWS picks the addresses and expands into any AZ where
+    it finds an ENI, which is the behaviour this variable exists to switch
+    off.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "existing_zone_id" {
   description = <<-EOT
     Zone id of the environment's private hosted zone. EMPTY creates it —

@@ -150,7 +150,12 @@ module "vpc" {
 
   cidr_block        = "10.20.0.0/16"
   azs               = ["${local.region}a", "${local.region}b"]
-  enable_nat        = true
+  enable_nat = true
+
+  # Two addresses, so losing a zone still leaves one behind. Pinned rather
+  # than automatic: production egress IPs must be stable enough to put on a
+  # customer's allow-list, and auto-expansion would add addresses on its own.
+  nat_pinned_azs = ["${local.region}a", "${local.region}b"]
   internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags

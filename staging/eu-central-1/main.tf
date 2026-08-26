@@ -113,8 +113,15 @@ module "vpc" {
   cidr_block = "10.10.0.0/16"
   # APPEND only. Subnet ids are output in this order and callers index them
   # positionally, so inserting an AZ would move existing nodes.
-  azs               = ["${local.region}a", "${local.region}b", "${local.region}c"]
-  enable_nat        = true
+  azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  enable_nat = true
+
+  # One address, in AZ-a, serving all three zones. AZ-c holds only the
+  # Sentinel arbiters, which do not egress at steady state, and AZ-b's
+  # workloads can be processed by AZ-a's address — so a second address
+  # would be paid for and idle. Production pins two.
+  nat_pinned_azs = ["${local.region}a"]
+
   internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags

@@ -125,7 +125,7 @@ resource "aws_route" "private_nat" {
 
   route_table_id         = aws_route_table.private.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.main[0].id
+  nat_gateway_id         = aws_nat_gateway.regional[0].id
 }
 
 resource "aws_route_table_association" "private" {
@@ -190,28 +190,64 @@ resource "aws_vpc_endpoint" "dynamodb" {
 
 # --- NAT Gateway (conditional) -------------------------------------------
 #
-# Single NAT, in the first AZ's public subnet. Cheaper than per-AZ NAT but
-# means private workloads in other AZs egress cross-AZ ($0.01/GB inter-AZ
-# transfer). Acceptable for staging; production should consider multi-NAT
-# when traffic grows.
+# REGIONAL NAT in manual mode: one gateway for the VPC, holding addresses
+# in `nat_pinned_azs` only, and serving every AZ — including the ones it
+# holds no address in. Traffic from an unpinned AZ is processed by an
+# address in a pinned one.
+#
+# Manual mode is the whole point. Supplying availability_zone_address
+# DISABLES auto-expansion permanently: the gateway will not quietly add an
+# address in a new AZ when a workload appears there. That keeps the bill
+# and the egress IP set fixed and predictable — an allow-list on a
+# customer's firewall stays correct, which auto-expansion cannot promise.
+#
+# The cost shape is the reason to pin fewer AZs than the VPC spans: AZ-c
+# holds only a Sentinel arbiter, which needs no egress at steady state, so
+# paying for an address there buys nothing.
 
-resource "aws_eip" "nat" {
-  count = var.enable_nat ? 1 : 0
+# Deliberately NOT the old `aws_eip.nat` / `aws_nat_gateway.main`
+# addresses. Provider 6.61 cannot plan a zonal -> regional transition on an
+# existing gateway: it fails during diff with
+#
+#   setting regional_nat_gateway_auto_mode to ForceNew:
+#   ForceNew: No changes for regional_nat_gateway_auto_mode
+#
+# and -replace hits the same path, so there is no way to express the change
+# in place. New addresses make it an ordinary create instead: Terraform
+# builds the regional gateway, repoints the route, then tears down the
+# zonal one — so egress is only interrupted for the route update rather
+# than for the minutes a NAT takes to delete and recreate.
+#
+# The egress IP changes as a result, because an EIP cannot be attached to
+# two gateways at once. Fine here; a region with customer allow-lists would
+# want the slower reuse instead.
+
+resource "aws_eip" "regional_nat" {
+  count = var.enable_nat ? length(var.nat_pinned_azs) : 0
 
   domain = "vpc"
 
   tags = merge(var.tags, {
-    Name = "NAT EIP"
+    Name = "NAT EIP ${var.nat_pinned_azs[count.index]}"
   })
 
   depends_on = [aws_internet_gateway.main]
 }
 
-resource "aws_nat_gateway" "main" {
+resource "aws_nat_gateway" "regional" {
   count = var.enable_nat ? 1 : 0
 
-  allocation_id = aws_eip.nat[0].id
-  subnet_id     = aws_subnet.public[var.azs[0]].id
+  availability_mode = "regional"
+  vpc_id            = aws_vpc.main.id
+
+  # No subnet_id: a regional gateway belongs to the VPC, not a subnet.
+  dynamic "availability_zone_address" {
+    for_each = var.nat_pinned_azs
+    content {
+      availability_zone = availability_zone_address.value
+      allocation_ids    = [aws_eip.regional_nat[index(var.nat_pinned_azs, availability_zone_address.value)].id]
+    }
+  }
 
   tags = merge(var.tags, {
     Name = "Main NAT"
