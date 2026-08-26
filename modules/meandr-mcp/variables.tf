@@ -411,3 +411,22 @@ variable "payload_encryption_key_alias" {
   description = "Envelope CMK alias (with `alias/` prefix). Goes into MEANDR_PAYLOAD_KMS_KEY_ALIAS — the key payloadcrypt WRAPS with. No default: the proxy won't boot without it, so a missing value must fail the plan."
   type        = string
 }
+
+variable "create_wildcard_record" {
+  description = <<-EOT
+    Whether this region owns the `*.<dns_zone_name>` A record.
+
+    TRUE only while the environment is single-region. The record names one
+    apex, so one owner: two regions both creating it means two state files
+    overwriting each other's answer.
+
+    Multi-region sets this FALSE everywhere and lets
+    modules/global-accelerator own the name, fronting every region's NLB
+    behind one anycast pair. Flipping it to false DESTROYS the record, and
+    the accelerator then creates it — Route 53 cannot hold both, so expect
+    a brief NXDOMAIN between the two applies. Sequence that deliberately in
+    production.
+  EOT
+  type        = bool
+  default     = true
+}

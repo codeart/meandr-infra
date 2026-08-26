@@ -695,8 +695,17 @@ module "proxy" {
 }
 
 # --- Wildcard DNS *.<dns_zone_name> → NLB ------------------------------
-
+#
+# SINGLE-REGION ONLY. This record names one apex, so exactly one thing in
+# the environment may own it — and with two regions that would be two state
+# files fighting over the same name, each convinced it was right.
+#
+# Multi-region hands it to the accelerator instead (modules/global-
+# accelerator), which fronts every region's NLB behind one anycast pair.
+# Set false and the region stands up its NLB without claiming DNS, which is
+# what lets an edge exist before it serves traffic.
 resource "aws_route53_record" "wildcard" {
+  count    = var.create_wildcard_record ? 1 : 0
   provider = aws.dns
 
   zone_id = data.aws_route53_zone.public.zone_id
