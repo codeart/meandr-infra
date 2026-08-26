@@ -64,20 +64,25 @@ resource "aws_dynamodb_table" "main" {
     attribute_name = ""
   }
 
-  # Global Tables — one replica entry per additional region. Empty for
-  # single-region setups. AWS provisions the replica asynchronously;
-  # cross-region propagation is sub-second typically, but the BE-side
-  # rotation flow (renew → write → confirm-via-consistent-read → bump
-  # cred_version) guarantees the proxy never sees a stale read after
-  # the version bump arrives.
-  dynamic "replica" {
-    for_each = var.replica_regions
-    content {
-      region_name = replica.value
-      # PITR replicates from the leader's setting automatically; no
-      # override needed here.
-    }
-  }
+  # Always on, because it is what makes the table REPLICABLE without
+  # naming who replicates it. Global Tables V2 is fed BY the stream, so a
+  # replica cannot exist without one in NEW_AND_OLD_IMAGES.
+  #
+  # This table has no `replica` blocks on purpose. An edge declares
+  # itself with `aws_dynamodb_table_replica` in its OWN state, pointing
+  # at this table's ARN — so the primary never holds a list of its edges,
+  # and a region is added or removed without touching this one. The two
+  # forms are mutually exclusive; adding `replica` here would fight it.
+  #
+  # Streams are billed per read, and nothing reads this one until a
+  # replica exists, so leaving it on costs nothing.
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
+  # NOTE: a replica is useless unless the cred CMK is multi-Region.
+  # Decrypt resolves the key from the ciphertext blob, and that blob
+  # names a REGIONAL key — an edge holding replicated rows it cannot
+  # decrypt fails every authenticated upstream call.
 
   tags = merge(var.tags, {
     Name = var.name

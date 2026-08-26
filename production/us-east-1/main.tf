@@ -118,10 +118,21 @@ module "payload_encryption_key" {
   env        = local.env
   alias_name = "meandr-payload-${local.env}"
 
-  # Multi-region for the same reason as cred_encryption_key above:
-  # production goes multi-region, multi_region is immutable, set it
-  # correctly at creation time.
-  multi_region = true
+  # BUCKET-AT-REST ONLY, and regional on purpose. Each region encrypts
+  # only objects it reads itself, and S3 replication decrypts with the
+  # source key and re-encrypts with the destination's, so no payload
+  # ciphertext ever needs one key to span regions.
+  #
+  # Regional is the GUARDRAIL, not merely the cheaper default. A key that
+  # cannot be replicated cannot be quietly adopted for something that
+  # crosses regions — that misuse would work in one region and fail in the
+  # next, which is the hardest shape of bug to find. Immutability is doing
+  # useful work here: keep it.
+  #
+  # The envelope key (elicitation forms) is the one that crosses and must
+  # be multi-region. Staging has it as `action_encryption_key`; production
+  # gains it when this region is rebuilt from staging.
+  multi_region = false
 
   enable_key_rotation     = true
   deletion_window_in_days = 30
@@ -198,7 +209,7 @@ module "creds_table" {
 
   name = "meandr-creds-${local.env}"
 
-  replica_regions             = [] # add eu-central-1 etc. when proxy goes multi-region
+  # Secondary regions declare themselves — see the module.
   pitr_enabled                = true
   deletion_protection_enabled = true
 

@@ -64,6 +64,23 @@ locals {
   # silently stand up an empty database whose queries return nothing.
   primary = true
 
+  # Regions that hold an edge. SECRETS ONLY — everything else an edge
+  # needs, it declares for itself.
+  #
+  # Secrets Manager is the one thing that cannot be inverted: there is no
+  # edge-owned replica resource, only a `replica` block on the secret in
+  # its home region. The alternative — each edge minting its own copy from
+  # a data source — trades AWS-managed propagation for Terraform-managed,
+  # and these particular values (the Valkey CA, the shared AUTH token) are
+  # what the cross-region link authenticates WITH. A half-rotated
+  # environment breaks replication silently, so the copies must move
+  # together, without an apply.
+  #
+  # Listed before the region exists on purpose: a replica is an attribute
+  # of a secret this state file owns, so it cannot be declared from the
+  # edge. This is the one prerequisite that keeps the edge a single apply.
+  edge_regions = ["us-east-1"]
+
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
@@ -106,9 +123,8 @@ module "vpc" {
 # fetched from SM. See docs/credential_store.md for the full Ruby↔Go
 # wire contract.
 #
-# Staging is single-region — no replica_regions on the table. When
-# production launches a secondary proxy region, that caller adds the
-# region to `replica_regions` and a Global Tables replica spins up.
+# Replication is declared by the edge, not here — see the module. This
+# region only makes the table replicable and never names a consumer.
 
 module "creds_table" {
   source = "../../modules/dynamodb-creds-table"
@@ -118,6 +134,11 @@ module "creds_table" {
   pitr_enabled                = false # staging: throwaway data, no audit need
   deletion_protection_enabled = false # staging: easy teardown
 
+  # No replica list here. The proxy resolves upstream credentials on the
+  # request path, so every region needs this table locally — but an edge
+  # declares ITSELF with aws_dynamodb_table_replica in its own state. This
+  # region only makes the table replicable (streams), and never learns who
+  # took it up.
   tags = local.tags
 }
 
@@ -127,21 +148,28 @@ module "cred_encryption_key" {
   env        = local.env
   alias_name = "meandr-cred-${local.env}"
 
-  # Annual auto-rotation on. Dated SM secrets (per data key) live under
-  # meandr/mcp/staging/key/<date> and are managed by the BE bootstrap +
-  # rotation tasks — not in TF.
+  # Annual auto-rotation on. There is NO data-key layer and no bootstrap:
+  # BE encrypts each cred blob directly with KMS.Encrypt(KeyId=alias), so
+  # replacing this key needs nothing seeded — only the existing blobs
+  # re-written. See credential_store.md §"terraform apply".
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
 
-  # Staging is intentionally single-region (eu-central-1 only).
-  # multi_region defaults to false; explicit here for clarity.
+  # Multi-region, because the cred store is the one dataset that CROSSES
+  # regions: BE encrypts a blob once, the Global Table replicates it, and
+  # every region's proxy must decrypt that same ciphertext on the request
+  # path. Decrypt resolves the key from the blob, and a single-region key
+  # simply does not exist at the edge's KMS endpoint.
   #
-  # TODO(staging-reset): flip to `true` during the planned staging
-  # reset (migration consolidation + test-data wipe). multi_region is
-  # IMMUTABLE, and the reset destroys the CMK anyway — the natural
-  # moment to correct this without a data migration. Costs the same
-  # as single-region until we actually add replicas.
-  multi_region = false
+  # Contrast the payload key, which stays regional — each region encrypts
+  # objects only it reads, and S3 replication re-encrypts with the
+  # destination's key, so no payload ciphertext ever needs one key to
+  # span regions.
+  #
+  # Replicas are declared by the edge (aws_kms_replica_key), not listed
+  # here: this flag makes the key REPLICABLE without naming who takes it
+  # up, exactly like the creds table's stream.
+  multi_region = true
 
   tags = local.tags
 }
@@ -165,6 +193,12 @@ module "payload_encryption_key" {
   #
   # The application envelope moved to its own key (below), which is what
   # actually needed to exist in more than one region.
+  #
+  # Regional is also the GUARDRAIL, not merely the cheaper default. A key
+  # that cannot be replicated cannot be quietly adopted for something that
+  # crosses regions — that misuse would work in one region and fail in the
+  # next, which is the hardest shape of bug to find. Immutability is doing
+  # useful work here: keep it.
   multi_region = false
 
   tags = local.tags
@@ -234,6 +268,16 @@ resource "aws_secretsmanager_secret" "redis_auth" {
   name        = "meandr/redis/${local.env}/auth-token"
   description = "Shared Redis AUTH token — config-stream + event-stream + api-redis."
   tags        = local.tags
+
+  # One token per environment, so an edge node needs THIS value — but read
+  # from its own region, since it fetches at boot and a node that cannot
+  # reach Secrets Manager does not start.
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "redis_auth" {
@@ -258,6 +302,16 @@ resource "aws_secretsmanager_secret" "session_signing_key" {
   name        = "meandr/session/${local.env}/signing-key"
   description = "HS256 key signing client-session JWTs (Mcp-Session-Id) on the proxy."
   tags        = local.tags
+
+  # Every proxy task in the environment must verify with the same key —
+  # an agent's next call can land in any region, and a session signed in
+  # one must validate in another. Same value, local copy.
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "session_signing_key" {
@@ -411,9 +465,13 @@ module "valkey_tls" {
   env           = local.env
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  # No replicas yet — one region. Add the second region here when it lands,
-  # or its nodes cannot read the secret at all.
-  replica_regions = []
+  # One CA for the whole environment. It MUST be shared, not regenerated
+  # per region: config replicates cross-region over mTLS, so an edge
+  # replica presents a certificate the primary's master has to trust.
+  #
+  # The leaf needs no change — `*.valkey.<zone>` already covers every node
+  # name in every region — so this adds read-only copies, nothing rotates.
+  replica_regions = local.edge_regions
 
   tags = local.tags
 }
