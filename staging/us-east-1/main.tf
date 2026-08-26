@@ -67,6 +67,10 @@ locals {
     internal_dns_zone_id = "Z05780018F0P6ONCICNQ"
   }
 
+  # Node-name prefixes for every OTHER region, for the CONFIG Sentinel
+  # list. Mirror of the same local in eu-central-1 — see the comment there.
+  peer_node_codes = ["euc1"]
+
   valkey_version     = "9.1.1"
   valkey_source_path = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
 

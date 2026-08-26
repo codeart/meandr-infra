@@ -97,6 +97,23 @@ locals {
   # and replaces no node.
   edge_cidrs = ["10.20.0.0/16"]
 
+  # Node-name prefixes for every OTHER region, used to build the CONFIG
+  # Sentinel list. `config` is one Sentinel set spanning regions, so a
+  # proxy here can discover through a Sentinel there when its own are
+  # gone — which is the difference between a degraded region and a dead
+  # one.
+  #
+  # Names, not addresses, and predictable by construction: the naming
+  # scheme is <fleet>-<region><az>.valkey.<zone> and the zone is shared,
+  # so these resolve without this state file knowing anything the edge
+  # owns. They resolve to nothing until that region exists, which is
+  # harmless — the client tries addresses in order and these come last.
+  #
+  # Does NOT apply to `events`: those are independent per-region fleets
+  # with separate Sentinel sets and separate masters, so a remote Sentinel
+  # there would name a master that is not this region's.
+  peer_node_codes = ["use1"]
+
   # Public apex this environment's proxy serves. Drives both the NLB
   # wildcard and the cert path the proxy reads at handshake time
   # (meandr/certs/<env>/<apex>), so the two cannot disagree.
@@ -1215,12 +1232,28 @@ module "mcp" {
   #
   # Local Sentinels by necessity: Sentinel answers with a node HOSTNAME,
   # so another region's set would name something this VPC cannot resolve.
+  # OWN REGION FIRST, then every other region's.
+  #
+  # Order is load-bearing and does exactly one thing: Sentinel DISCOVERY
+  # walks the list in order until one answers, and is not latency-aware.
+  # Which REPLICA gets read is a separate mechanism — the client measures
+  # RTT and picks the nearest (rdb.New, RouteByLatency) — so the remote
+  # entries cost nothing while the local ones answer, and become the
+  # difference between degraded and dead when they stop.
   config_reader_endpoint = module.valkey_config_a.master_hostname
-  config_sentinel_addrs = [
-    "${module.valkey_config_a.hostname}:26379",
-    "${module.valkey_config_b.hostname}:26379",
-    "${module.valkey_config_c.hostname}:26379",
-  ]
+  config_sentinel_addrs = concat(
+    [
+      "${module.valkey_config_a.hostname}:26379",
+      "${module.valkey_config_b.hostname}:26379",
+      "${module.valkey_config_c.hostname}:26379",
+    ],
+    flatten([
+      for code in local.peer_node_codes : [
+        for az in ["a", "b", "c"] :
+        "config-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ]
+    ]),
+  )
   config_sentinel_master = "config"
 
   event_writer_endpoint = module.valkey_events_a.master_hostname
