@@ -81,6 +81,22 @@ locals {
   # edge. This is the one prerequisite that keeps the edge a single apply.
   edge_regions = ["us-east-1"]
 
+  # Edge VPC ranges, for security-group ingress only.
+  #
+  # Named literally because SG REFERENCES DO NOT CROSS REGIONS — an edge's
+  # nodes cannot be granted by security-group id, only by CIDR
+  # (valkey_fleets.md §6). The edge's `config` replicas dial this region's
+  # master on 6379, and all six Sentinels gossip both ways on 26379.
+  #
+  # This is a CIDR list, not a dependency: nothing here reads the edge's
+  # state, and the edge is still what declares its own peering, replicas
+  # and routes. Same category as edge_regions above.
+  #
+  # Safe to widen — client_cidrs feeds only aws_vpc_security_group_ingress_rule
+  # (for_each keyed by CIDR), never user_data, so adding an entry adds rules
+  # and replaces no node.
+  edge_cidrs = ["10.20.0.0/16"]
+
   # Public apex this environment's proxy serves. Drives both the NLB
   # wildcard and the cert path the proxy reads at handshake time
   # (meandr/certs/<env>/<apex>), so the two cannot disagree.
@@ -593,7 +609,7 @@ module "valkey_config_a" {
 
   # The whole VPC for now: ECS tasks and the peer node both live here.
   # Narrows to the task subnets once the client set is settled.
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -637,7 +653,7 @@ module "valkey_config_b" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b — the point of the pair
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -714,7 +730,7 @@ module "valkey_events_a" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -749,7 +765,7 @@ module "valkey_events_b" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -804,7 +820,7 @@ module "valkey_api_a" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -837,7 +853,7 @@ module "valkey_api_b" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -909,7 +925,7 @@ module "valkey_config_c" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c — the third zone IS the point
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -945,7 +961,7 @@ module "valkey_events_c" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -982,7 +998,7 @@ module "valkey_api_c" {
   vpc_id    = module.vpc.vpc_id
   subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
 
-  client_cidrs = [module.vpc.vpc_cidr_block]
+  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
 
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
