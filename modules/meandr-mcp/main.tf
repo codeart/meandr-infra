@@ -216,16 +216,68 @@ locals {
 # cert lookup (cert.Cache has no live Provider data). The routing shape
 # is correct; the cert side is what's missing.
 
+# Security groups are attachable ONLY AT CREATION for a network load
+# balancer — there is no way to add them later, which is why this list
+# forces replacement rather than an update.
+#
+# Required for client-IP preservation: a fronting layer will not preserve
+# the caller's address through an NLB that has no security groups. Without
+# preservation the proxy sees infrastructure addresses instead of clients,
+# and clientguard's per-client limits collapse onto a handful of sources —
+# meaningless at best, and at worst tenants throttling each other.
 resource "aws_lb" "main" {
   name               = "meandr-mcp-nlb"
   internal           = false
   load_balancer_type = "network"
   subnets            = var.public_subnet_ids
+  security_groups    = [aws_security_group.nlb.id]
 
   enable_deletion_protection       = false
   enable_cross_zone_load_balancing = true
 
   tags = merge(local.base_tags, { Name = "MCP NLB" })
+}
+
+# World-open on the proxy's two ports, and correct: this is the public
+# entry point and the proxy terminates TLS itself. Recorded in SOC-2.md §2
+# as expected rather than a finding.
+#
+# Cannot be narrowed to whatever fronts it, precisely BECAUSE client IPs
+# are preserved: the NLB evaluates these rules against the caller's
+# address, not the intermediary's, so a narrowed range would reject every
+# real request.
+resource "aws_security_group" "nlb" {
+  name        = "meandr-mcp-nlb"
+  description = "MCP proxy NLB - public ingress on the proxy HTTP and TLS ports"
+  vpc_id      = var.vpc_id
+
+  tags = merge(local.base_tags, { Name = "MCP NLB" })
+}
+
+resource "aws_vpc_security_group_ingress_rule" "nlb_http" {
+  security_group_id = aws_security_group.nlb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  description       = "Public HTTP"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "nlb_tls" {
+  security_group_id = aws_security_group.nlb.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "Public TLS - proxy terminates"
+}
+
+# Health checks and forwarded traffic both leave for the task subnets.
+resource "aws_vpc_security_group_egress_rule" "nlb_all" {
+  security_group_id = aws_security_group.nlb.id
+  cidr_ipv4         = var.vpc_cidr_block
+  ip_protocol       = "-1"
+  description       = "To proxy tasks"
 }
 
 resource "aws_lb_target_group" "proxy" {
@@ -700,10 +752,10 @@ module "proxy" {
 # the environment may own it — and with two regions that would be two state
 # files fighting over the same name, each convinced it was right.
 #
-# Multi-region hands it to the accelerator instead (modules/global-
-# accelerator), which fronts every region's NLB behind one anycast pair.
-# Set false and the region stands up its NLB without claiming DNS, which is
-# what lets an edge exist before it serves traffic.
+# Multi-region hands the name to whatever fronts every region's NLB, which
+# is a layer above this module and not its concern. Set false and the
+# region stands up its NLB without claiming DNS — which is what lets an
+# edge exist before it serves traffic.
 resource "aws_route53_record" "wildcard" {
   count    = var.create_wildcard_record ? 1 : 0
   provider = aws.dns

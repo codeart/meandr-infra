@@ -7,6 +7,16 @@ provider "aws" {
   profile = local.aws_profile
 }
 
+# Global Accelerator's control plane exists ONLY in us-west-2. Accelerators,
+# listeners and endpoint groups are all created through this endpoint no
+# matter which region the endpoints themselves live in — nothing about the
+# accelerator runs here.
+provider "aws" {
+  alias   = "usw2"
+  region  = "us-west-2"
+  profile = local.aws_profile
+}
+
 # meandr.com + meandr.io hosted zones live in the Shared account — used for
 # both ACM DNS validation and the public hostname records.
 provider "aws" {
@@ -1312,6 +1322,11 @@ module "mcp" {
   proxy = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
   log_retention_days = 7
+
+  # The accelerator owns *.meandr.live now. One apex means one owner, and
+  # a second region creating it would have two state files overwriting each
+  # other's answer.
+  create_wildcard_record = false
 }
 
 # --- Outputs -----------------------------------------------------------

@@ -420,11 +420,14 @@ variable "create_wildcard_record" {
     apex, so one owner: two regions both creating it means two state files
     overwriting each other's answer.
 
-    Multi-region sets this FALSE everywhere and lets
-    modules/global-accelerator own the name, fronting every region's NLB
-    behind one anycast pair. Flipping it to false DESTROYS the record, and
-    the accelerator then creates it — Route 53 cannot hold both, so expect
-    a brief NXDOMAIN between the two applies. Sequence that deliberately in
+    Multi-region sets this FALSE everywhere, and the name is owned a layer
+    above — by whatever fronts every region's NLB. Which layer that is, is
+    not this module's concern.
+
+    Flipping it to false DESTROYS the record, and the owner above then
+    creates it. Route 53 cannot hold both, so the name is absent in
+    between — and if the new owner needs provisioning time, that gap is
+    minutes rather than a propagation blip. Sequence it deliberately in
     production.
   EOT
   type        = bool

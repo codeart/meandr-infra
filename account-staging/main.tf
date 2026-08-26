@@ -3,6 +3,66 @@ provider "aws" {
   profile = "meandr-staging"
 }
 
+# Global Accelerator's control plane exists ONLY in us-west-2 — accelerators,
+# listeners, and endpoint groups for every other region are all created
+# through this endpoint. Nothing about the accelerator runs there.
+provider "aws" {
+  alias   = "usw2"
+  region  = "us-west-2"
+  profile = "meandr-staging"
+}
+
+# meandr.live's public zone lives in the Shared account.
+provider "aws" {
+  alias   = "shared"
+  region  = "eu-central-1"
+  profile = "meandr-shared"
+}
+
+# --- Global Accelerator -------------------------------------------------
+#
+# Here rather than in a region's state because it is ENV-GLOBAL and names
+# no region. Putting it in the primary's state would make the primary own a
+# resource every region depends on — the exact coupling the regional stacks
+# were restructured to remove, and it would mean the primary's state file
+# had to exist before any edge could serve traffic.
+#
+# It holds no list of regions either. Each region declares its own
+# aws_globalaccelerator_endpoint_group against the listener arn below,
+# pointing at its own NLB, so adding or removing a region never touches
+# this file.
+module "global_accelerator" {
+  source = "../modules/global-accelerator"
+
+  providers = {
+    aws      = aws
+    aws.usw2 = aws.usw2
+    aws.dns  = aws.shared
+  }
+
+  env           = "staging"
+  dns_zone_name = "meandr.live"
+
+  tags = {
+    "meandr:env"        = "staging"
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
+  }
+}
+
+# Regions hardcode this arn, the same call made for acme_dns_role_arn:
+# a literal keeps their only cross-stack dependency the provider alias.
+#   terraform -chdir=account-staging output ga_listener_arn
+output "ga_listener_arn" {
+  description = "What a region attaches its endpoint group to."
+  value       = module.global_accelerator.listener_arn
+}
+
+output "ga_static_ips" {
+  description = "Anycast pair. Stable for the accelerator's lifetime — safe for a customer allow-list, and what the proxy's SSRF dial guard must load as its self IPs."
+  value       = module.global_accelerator.static_ips
+}
+
 variable "github_org" {
   description = "GitHub org for trust policy scoping."
   type        = string
