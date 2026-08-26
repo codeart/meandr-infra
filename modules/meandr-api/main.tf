@@ -144,22 +144,29 @@ locals {
     # store into every task and sets the path itself.
   }
 
-  app_secrets = merge({
-    MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
+  app_secrets = merge(
+    # Not a secret — ECS `secrets` resolves an SSM parameter by ARN, which
+    # is how BE and the proxy read the same value from one writer. If they
+    # disagreed, BE would accept an upstream the proxy refuses to dial.
+    var.self_ips_parameter_arn == "" ? {} : {
+      MEANDR_SELF_IPS = var.self_ips_parameter_arn
+    },
+    {
+      MEANDR_DATABASE_URL = "${module.rds.secret_arn}:url::"
 
-    RAILS_MASTER_KEY = aws_secretsmanager_secret.rails_master_key.arn
+      RAILS_MASTER_KEY = aws_secretsmanager_secret.rails_master_key.arn
 
-    MEANDR_ENC_PRIMARY_KEY         = "${aws_secretsmanager_secret.encryption.arn}:primary_key::"
-    MEANDR_ENC_DETERMINISTIC_KEY   = "${aws_secretsmanager_secret.encryption.arn}:deterministic_key::"
-    MEANDR_ENC_KEY_DERIVATION_SALT = "${aws_secretsmanager_secret.encryption.arn}:key_derivation_salt::"
+      MEANDR_ENC_PRIMARY_KEY         = "${aws_secretsmanager_secret.encryption.arn}:primary_key::"
+      MEANDR_ENC_DETERMINISTIC_KEY   = "${aws_secretsmanager_secret.encryption.arn}:deterministic_key::"
+      MEANDR_ENC_KEY_DERIVATION_SALT = "${aws_secretsmanager_secret.encryption.arn}:key_derivation_salt::"
 
-    MEANDR_OPS_USER     = "${aws_secretsmanager_secret.ops.arn}:user::"
-    MEANDR_OPS_PASSWORD = "${aws_secretsmanager_secret.ops.arn}:password::"
-    }, var.redis_auth_secret_arn == "" ? {} : {
-    # Same token used for config-stream + event-stream + api-redis. Rails
-    # reads from MEANDR_REDIS_PASSWORD at boot and threads into all three
-    # client constructions.
-    MEANDR_REDIS_PASSWORD = var.redis_auth_secret_arn
+      MEANDR_OPS_USER     = "${aws_secretsmanager_secret.ops.arn}:user::"
+      MEANDR_OPS_PASSWORD = "${aws_secretsmanager_secret.ops.arn}:password::"
+      }, var.redis_auth_secret_arn == "" ? {} : {
+      # Same token used for config-stream + event-stream + api-redis. Rails
+      # reads from MEANDR_REDIS_PASSWORD at boot and threads into all three
+      # client constructions.
+      MEANDR_REDIS_PASSWORD = var.redis_auth_secret_arn
   })
 }
 
@@ -331,7 +338,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect = "Allow"
       Action = "secretsmanager:GetSecretValue"
       Resource = compact([
@@ -340,12 +347,17 @@ resource "aws_iam_role_policy" "execution_secrets" {
         aws_secretsmanager_secret.encryption.arn,
         aws_secretsmanager_secret.ops.arn,
         var.redis_auth_secret_arn,
+        # NOTE: self_ips_parameter_arn is SSM, granted separately below.
         # The Valkey client PEMs. Missing this fails tasks at LAUNCH with
         # a secret-fetch error, before any application log — which reads
         # nothing like the TLS problem it gets mistaken for.
         var.valkey_client_secret_arn,
       ])
-    }]
+      }], var.self_ips_parameter_arn == "" ? [] : [{
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = var.self_ips_parameter_arn
+    }])
   })
 }
 

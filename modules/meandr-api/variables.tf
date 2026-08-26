@@ -438,3 +438,9 @@ variable "envelope_encryption_key_arn" {
   type        = string
   default     = ""
 }
+
+variable "self_ips_parameter_arn" {
+  description = "SSM parameter holding our public ingress addresses. Written by the account-level stack and read by the proxy too, so BE validation and the proxy's dial guard agree. Empty disables it."
+  type        = string
+  default     = ""
+}

@@ -150,6 +150,12 @@ locals {
   # is populated for each client without app-side glue. Same SM secret
   # behind both — single token across all three Redis planes.
   proxy_secrets = merge(
+    # Not a secret — injected this way because ECS `secrets` resolves an
+    # SSM parameter by ARN, which keeps one writer for a value both the
+    # proxy and BE must agree on.
+    var.self_ips_parameter_arn == "" ? {} : {
+      MEANDR_SELF_IPS = var.self_ips_parameter_arn
+    },
     var.redis_auth_enabled ? {
       MEANDR_REDIS_CONFIG_READER_PASSWORD = var.redis_auth_secret_arn
       MEANDR_REDIS_EVENT_WRITER_PASSWORD  = var.redis_auth_secret_arn
@@ -560,7 +566,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Effect = "Allow"
       Action = "secretsmanager:GetSecretValue"
       Resource = compact([
@@ -571,7 +577,11 @@ resource "aws_iam_role_policy" "execution_secrets" {
         # problem it would otherwise be mistaken for.
         var.valkey_client_secret_arn,
       ])
-    }]
+      }], var.self_ips_parameter_arn == "" ? [] : [{
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = var.self_ips_parameter_arn
+    }])
   })
 }
 

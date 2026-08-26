@@ -129,6 +129,9 @@ locals {
   # (meandr/certs/<env>/<apex>), so the two cannot disagree.
   proxy_apex = "meandr.live"
 
+  # Written by account-staging/ into every region. Same path everywhere.
+  self_ips_param = "/meandr/staging/self-ips"
+
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
@@ -1080,6 +1083,10 @@ module "api" {
   hostname  = "staging-api.meandr.com"
   image_tag = "develop"
 
+  # Same parameter the proxy reads, so BE validation and the proxy's dial
+  # guard cannot disagree about what our own ingress is.
+  self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
+
   # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
   extra_hostnames = ["staging-mcp.meandr.com"]
 
@@ -1327,6 +1334,40 @@ module "mcp" {
   # a second region creating it would have two state files overwriting each
   # other's answer.
   create_wildcard_record = false
+
+  # Written per region by account-staging/ from the accelerator's anycast
+  # pair. Derived, not copied: the same line works in every region, and the
+  # value changes without a Terraform change here.
+  self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
+}
+
+# --- Global Accelerator endpoint ---------------------------------------
+#
+# The accelerator lives in account-staging/; each region attaches its own
+# endpoint group, so the accelerator holds no list of regions.
+#   terraform -chdir=../../account-staging output ga_listener_arn
+
+resource "aws_globalaccelerator_endpoint_group" "local_region" {
+  provider = aws.usw2
+
+  listener_arn          = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  endpoint_group_region = local.region
+
+  # An unhealthy group is withdrawn from the anycast pair, so a broken
+  # deploy stops serving silently rather than erroring. Needs an alarm.
+  health_check_protocol         = "TCP"
+  health_check_port             = 443
+  health_check_interval_seconds = 30
+  threshold_count               = 3
+
+  endpoint_configuration {
+    endpoint_id = module.mcp.nlb_arn
+    weight      = 100
+
+    # Without this the proxy sees accelerator addresses and clientguard's
+    # per-client limits collapse onto a handful of sources.
+    client_ip_preservation_enabled = true
+  }
 }
 
 # --- Outputs -----------------------------------------------------------

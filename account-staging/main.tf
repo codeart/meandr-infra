@@ -19,6 +19,25 @@ provider "aws" {
   profile = "meandr-shared"
 }
 
+# One alias per region that runs a proxy. SSM parameters are regional with
+# no replication, and a resource's provider must be a static reference — so
+# adding a region adds an alias here and a parameter block below.
+provider "aws" {
+  alias   = "use1"
+  region  = "us-east-1"
+  profile = "meandr-staging"
+}
+
+locals {
+  self_ips_param = "/meandr/staging/self-ips"
+
+  account_tags = {
+    "meandr:env"        = "staging"
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
+  }
+}
+
 # --- Global Accelerator -------------------------------------------------
 #
 # Here rather than in a region's state because it is ENV-GLOBAL and names
@@ -48,6 +67,28 @@ module "global_accelerator" {
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
+}
+
+# Our public ingress, written once per region because SSM parameters are
+# regional and have no replication. Read by the proxy AND by BE, so both
+# validate against the same string — if they disagreed, BE would accept an
+# upstream the proxy refuses to dial.
+# One per region, explicitly: a resource's provider must be a static
+# reference, so adding a region adds a block here.
+resource "aws_ssm_parameter" "self_ips_euc1" {
+  name  = local.self_ips_param
+  type  = "StringList"
+  value = join(",", module.global_accelerator.static_ips)
+  tags  = local.account_tags
+}
+
+resource "aws_ssm_parameter" "self_ips_use1" {
+  provider = aws.use1
+
+  name  = local.self_ips_param
+  type  = "StringList"
+  value = join(",", module.global_accelerator.static_ips)
+  tags  = local.account_tags
 }
 
 # Regions hardcode this arn, the same call made for acme_dns_role_arn:

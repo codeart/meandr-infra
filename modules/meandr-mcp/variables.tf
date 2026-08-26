@@ -433,3 +433,9 @@ variable "create_wildcard_record" {
   type        = bool
   default     = true
 }
+
+variable "self_ips_parameter_arn" {
+  description = "SSM parameter holding our public ingress addresses, blocked as upstream targets so a tenant cannot point a server at our own front door. Written by the account-level stack and read by BE too, so both agree. Empty disables the check."
+  type        = string
+  default     = ""
+}
