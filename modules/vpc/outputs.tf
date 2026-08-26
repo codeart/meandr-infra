@@ -47,3 +47,15 @@ output "dynamodb_endpoint_id" {
   description = "DynamoDB gateway endpoint ID. Same use as s3_endpoint_id — table policies can pin to aws:SourceVpce."
   value       = aws_vpc_endpoint.dynamodb.id
 }
+
+# Route table ids, so another state file can add a peering route without
+# an inline block here fighting it. See the note above aws_route_table.
+output "public_route_table_id" {
+  description = "Public route table. Extend with aws_route from the caller; never with an inline route here."
+  value       = aws_route_table.public.id
+}
+
+output "private_route_table_id" {
+  description = "Private route table — where a cross-region peering route belongs, since the Valkey fleets and ECS tasks sit in private subnets."
+  value       = aws_route_table.private.id
+}

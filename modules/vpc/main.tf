@@ -75,18 +75,30 @@ resource "aws_subnet" "private" {
 
 # --- Route tables --------------------------------------------------------
 
+# Routes are SEPARATE resources, never inline `route` blocks.
+#
+# An inline block is authoritative: Terraform treats it as the complete set
+# and deletes anything it does not list. A peering route added from another
+# state file would therefore survive until the next apply of THIS module
+# and then vanish — silently, during an unrelated change, breaking
+# cross-region replication with nothing in the diff to explain it.
+#
+# Separate resources make the table extensible, which is what a second
+# region needs.
+
 # Single public route table — all public subnets route to IGW.
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
-  }
-
   tags = merge(var.tags, {
     Name = "Public Routes"
   })
+}
+
+resource "aws_route" "public_igw" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.main.id
 }
 
 resource "aws_route_table_association" "public" {
@@ -103,17 +115,17 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
-  dynamic "route" {
-    for_each = var.enable_nat ? [1] : []
-    content {
-      cidr_block     = "0.0.0.0/0"
-      nat_gateway_id = aws_nat_gateway.main[0].id
-    }
-  }
-
   tags = merge(var.tags, {
     Name = "Private Routes"
   })
+}
+
+resource "aws_route" "private_nat" {
+  count = var.enable_nat ? 1 : 0
+
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main[0].id
 }
 
 resource "aws_route_table_association" "private" {

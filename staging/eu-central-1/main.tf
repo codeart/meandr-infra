@@ -554,9 +554,19 @@ module "valkey_config_a" {
   # lower quorum — is what fixed it. Quorum 1 across a partition would let
   # both sides promote, which is worse than promoting neither.
   #
-  # SECOND REGION: 4 Sentinels → quorum 3, set on EVERY node. Still one
-  # tolerated loss, same as 3 — the even count buys availability, not fault
-  # tolerance.
+  # Quorum stays 2 as regions are added — it does NOT scale with the
+  # Sentinel count. Every region runs the same 3 nodes and all 3 vote, so
+  # a second region makes `config` 6 voters, not 4.
+  #
+  # 3 would break `events`, which is only ever 3 nodes in one region:
+  # lose one and the two survivors could never reach 3, so the fleet would
+  # have no automatic failover at all — the exact failure quorum exists to
+  # prevent. Revisit for `config` alone once production spans 3 regions and
+  # that fleet is 9 nodes.
+  #
+  # Safe because `quorum` only decides ODOWN. Authorising a failover needs
+  # a majority of ALL known Sentinels, which is not configurable, so a low
+  # quorum buys fast detection and cannot let a minority promote.
   run_sentinel    = true
   sentinel_quorum = 2
 
