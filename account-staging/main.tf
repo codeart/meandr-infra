@@ -76,7 +76,51 @@ module "cost_anomaly" {
   }
 }
 
+# --- Read-only observer for the AWS MCP server --------------------------
+#
+# The AWS MCP server signs with SigV4, so it needs a long-lived access key
+# — it cannot assume a role or use SSO. That makes this the ONLY static
+# credential in the estate; everything else is roles, instance profiles
+# and GitHub OIDC.
+#
+# STAGING ONLY, and deliberately so. ReadOnlyAccess is broad — it can read
+# DynamoDB items and S3 objects, which in this account includes captured
+# payloads. That is an accepted trade for being able to inspect the whole
+# system; it would NOT be for production, which needs its own user with a
+# policy narrowed to describe-and-metrics.
+#
+# The ACCESS KEY IS NOT MANAGED HERE. aws_iam_access_key writes the secret
+# into Terraform state in plaintext, and state outlives the key. Mint it
+# by hand and put it straight in the cred-store:
+#
+#   aws iam create-access-key --user-name meandr-mcp-observer --profile meandr-staging
+#
+# Rotation is manual for the same reason. IAM Access Analyzer and most
+# SOC 2 checklists flag static keys by age, so this one is on the list to
+# revisit — ideally by teaching the signer to assume a role instead.
+resource "aws_iam_user" "mcp_observer" {
+  name = "meandr-mcp-observer"
+  path = "/mcp/"
+
+  tags = {
+    "meandr:env"        = "staging"
+    "meandr:managed-by" = "terraform"
+    "meandr:owner"      = "infra"
+    "meandr:purpose"    = "aws-mcp-server read-only observer"
+  }
+}
+
+resource "aws_iam_user_policy_attachment" "mcp_observer_readonly" {
+  user       = aws_iam_user.mcp_observer.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
 # --- Outputs ------------------------------------------------------------
+
+output "mcp_observer_user_name" {
+  description = "Mint this user's access key by hand — see the comment above; a Terraform-managed key would sit in state."
+  value       = aws_iam_user.mcp_observer.name
+}
 
 output "github_oidc_provider_arn" {
   value = module.account_bootstrap.github_oidc_provider_arn
