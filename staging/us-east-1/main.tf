@@ -582,6 +582,235 @@ module "valkey_recipes" {
   aws_region  = local.region
 }
 
+# --- Keys the edge attaches itself to -----------------------------------
+#
+# Read through the euc1 alias rather than hardcoded: same account, so a
+# data source is cheaper than an ARN nobody will remember to update.
+
+data "aws_kms_key" "primary_cred" {
+  provider = aws.euc1
+  key_id   = "alias/meandr-cred-${local.env}"
+}
+
+data "aws_kms_key" "primary_action" {
+  provider = aws.euc1
+  key_id   = "alias/meandr-action-${local.env}"
+}
+
+data "aws_kms_key" "primary_payload" {
+  provider = aws.euc1
+  key_id   = "alias/meandr-payload-${local.env}"
+}
+
+# Replicas of the two multi-Region keys, declared HERE. The primary made
+# them replicable (multi_region = true) without naming a region; this is
+# the other half. Same key material, same key id, so ciphertext written in
+# either region opens in both — which is the whole requirement, since
+# Decrypt resolves the key from the blob and a regional key simply does not
+# exist at this endpoint.
+
+resource "aws_kms_replica_key" "cred" {
+  description             = "Replica: server credentials (meandr-cred-${local.env})"
+  primary_key_arn         = data.aws_kms_key.primary_cred.arn
+  deletion_window_in_days = 7
+
+  tags = local.tags
+}
+
+resource "aws_kms_alias" "cred" {
+  name          = "alias/meandr-cred-${local.env}"
+  target_key_id = aws_kms_replica_key.cred.key_id
+}
+
+resource "aws_kms_replica_key" "action" {
+  description             = "Replica: elicitation + approval form envelopes (meandr-action-${local.env})"
+  primary_key_arn         = data.aws_kms_key.primary_action.arn
+  deletion_window_in_days = 7
+
+  tags = local.tags
+}
+
+resource "aws_kms_alias" "action" {
+  name          = "alias/meandr-action-${local.env}"
+  target_key_id = aws_kms_replica_key.action.key_id
+}
+
+# The payload key is NOT replicated — it is regional by design, and
+# deliberately unreplicable so it cannot be adopted for something that
+# crosses regions. This region gets its OWN, because each region encrypts
+# only objects it reads itself and S3 replication re-encrypts with the
+# destination's key on the way to the primary. See SOC-2.md §2a.
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}-${local.region}"
+  purpose    = "SSE-KMS default for this region's payload buffer"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  multi_region            = false
+
+  tags = local.tags
+}
+
+# The creds table replica. Declared by the edge, not listed by the primary —
+# the table there carries a stream (making it replicable) and no replica
+# list, so regions are added and removed without editing it.
+resource "aws_dynamodb_table_replica" "creds" {
+  global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-creds-${local.env}"
+
+  # The proxy resolves upstream credentials on the request path and decrypts
+  # with the replica key above, so nothing about a tool call leaves this
+  # region.
+  kms_key_arn = aws_kms_replica_key.cred.arn
+
+  tags = local.tags
+
+  depends_on = [aws_kms_alias.cred]
+}
+
+# --- Payloads: a BUFFER, not a peer store -------------------------------
+#
+# Region 2 does not keep payloads. It writes them locally — the proxy is on
+# the hot path and cannot cross an ocean to store a body — and replicates
+# into the primary, which stays the single bucket BE and Athena read. That
+# is what keeps the backend topology-blind as regions come and go
+# (capture_and_archive.md §6.1).
+#
+# Versioning is required on BOTH ends by S3 replication; the primary was
+# flipped ahead of this, since it lives in another state file and its
+# absence would have made this region fail to apply.
+
+module "payloads_bucket" {
+  source = "../../modules/s3-capture-bucket"
+
+  name        = "meandr-mcp-payloads-${local.region}-${local.env}"
+  kms_key_arn = module.payload_encryption_key.key_arn
+  tags        = local.tags
+
+  # Buffer semantics: one clock for everything, no retention tags. This
+  # side makes no retention promise — the primary does — so a catch-all is
+  # correct here and wrong there.
+  retention_classes      = {}
+  buffer_expiration_days = 7
+
+  versioning_enabled = true
+}
+
+# --- Replication into the primary ---------------------------------------
+
+data "aws_iam_policy_document" "replication_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "replication" {
+  name               = "meandr-payloads-replication-${local.env}-${local.region}"
+  assume_role_policy = data.aws_iam_policy_document.replication_assume.json
+  tags               = local.tags
+}
+
+data "aws_iam_policy_document" "replication" {
+  statement {
+    sid    = "ReadSource"
+    effect = "Allow"
+    actions = [
+      "s3:GetReplicationConfiguration",
+      "s3:ListBucket",
+    ]
+    resources = [module.payloads_bucket.arn]
+  }
+
+  statement {
+    sid    = "ReadSourceObjects"
+    effect = "Allow"
+    actions = [
+      "s3:GetObjectVersionForReplication",
+      "s3:GetObjectVersionAcl",
+      "s3:GetObjectVersionTagging",
+    ]
+    resources = ["${module.payloads_bucket.arn}/*"]
+  }
+
+  statement {
+    sid    = "WriteDestination"
+    effect = "Allow"
+    actions = [
+      "s3:ReplicateObject",
+      "s3:ReplicateDelete",
+      "s3:ReplicateTags",
+    ]
+    resources = ["arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}/*"]
+  }
+
+  # Replication DECRYPTS with this region's key and RE-ENCRYPTS with the
+  # primary's. That is why the payload keys can stay regional: no single
+  # key ever spans regions, only this role does.
+  statement {
+    sid       = "DecryptLocal"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [module.payload_encryption_key.key_arn]
+  }
+
+  statement {
+    sid       = "EncryptPrimary"
+    effect    = "Allow"
+    actions   = ["kms:Encrypt", "kms:GenerateDataKey"]
+    resources = [data.aws_kms_key.primary_payload.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "replication" {
+  name   = "replication"
+  role   = aws_iam_role.replication.id
+  policy = data.aws_iam_policy_document.replication.json
+}
+
+resource "aws_s3_bucket_replication_configuration" "buffer" {
+  bucket = module.payloads_bucket.bucket
+  role   = aws_iam_role.replication.arn
+
+  rule {
+    id     = "buffer-to-primary"
+    status = "Enabled"
+
+    filter {}
+
+    # OFF, and load-bearing. With it on, the buffer's 7-day sweep could
+    # propagate deletions into the primary — turning a local cleanup into
+    # data loss in the bucket that holds the only copy. (S3 never replicates
+    # LIFECYCLE-created markers, but this makes the guarantee explicit
+    # rather than relying on that distinction.)
+    delete_marker_replication {
+      status = "Disabled"
+    }
+
+    # Objects here are SSE-KMS, and replication skips encrypted objects
+    # unless told to handle them.
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+
+    destination {
+      bucket = "arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}"
+
+      encryption_configuration {
+        replica_kms_key_id = data.aws_kms_key.primary_payload.arn
+      }
+    }
+  }
+}
+
 # --- Outputs -----------------------------------------------------------
 
 output "vpc_id" { value = module.vpc.vpc_id }

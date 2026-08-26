@@ -50,6 +50,31 @@ variable "prefix_expirations" {
   default     = {}
 }
 
+variable "buffer_expiration_days" {
+  description = <<-EOT
+    Turns this into a REGIONAL BUFFER: one unfiltered rule expiring every
+    object this many days after it is written. 0 (default) means a normal
+    retention store.
+
+    A catch-all is wrong for a retention store — overlapping rules make
+    which expiry wins a question about S3 precedence, and a retention
+    promise must not rest on that. It is right for a buffer, because a
+    buffer makes no retention promise: the authoritative copy is in the
+    primary region, and this side only has to survive long enough to
+    replicate (capture_and_archive.md §6.1).
+
+    So it is mutually exclusive with retention_classes, and the lifecycle
+    resource asserts that rather than trusting the caller.
+
+    Size it against the alarm, not the traffic: failing replication plus
+    this sweep IS data loss, and OperationsPendingReplication is the only
+    thing standing between them. 7 buys a working week to notice; 3 buys a
+    long weekend.
+  EOT
+  type        = number
+  default     = 0
+}
+
 variable "versioning_enabled" {
   description = <<-EOT
     Enable bucket versioning. OFF by default: segments are write-once, so

@@ -71,6 +71,38 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
   bucket = aws_s3_bucket.this.id
 
+  lifecycle {
+    precondition {
+      condition     = var.buffer_expiration_days == 0 || length(var.retention_classes) == 0
+      error_message = "buffer_expiration_days and retention_classes are mutually exclusive: a catch-all rule alongside tag rules makes which expiry wins a question about S3 precedence, which is exactly what the tag-only design avoids."
+    }
+  }
+
+  # Buffer mode: ONE unfiltered rule, because every object here has the
+  # same short life and the authoritative copy is elsewhere. No tags to
+  # match, so nothing can overlap it.
+  dynamic "rule" {
+    for_each = var.buffer_expiration_days > 0 ? [1] : []
+
+    content {
+      id     = "buffer-expire"
+      status = "Enabled"
+
+      filter {}
+
+      expiration {
+        days = var.buffer_expiration_days
+      }
+
+      dynamic "noncurrent_version_expiration" {
+        for_each = var.versioning_enabled ? [1] : []
+        content {
+          noncurrent_days = var.noncurrent_version_days
+        }
+      }
+    }
+  }
+
   # NON-NEGOTIABLE (capture_and_archive.md §7.2). An abandoned multipart
   # upload leaves parts that are invisible in listings and billed
   # forever, and this design EXPECTS abandonment: drain timeouts,
