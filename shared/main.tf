@@ -9,8 +9,14 @@
 # Route 53 is managed manually by the operator — see ../README.md notes.
 # ACM certs live in workload accounts per region (not here).
 
+# Profile named explicitly, as every other root does. Without it this stack
+# runs against whatever credentials the shell happens to carry — which fails
+# with a bare AccessDenied that reads like a permissions regression rather
+# than a missing profile, and would be far worse if the ambient credentials
+# were valid for the WRONG account.
 provider "aws" {
-  region = var.region
+  region  = var.region
+  profile = "meandr-shared"
 }
 
 # Sanity guard — apply must run in the Shared account.
