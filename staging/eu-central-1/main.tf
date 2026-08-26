@@ -1037,6 +1037,16 @@ module "payloads_bucket" {
   name        = "meandr-mcp-payloads-${local.region}-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
+
+  # Every payloads bucket is one end of a replication pair — the primary
+  # receives, a regional buffer sends (capture_and_archive.md §6.1) — and
+  # S3 requires versioning on BOTH. Not local.primary: a buffer needs it
+  # just as much, for the opposite reason.
+  #
+  # Enabled ahead of the first buffer because it lives in a different
+  # state file. Without it, region 2's replication config fails to create
+  # and that region stops being a single apply.
+  versioning_enabled = true
 }
 
 module "mcp" {

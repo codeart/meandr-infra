@@ -35,18 +35,19 @@ resource "aws_s3_bucket_public_access_block" "this" {
   restrict_public_buckets = true
 }
 
-# Versioning stays OFF, deliberately.
+# Versioning is OFF unless this bucket is one end of a replication pair.
 #
 # Segments are write-once — we never rewrite one — so versioning protects
 # against a mistake this design structurally cannot make. What it WOULD do
 # is break the retention promise: with versioning on, a lifecycle
 # expiration writes a delete marker and keeps the object as a noncurrent
 # version, so data we have told a customer is deleted keeps billing until
-# two further rules clean it up.
+# two further rules clean it up. Those two rules are below, conditional on
+# the same flag, so the promise survives the flip.
 resource "aws_s3_bucket_versioning" "this" {
   bucket = aws_s3_bucket.this.id
   versioning_configuration {
-    status = "Disabled"
+    status = var.versioning_enabled ? "Enabled" : "Disabled"
   }
 }
 
@@ -126,6 +127,15 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
       expiration {
         days = rule.value
       }
+
+      # With versioning on, the expiration above only writes a delete
+      # marker. This is what actually erases the bytes.
+      dynamic "noncurrent_version_expiration" {
+        for_each = var.versioning_enabled ? [1] : []
+        content {
+          noncurrent_days = var.noncurrent_version_days
+        }
+      }
     }
   }
 
@@ -146,6 +156,32 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
 
       expiration {
         days = rule.value
+      }
+
+      dynamic "noncurrent_version_expiration" {
+        for_each = var.versioning_enabled ? [1] : []
+        content {
+          noncurrent_days = var.noncurrent_version_days
+        }
+      }
+    }
+  }
+
+  # Sweep the delete markers the rules above leave behind. Its own rule
+  # because S3 rejects expired_object_delete_marker in the same
+  # expiration block as days. A marker whose versions are all gone is a
+  # zero-byte tombstone that still answers listings and still bills.
+  dynamic "rule" {
+    for_each = var.versioning_enabled ? [1] : []
+
+    content {
+      id     = "expired-delete-markers"
+      status = "Enabled"
+
+      filter {}
+
+      expiration {
+        expired_object_delete_marker = true
       }
     }
   }

@@ -50,6 +50,32 @@ variable "prefix_expirations" {
   default     = {}
 }
 
+variable "versioning_enabled" {
+  description = <<-EOT
+    Enable bucket versioning. OFF by default: segments are write-once, so
+    versioning guards against a mutation this design cannot make.
+
+    Turn it on only for a bucket that is one end of a replication pair —
+    S3 requires versioning on BOTH source and destination
+    (capture_and_archive.md §6.1). Enabling it rewrites what the retention
+    rules MEAN: an expiration then writes a delete marker and keeps the
+    object as a noncurrent version. The module compensates automatically,
+    giving every expiry rule a matching noncurrent expiry and adding a
+    delete-marker sweep, so "expired" still means the bytes are gone.
+
+    Not reversible to Disabled — S3 only allows Enabled -> Suspended, and
+    suspending keeps existing versions.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "noncurrent_version_days" {
+  description = "Days a noncurrent version survives once versioning is on. Only meaningful with versioning_enabled. Segments are never rewritten, so a version becomes noncurrent only via expiry or an operator delete — in both cases the intent is erasure and the shortest S3 permits is right."
+  type        = number
+  default     = 1
+}
+
 variable "abort_incomplete_days" {
   description = "Days before an incomplete multipart upload is aborted. Abandoned parts are invisible in listings and billed forever, and this design expects abandonment (drain timeouts, SIGKILL, incidents). 1 is the doc's figure and there is no reason to wait longer — a segment that has not completed within a day is never completing."
   type        = number

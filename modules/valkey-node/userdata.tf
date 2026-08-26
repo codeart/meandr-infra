@@ -620,13 +620,10 @@ locals {
     min-replicas-max-lag 10
   CONF
 
-  # Sentinel runs in EVERY region, including the ones holding only
-  # non-promotable replicas.
-  #
-  # It has to. Promotable nodes live in the API region across two AZs, so
-  # confining Sentinels to them caps the fleet at two voters and quorum 2 —
-  # under which an isolated master leaves one voter, no agreement is ever
-  # reached, and automatic failover can never happen at all.
+  # Sentinel runs on EVERY node in EVERY region, including regions that
+  # hold only non-promotable replicas. Region shape is identical
+  # everywhere — m+s, r+s, s-only — so each region carries a full local
+  # quorum and `config` Sentinels then join into one set spanning regions.
   #
   # An edge Sentinel is safe because it contributes quorum without
   # contributing a candidate: every edge replica carries replica-priority
@@ -634,6 +631,8 @@ locals {
   # master is down and then find nothing they are allowed to promote. The
   # failover attempt dies for want of a candidate rather than splitting the
   # fleet, which is the outcome we want from that partition.
+  #
+  # See valkey_fleets.md §3 (placement) and §6 (what each loss costs).
   backup_setup = <<-BASH
     base64 -d >/usr/local/bin/valkey-backup.sh <<'B64'
     ${base64encode(file("${path.module}/files/valkey-backup.sh"))}
