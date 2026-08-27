@@ -27,12 +27,8 @@ resource "aws_ecr_repository" "service" {
 
 # --- Lifecycle policy — keep storage costs bounded -----------------------
 
-resource "aws_ecr_lifecycle_policy" "service" {
-  for_each = aws_ecr_repository.service
-
-  repository = each.value.name
-
-  policy = jsonencode({
+locals {
+  ecr_lifecycle_policy = jsonencode({
     rules = [
       {
         rulePriority = 1
@@ -83,6 +79,13 @@ resource "aws_ecr_lifecycle_policy" "service" {
   })
 }
 
+resource "aws_ecr_lifecycle_policy" "service" {
+  for_each = aws_ecr_repository.service
+
+  repository = each.value.name
+  policy     = local.ecr_lifecycle_policy
+}
+
 # --- Cross-account pull policy --------------------------------------------
 #
 # Workload accounts' ECS task execution roles pull images from here. They
@@ -130,4 +133,28 @@ resource "aws_ecr_replication_configuration" "primary" {
       }
     }
   }
+}
+
+# Replication copies IMAGES ONLY — the replica repositories arrive with no
+# repository policy (so workload accounts get 403 on pull) and no lifecycle
+# policy (so they never expire anything).
+#
+# Keyed by name, not by resource: replication creates the repositories, so
+# Terraform does not own them. A repo added to var.ecr_repos therefore needs
+# one image replicated before these can attach.
+
+resource "aws_ecr_repository_policy" "replica" {
+  provider = aws.replica
+  for_each = toset(var.ecr_repos)
+
+  repository = each.key
+  policy     = data.aws_iam_policy_document.ecr_cross_account_pull.json
+}
+
+resource "aws_ecr_lifecycle_policy" "replica" {
+  provider = aws.replica
+  for_each = toset(var.ecr_repos)
+
+  repository = each.key
+  policy     = local.ecr_lifecycle_policy
 }

@@ -19,6 +19,14 @@ provider "aws" {
   profile = "meandr-shared"
 }
 
+# Replication destination. ECR auto-creates the replica repositories but
+# copies images only, so their policies are declared through this alias.
+provider "aws" {
+  alias   = "replica"
+  region  = var.replication_destination_region
+  profile = "meandr-shared"
+}
+
 # Sanity guard — apply must run in the Shared account.
 data "aws_caller_identity" "current" {}
 

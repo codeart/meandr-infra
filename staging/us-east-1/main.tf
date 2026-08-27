@@ -74,10 +74,9 @@ module "peering" {
 resource "aws_dynamodb_table_replica" "creds" {
   global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-creds-${local.env}"
 
-  # The proxy resolves credentials on the request path and decrypts with
-  # the replica key, so nothing about a tool call leaves this region.
-  kms_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
-
+  # No kms_key_arn: every replica must match the SOURCE table's key manager,
+  # and that table is on aws/dynamodb. The cred MRK is the ENVELOPE key the
+  # proxy decrypts blobs with — a different layer, passed to the mcp module.
   tags = local.tags
 }
 
