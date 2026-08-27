@@ -293,6 +293,11 @@ resource "aws_lb_target_group" "proxy" {
   target_type = "ip" # Fargate awsvpc mode
   vpc_id      = var.vpc_id
 
+  # Defaults to false for ip targets, and NLB is L4 with no XFF fallback —
+  # so without this the proxy sees load-balancer addresses and clientguard
+  # rate-limits every tenant against the same few sources.
+  preserve_client_ip = true
+
   health_check {
     enabled             = true
     protocol            = "TCP"
@@ -322,6 +327,8 @@ resource "aws_lb_target_group" "proxy_tls" {
   protocol    = "TCP"
   target_type = "ip"
   vpc_id      = var.vpc_id
+
+  preserve_client_ip = true
 
   # TCP probe on the TLS port — verifies the socket accepts connections.
   # A full TLS-protocol probe would require ACM/SNI awareness inside the

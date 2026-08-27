@@ -578,139 +578,34 @@ module "internal_pki" {
   tags = local.tags
 }
 
-module "valkey_config_a" {
-  source = "../../modules/valkey-node"
+module "valkey_config" {
+  source = "../../modules/valkey-fleet"
 
-  fleet = "config"
-  node  = "euc1a"
+  fleet       = "config"
+  region_code = "euc1"
 
-  # Bootstrap tie-break only — see the module's variable doc. This node may
-  # take the master role when no record resolves, which happens exactly
-  # once. On every later boot, including its own replacement, the record
-  # decides.
-  role = "master"
-
-  # Vendor the source BEFORE an apply that changes the version — the node
-  # compiles `valkey/<version>/…` from the bucket and aborts user-data if it
-  # is missing or the digest does not match.
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  # Both nodes must match: they swap roles on failover.
-  instance_type     = "t4g.nano"
-  maxmemory_percent = 50 # nano: 512 MiB total, the OS takes ~250 of them
-
-  backup_bucket = local.valkey_backup_bucket
-
-  # Fail fast so an outer retry loop drives the cadence, rather than the
-  # provider retrying silently for over an hour.
-  create_timeout = "2m"
-
-  # Sentinel runs on every node, here and in every later region — confining
-  # it to promotable nodes would cap the fleet at two voters forever.
-  #
-  # Quorum 2 of 3, counting the AZ-c arbiter: automatic failover now
-  # survives the loss of any one zone. Sentinel authorises by MAJORITY OF
-  # THE WHOLE SET whatever quorum says, which is why a third voter — not a
-  # lower quorum — is what fixed it. Quorum 1 across a partition would let
-  # both sides promote, which is worse than promoting neither.
-  #
-  # Quorum stays 2 as regions are added — it does NOT scale with the
-  # Sentinel count. Every region runs the same 3 nodes and all 3 vote, so
-  # a second region makes `config` 6 voters, not 4.
-  #
-  # 3 would break `events`, which is only ever 3 nodes in one region:
-  # lose one and the two survivors could never reach 3, so the fleet would
-  # have no automatic failover at all — the exact failure quorum exists to
-  # prevent. Revisit for `config` alone once production spans 3 regions and
-  # that fleet is 9 nodes.
-  #
-  # Safe because `quorum` only decides ODOWN. Authorising a failover needs
-  # a majority of ALL known Sentinels, which is not configurable, so a low
-  # quorum buys fast detection and cannot let a minority promote.
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
-
-  # The whole VPC for now: ECS tasks and the peer node both live here.
-  # Narrows to the task subnets once the client set is settled.
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-module "valkey_config_b" {
-  source = "../../modules/valkey-node"
-
-  fleet = "config"
-  node  = "euc1b"
-
-  # Bootstrap tie-break only: before the master record exists, this node
-  # waits rather than racing valkey-a for the role. Afterwards every boot
-  # derives its role from the record, so replacing either node is safe
-  # regardless of which one is master at the time.
-  role = "replica"
+  # Master lives here, so this region bootstraps the record and its nodes
+  # stay promotable. An edge sets both false.
+  create_master_record = true
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
-  # Both nodes must match: they swap roles on failover.
-  instance_type     = "t4g.nano"
-  maxmemory_percent = 50 # nano: 512 MiB total, the OS takes ~250 of them
-
-  backup_bucket = local.valkey_backup_bucket
-
-  # Fail fast so an outer retry loop drives the cadence, rather than the
-  # provider retrying silently for over an hour.
-  create_timeout = "2m"
-
-  # Must carry the SAME quorum as every other node — Sentinels that
-  # disagree about what agreement means do not agree about anything.
-  run_sentinel    = true
-  sentinel_quorum = 2
+  backup_bucket        = local.valkey_backup_bucket
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = module.internal_pki.node_secret_arn
 
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b — the point of the pair
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
 
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
+  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = merge(local.tags, { "meandr:plane" = "config" })
+  tags = local.tags
 }
 
-# The master record, created ONCE and then left alone.
-#
-# Terraform has to bootstrap it — Sentinel only writes the record on a
-# FAILOVER, so without this the first replica has no master to resolve and
-# nothing ever converges. But ownership passes to Sentinel the moment it
-# exists: ignore_changes is what stops the next apply from pointing every
-# writer back at a node that was demoted hours ago.
-resource "aws_route53_record" "valkey_config_master" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = module.valkey_config_a.master_hostname
-  type    = "CNAME"
-  # 5s: this record follows a failover, so its TTL is how long a client
-  # keeps dialling the demoted node.
-  ttl     = 5
-  records = [module.valkey_config_a.hostname]
-
-  lifecycle {
-    ignore_changes = [records]
-  }
-}
 
 # --- Self-hosted Valkey (events tier) -----------------------------------
 #
@@ -728,91 +623,34 @@ resource "aws_route53_record" "valkey_config_master" {
 # the config tier. Everything else — subdomain, master record, Sentinel
 # group — is fleet-scoped and therefore separate by construction.
 
-module "valkey_events_a" {
-  source = "../../modules/valkey-node"
+module "valkey_events" {
+  source = "../../modules/valkey-fleet"
 
-  fleet = "events"
-  node  = "euc1a"
-  role  = "master"
+  fleet       = "events"
+  region_code = "euc1"
 
-  # Region-qualified: events is one fleet PER REGION, and the DNS zone is
-  # shared across regions. The derived `events-master` would name a
-  # different node in every region while resolving to whichever one wrote
-  # it last. `config` needs no such label — it has one master globally,
-  # which is the whole point of that fleet.
-  master_record_label = "events-master-euc1"
+  # Region-qualified because the zone is shared: an unqualified
+  # `events-master` would name a different node in every region while
+  # resolving to whichever wrote it last.
+  master_record_label  = "events-master-euc1"
+  create_master_record = true
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50 # nano: 512 MiB total, the OS takes ~250 of them
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  run_sentinel    = true
-  sentinel_quorum = 2
+  backup_bucket        = local.valkey_backup_bucket
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = module.internal_pki.node_secret_arn
 
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
 
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
+  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-module "valkey_events_b" {
-  source = "../../modules/valkey-node"
-
-  fleet = "events"
-  node  = "euc1b"
-  role  = "replica"
-
-  master_record_label = "events-master-euc1"
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50 # nano: 512 MiB total, the OS takes ~250 of them
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
-
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-resource "aws_route53_record" "valkey_events_master" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = module.valkey_events_a.master_hostname
-  type    = "CNAME"
-  ttl     = 5
-  records = [module.valkey_events_a.hostname]
-
-  lifecycle {
-    ignore_changes = [records]
-  }
+  tags = local.tags
 }
 
 # --- Self-hosted Valkey (api tier) --------------------------------------
@@ -825,82 +663,34 @@ resource "aws_route53_record" "valkey_events_master" {
 # Gains a replica and failover, which the ElastiCache instance it replaces
 # does not have (num_cache_clusters = 1, automatic_failover disabled).
 
-module "valkey_api_a" {
-  source = "../../modules/valkey-node"
+module "valkey_api" {
+  source = "../../modules/valkey-fleet"
 
-  fleet = "api"
-  node  = "euc1a"
-  role  = "master"
+  fleet       = "api"
+  region_code = "euc1"
 
-  maxmemory_policy  = "allkeys-lru"
-  maxmemory_percent = 50
+  create_master_record = true
 
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
-
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "api" })
-}
-
-module "valkey_api_b" {
-  source = "../../modules/valkey-node"
-
-  fleet = "api"
-  node  = "euc1b"
-  role  = "replica"
-
-  maxmemory_policy  = "allkeys-lru"
-  maxmemory_percent = 50
+  # allkeys-lru, unlike the other two: dropping the coldest key IS the
+  # behaviour here, where the eventbus refuses to start against anything
+  # but noeviction.
+  maxmemory_policy = "allkeys-lru"
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  run_sentinel    = true
-  sentinel_quorum = 2
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = module.internal_pki.node_secret_arn
 
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
 
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
+  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = merge(local.tags, { "meandr:plane" = "api" })
-}
-
-resource "aws_route53_record" "valkey_api_master" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = module.valkey_api_a.master_hostname
-  type    = "CNAME"
-  ttl     = 5
-  records = [module.valkey_api_a.hostname]
-
-  lifecycle {
-    ignore_changes = [records]
-  }
+  tags = local.tags
 }
 
 # --- Sentinel arbiters (AZ-c) -------------------------------------------
@@ -923,118 +713,6 @@ resource "aws_route53_record" "valkey_api_master" {
 # AZ-c deliberately holds nothing else. Apps stay in a and b; this zone
 # exists so a zone failure cannot take two of three votes with it.
 
-module "valkey_config_c" {
-  source = "../../modules/valkey-node"
-
-  fleet = "config"
-  node  = "euc1c"
-
-  # Bootstrap tie-break only, and for an arbiter it can only ever mean
-  # "wait" — there is no server here to promote.
-  role = "replica"
-
-  sentinel_only = true
-  run_sentinel  = true
-  # Unchanged from the pair: three Sentinels, majority still 2.
-  sentinel_quorum = 2
-
-  # Inert while sentinel_only holds — carried so clearing that flag yields
-  # a node sized like its fleet, not one on the 70% default a nano cannot
-  # afford.
-  maxmemory_percent = 50
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c — the third zone IS the point
-
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-module "valkey_events_c" {
-  source = "../../modules/valkey-node"
-
-  fleet = "events"
-  node  = "euc1c"
-  role  = "replica"
-
-  master_record_label = "events-master-euc1"
-
-  sentinel_only   = true
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  # Inert while sentinel_only holds — see valkey_config_c.
-  maxmemory_percent = 50
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
-
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-module "valkey_api_c" {
-  source = "../../modules/valkey-node"
-
-  fleet = "api"
-  node  = "euc1c"
-  role  = "replica"
-
-  sentinel_only   = true
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  # Inert while sentinel_only holds — carried so that clearing that flag
-  # yields a node matching its fleet rather than one silently on the
-  # noeviction default.
-  maxmemory_policy  = "allkeys-lru"
-  maxmemory_percent = 50
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
-
-  client_cidrs = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "api" })
-}
 
 # --- Valkey recipes ----------------------------------------------------
 #
@@ -1051,17 +729,13 @@ module "valkey_api_c" {
 module "valkey_recipes" {
   source = "../../modules/valkey-recipes"
 
-  instance_ids = [
-    module.valkey_config_a.instance_id,
-    module.valkey_config_b.instance_id,
-    module.valkey_config_c.instance_id,
-    module.valkey_events_a.instance_id,
-    module.valkey_events_b.instance_id,
-    module.valkey_events_c.instance_id,
-    module.valkey_api_a.instance_id,
-    module.valkey_api_b.instance_id,
-    module.valkey_api_c.instance_id,
-  ]
+  # Every node in the region. A fleet missing here keeps the recipes it
+  # already has and silently receives no new ones.
+  instance_ids = concat(
+    module.valkey_config.instance_ids,
+    module.valkey_events.instance_ids,
+    module.valkey_api.instance_ids,
+  )
 
   aws_profile = local.aws_profile
   aws_region  = local.region
@@ -1115,25 +789,13 @@ module "api" {
   #
   # EVERY region's event group, unlike the proxy which only needs its
   # own: BE consumes every region's stream. Positional with `regions`.
-  config_sentinel_addrs = [
-    "${module.valkey_config_a.hostname}:26379",
-    "${module.valkey_config_b.hostname}:26379",
-    "${module.valkey_config_c.hostname}:26379",
-  ]
+  config_sentinel_addrs  = module.valkey_config.sentinel_addrs
   config_sentinel_master = "config"
 
-  event_sentinel_groups = [join(",", [
-    "${module.valkey_events_a.hostname}:26379",
-    "${module.valkey_events_b.hostname}:26379",
-    "${module.valkey_events_c.hostname}:26379",
-  ])]
+  event_sentinel_groups = [join(",", module.valkey_events.sentinel_addrs)]
   event_sentinel_master = "events"
 
-  api_sentinel_addrs = [
-    "${module.valkey_api_a.hostname}:26379",
-    "${module.valkey_api_b.hostname}:26379",
-    "${module.valkey_api_c.hostname}:26379",
-  ]
+  api_sentinel_addrs  = module.valkey_api.sentinel_addrs
   api_sentinel_master = "api"
 
   valkey_client_secret_arn = module.internal_pki.client_secret_arn
@@ -1257,13 +919,9 @@ module "mcp" {
   # RTT and picks the nearest (rdb.New, RouteByLatency) — so the remote
   # entries cost nothing while the local ones answer, and become the
   # difference between degraded and dead when they stop.
-  config_reader_endpoint = module.valkey_config_a.master_hostname
+  config_reader_endpoint = module.valkey_config.master_hostname
   config_sentinel_addrs = concat(
-    [
-      "${module.valkey_config_a.hostname}:26379",
-      "${module.valkey_config_b.hostname}:26379",
-      "${module.valkey_config_c.hostname}:26379",
-    ],
+    module.valkey_config.sentinel_addrs,
     flatten([
       for code in local.peer_node_codes : [
         for az in ["a", "b", "c"] :
@@ -1273,12 +931,8 @@ module "mcp" {
   )
   config_sentinel_master = "config"
 
-  event_writer_endpoint = module.valkey_events_a.master_hostname
-  event_sentinel_addrs = [
-    "${module.valkey_events_a.hostname}:26379",
-    "${module.valkey_events_b.hostname}:26379",
-    "${module.valkey_events_c.hostname}:26379",
-  ]
+  event_writer_endpoint = module.valkey_events.master_hostname
+  event_sentinel_addrs  = module.valkey_events.sentinel_addrs
   event_sentinel_master = "events"
 
   # Required to reach either fleet: the nodes run `tls-auth-clients yes`
@@ -1388,9 +1042,9 @@ output "internal_ca_secret_arn" {
   value       = module.internal_pki.ca_secret_arn
 }
 
-output "valkey_config_master" { value = module.valkey_config_a.master_hostname }
-output "valkey_events_master" { value = module.valkey_events_a.master_hostname }
-output "valkey_api_master" { value = module.valkey_api_a.master_hostname }
+output "valkey_config_master" { value = module.valkey_config.master_hostname }
+output "valkey_events_master" { value = module.valkey_events.master_hostname }
+output "valkey_api_master" { value = module.valkey_api.master_hostname }
 output "event_stream_writer_endpoint" { value = module.mcp.event_writer_endpoint }
 
 output "hostname" { value = module.api.hostname }

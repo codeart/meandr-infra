@@ -34,6 +34,14 @@ provider "aws" {
   profile = "meandr-shared"
 }
 
+# Global Accelerator's control plane is us-west-2 only, whatever region the
+# endpoints live in.
+provider "aws" {
+  alias   = "usw2"
+  region  = "us-west-2"
+  profile = local.aws_profile
+}
+
 locals {
   env        = "staging"
   region     = "us-east-1"
@@ -70,6 +78,9 @@ locals {
   # Node-name prefixes for every OTHER region, for the CONFIG Sentinel
   # list. Mirror of the same local in eu-central-1 — see the comment there.
   peer_node_codes = ["euc1"]
+
+  proxy_apex     = "meandr.live"
+  self_ips_param = "/meandr/staging/self-ips"
 
   valkey_version     = "9.1.1"
   valkey_source_path = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
@@ -335,107 +346,34 @@ resource "aws_s3_bucket_lifecycle_configuration" "valkey_backups" {
 # nodes to monitor them, and security-group references do not cross regions
 # (valkey_fleets.md §6), so the peer CIDR has to be named literally.
 
-module "valkey_config_a" {
-  source = "../../modules/valkey-node"
+module "valkey_config" {
+  source = "../../modules/valkey-fleet"
 
-  fleet      = "config"
-  node       = "use1a"
-  role       = "replica"
-  promotable = false
+  fleet       = "config"
+  region_code = "use1"
 
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  # Same quorum as every other node in the fleet, in every region —
-  # Sentinels that disagree about what agreement means agree about nothing.
-  # 2 does not scale with region count; see valkey_fleets.md §6.
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
-
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-module "valkey_config_b" {
-  source = "../../modules/valkey-node"
-
-  fleet      = "config"
-  node       = "use1b"
-  role       = "replica"
-  promotable = false
+  # The two settings that make this an edge. No master record because
+  # `config-master` is global and eu-central-1 owns it; not promotable so a
+  # partition finds no candidate here rather than a second master.
+  promotable           = false
+  create_master_record = false
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  run_sentinel    = true
-  sentinel_quorum = 2
+  backup_bucket        = local.valkey_backup_bucket
 
   auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
 
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
 
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
+  client_cidrs  = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-module "valkey_config_c" {
-  source = "../../modules/valkey-node"
-
-  fleet         = "config"
-  node          = "use1c"
-  role          = "replica"
-  promotable    = false
-  sentinel_only = true
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
-
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
+  tags = local.tags
 }
 
 # --- Valkey: events tier (STANDALONE) -----------------------------------
@@ -449,138 +387,47 @@ module "valkey_config_c" {
 # masters mean separate sets, three voters each, quorum 2. Losing all three
 # loses this region's stream and nothing else, which is the accepted trade.
 
-module "valkey_events_a" {
-  source = "../../modules/valkey-node"
+module "valkey_events" {
+  source = "../../modules/valkey-fleet"
 
-  fleet = "events"
-  node  = "use1a"
-  role  = "master"
+  fleet       = "events"
+  region_code = "use1"
 
-  # Region-qualified, because the zone is shared. An unqualified
-  # `events-master` would name a different node in every region while
-  # resolving to whichever wrote it last. `config` needs no label — it has
-  # one master globally, which is the point of that fleet.
-  master_record_label = "events-master-use1"
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[0] # AZ-a
-
-  # Includes the peer CIDR because BE — which lives in the primary region —
-  # is this fleet's only reader.
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-module "valkey_events_b" {
-  source = "../../modules/valkey-node"
-
-  fleet               = "events"
-  node                = "use1b"
-  role                = "replica"
-  master_record_label = "events-master-use1"
+  # A real master here — events is standalone per region. Region-qualified
+  # because the zone is shared: an unqualified `events-master` would name a
+  # different node in every region.
+  master_record_label  = "events-master-use1"
+  create_master_record = true
 
   valkey_version       = local.valkey_version
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  maxmemory_percent    = 50
-  create_timeout       = "2m"
-
-  backup_bucket = local.valkey_backup_bucket
-
-  run_sentinel    = true
-  sentinel_quorum = 2
+  backup_bucket        = local.valkey_backup_bucket
 
   auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
 
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[1] # AZ-b — the point of the pair
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.private_subnet_ids
 
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
+  # Peer CIDR included because BE, in the primary region, is this fleet's
+  # only reader.
+  client_cidrs  = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-module "valkey_events_c" {
-  source = "../../modules/valkey-node"
-
-  fleet               = "events"
-  node                = "use1c"
-  role                = "replica"
-  sentinel_only       = true
-  master_record_label = "events-master-use1"
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  instance_type        = "t4g.nano"
-  create_timeout       = "2m"
-
-  run_sentinel    = true
-  sentinel_quorum = 2
-
-  auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
-
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.private_subnet_ids[2] # AZ-c
-
-  client_cidrs = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = merge(local.tags, { "meandr:plane" = "events" })
-}
-
-# Bootstrapped once, then owned by Sentinel — ignore_changes is what stops
-# the next apply pointing writers at a node demoted hours ago.
-resource "aws_route53_record" "valkey_events_master" {
-  zone_id = module.vpc.internal_dns_zone_id
-  name    = module.valkey_events_a.master_hostname
-  type    = "CNAME"
-  ttl     = 5
-  records = [module.valkey_events_a.hostname]
-
-  lifecycle {
-    ignore_changes = [records]
-  }
+  tags = local.tags
 }
 
 module "valkey_recipes" {
   source = "../../modules/valkey-recipes"
 
-  instance_ids = [
-    module.valkey_config_a.instance_id,
-    module.valkey_config_b.instance_id,
-    module.valkey_config_c.instance_id,
-    module.valkey_events_a.instance_id,
-    module.valkey_events_b.instance_id,
-    module.valkey_events_c.instance_id,
-  ]
+  # Every node in the region. A fleet missing here keeps the recipes it
+  # already has and silently receives no new ones.
+  instance_ids = concat(
+    module.valkey_config.instance_ids,
+    module.valkey_events.instance_ids,
+  )
 
   aws_profile = local.aws_profile
   aws_region  = local.region
@@ -812,6 +659,125 @@ resource "aws_s3_bucket_replication_configuration" "buffer" {
         replica_kms_key_id = data.aws_kms_key.primary_payload.arn
       }
     }
+  }
+}
+
+# --- Replicated secrets, read locally -----------------------------------
+#
+# Written in eu-central-1 and replicated here; a cross-region fetch would
+# fail to boot this region whenever the primary is unreachable.
+
+data "aws_secretsmanager_secret" "session_signing_key" {
+  name = "meandr/session/${local.env}/signing-key"
+}
+
+data "aws_secretsmanager_secret" "valkey_client" {
+  name = "meandr/valkey/${local.env}/client"
+}
+
+# --- Proxy --------------------------------------------------------------
+
+module "mcp" {
+  source = "../../modules/meandr-mcp"
+
+  providers = {
+    aws     = aws
+    aws.dns = aws.shared
+  }
+
+  env        = local.env
+  account_id = local.account_id
+
+  image_tag = "develop"
+
+  vpc_id                 = module.vpc.vpc_id
+  vpc_cidr_block         = module.vpc.vpc_cidr_block
+  public_subnet_ids      = local.app_public_subnet_ids
+  private_subnet_ids     = local.app_private_subnet_ids
+  internal_dns_zone_id   = module.vpc.internal_dns_zone_id
+  internal_dns_zone_name = module.vpc.internal_dns_zone_name
+
+  # `config-master` is global and resolves through the shared zone, so this
+  # bootstrap address is the same string in every region. Sentinel plus
+  # latency routing is what actually picks a replica.
+  config_reader_endpoint = module.valkey_config.master_hostname
+  config_sentinel_addrs = concat(
+    module.valkey_config.sentinel_addrs,
+    flatten([
+      for code in local.peer_node_codes : [
+        for az in ["a", "b", "c"] :
+        "config-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ]
+    ]),
+  )
+  config_sentinel_master = "config"
+
+  # Events is standalone per region — local Sentinels only, and a remote
+  # one would name another region's master.
+  event_writer_endpoint = module.valkey_events.master_hostname
+  event_sentinel_addrs  = module.valkey_events.sentinel_addrs
+  event_sentinel_master = "events"
+
+  valkey_client_secret_arn = data.aws_secretsmanager_secret.valkey_client.arn
+
+  redis_auth_enabled    = true
+  redis_auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
+
+  session_signing_key_secret_arn = data.aws_secretsmanager_secret.session_signing_key.arn
+
+  # The Global Table replica and the KMS replica key, both declared by this
+  # region. Same table name everywhere; the ARN is regional.
+  cred_store_enabled      = true
+  creds_table_name        = "meandr-creds-${local.env}"
+  creds_table_arn         = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/meandr-creds-${local.env}"
+  cred_encryption_key_arn = aws_kms_replica_key.cred.arn
+
+  capture_enabled            = true
+  payloads_bucket            = module.payloads_bucket.bucket
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
+
+  action_key_enabled           = true
+  envelope_encryption_key_arn  = aws_kms_replica_key.action.arn
+  payload_encryption_key_alias = aws_kms_alias.action.name
+
+  dns_zone_name = local.proxy_apex
+
+  # The accelerator owns *.meandr.live. Two regions creating it would be
+  # two state files overwriting each other.
+  create_wildcard_record = false
+
+  self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
+
+  oauth_issuer_host       = "staging-mcp.meandr.com"
+  oauth_discovery_enabled = true
+
+  proxy = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+
+  log_retention_days = 7
+}
+
+# --- Global Accelerator endpoint ----------------------------------------
+#
+# Attaches this region to the accelerator in account-staging/, which holds
+# no list of regions.
+#   terraform -chdir=../../account-staging output ga_listener_arn
+
+resource "aws_globalaccelerator_endpoint_group" "local_region" {
+  provider = aws.usw2
+
+  listener_arn          = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  endpoint_group_region = local.region
+
+  health_check_protocol         = "TCP"
+  health_check_port             = 443
+  health_check_interval_seconds = 30
+  threshold_count               = 3
+
+  endpoint_configuration {
+    endpoint_id                    = module.mcp.nlb_arn
+    weight                         = 100
+    client_ip_preservation_enabled = true
   }
 }
 
