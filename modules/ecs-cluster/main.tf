@@ -16,6 +16,8 @@
 # secrets) by creating extra `aws_iam_role_policy_attachment` resources targeting
 # the role ARN exported below.
 
+data "aws_region" "current" {}
+
 # --- Cluster ------------------------------------------------------------
 
 resource "aws_ecs_cluster" "main" {
@@ -67,7 +69,9 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
 # runs as (that's the task role, defined per-service).
 
 resource "aws_iam_role" "execution" {
-  name = "${var.name}-execution"
+  # Region-qualified because IAM is GLOBAL: a second region in the same
+  # account cannot create a role of the same name.
+  name = "${var.name}-execution-${data.aws_region.current.region}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

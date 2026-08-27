@@ -398,7 +398,10 @@ module "cluster" {
 # Proxy reads config from Redis (no AWS SDK call for that); auth secrets are
 # fetched via the execution role at task-start.
 resource "aws_iam_role" "task" {
-  name = "meandr-mcp-task-${var.env}"
+  # Region-qualified because IAM is GLOBAL. Per-region is also the tighter
+  # grant: the policies name this region's payload bucket, KMS replica and
+  # SSM parameter, so a shared role would need the union across regions.
+  name = "meandr-mcp-task-${var.env}-${local.region}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
