@@ -57,21 +57,12 @@ locals {
   # a count, and count must be knowable at plan time.
   valkey_backup_bucket = "meandr-valkey-backups-${local.env}-${local.region}"
 
-  # Is this the env's PRIMARY region? The archive is written by BE from
-  # Postgres, which is central, so there is ONE archive per env and it
-  # lives here. Secondary regions are mcp-only: they get a payloads
-  # bucket — which IS per region, because the proxy writes it on the hot
-  # path — and no archive.
-  #
-  # Deliberately NOT derived from whether the api module is present.
-  # Production creates the archive bucket ahead of its deferred workload
-  # to reserve the global S3 name, and development has no ECS at all yet
-  # still writes an archive from a laptop.
-  #
-  # S3 catches half a mistake: `meandr-mcp-archive-<env>` is globally
-  # unique, so a second region trying to create it fails loudly. The Glue
-  # database would NOT — catalogs are per region, so a duplicate would
-  # silently stand up an empty database whose queries return nothing.
+  # Gates the ONE-per-environment resources: the archive bucket and its
+  # Glue database. Not derived from the api module's presence — production
+  # reserves the archive name before its workload lands, and dev writes an
+  # archive with no ECS at all. Glue is why it must be explicit: S3 rejects
+  # a duplicate bucket loudly, a duplicate Glue database stands up empty
+  # and silent.
   primary = true
 
   # Regions that hold an edge. SECRETS ONLY — everything else an edge
