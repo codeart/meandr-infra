@@ -43,8 +43,12 @@ module "creds_table" {
 
   name = "meandr-creds-${local.env}"
 
-  pitr_enabled                = false # staging: throwaway data, no audit need
-  deletion_protection_enabled = false # staging: easy teardown
+  pitr_enabled = false # staging: throwaway data, no audit need
+
+  # A protected replica cannot be removed either, which is what turns an
+  # accidental replica destroy into a failed apply. Flip false and apply
+  # before an intentional teardown.
+  deletion_protection_enabled = true
 
   # No replica list here. The proxy resolves upstream credentials on the
   # request path, so every region needs this table locally — but an edge
@@ -350,6 +354,10 @@ module "api" {
   creds_table_arn           = module.creds_table.table_arn
   cred_encryption_key_arn   = module.cred_encryption_key.key_arn
   cred_encryption_key_alias = module.cred_encryption_key.alias_name
+
+  # Staging holds real developer credentials and dashboard state; it is not
+  # scratch. Flip false and apply before an intentional teardown.
+  db_deletion_protection = true
 
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }

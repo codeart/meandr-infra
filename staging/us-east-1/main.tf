@@ -77,6 +77,11 @@ resource "aws_dynamodb_table_replica" "creds" {
   # No kms_key_arn: every replica must match the SOURCE table's key manager,
   # and that table is on aws/dynamodb. The cred MRK is the ENVELOPE key the
   # proxy decrypts blobs with — a different layer, passed to the mcp module.
+
+  # Protected replicas cannot be removed, so a primary that tries fails its
+  # apply instead of silently destroying this one.
+  deletion_protection_enabled = true
+
   tags = local.tags
 }
 
