@@ -1,3 +1,6 @@
+# Section order matches eu-central-1 so the two files diff side by side.
+# Where a section is absent, a comment says why rather than leaving a gap.
+
 # Applications run in a and b ONLY; zone c carries the Sentinel arbiters.
 locals {
   app_public_subnet_ids  = slice(module.vpc.public_subnet_ids, 0, 2)
@@ -6,11 +9,9 @@ locals {
 
 # --- VPC ---------------------------------------------------------------
 #
-# 10.20.0.0/16 — CIDR is a property of the REGION, not the environment, so
-# this matches what production/us-east-1 will use. Safe because environments
-# are separate accounts and never share a network; the only pair that can
-# then never peer is staging-use1 <-> prod-use1, which should never talk.
-# See infra_inventory.md §10.3.
+# CIDR is a property of the REGION, not the environment, so this matches
+# what production/us-east-1 will use. Safe because environments are
+# separate accounts and never share a network (infra_inventory.md §10.3).
 
 module "vpc" {
   source = "../../modules/vpc"
@@ -20,32 +21,27 @@ module "vpc" {
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  # One address, as in eu-central-1: a regional NAT serves every AZ from
-  # whatever zones hold an address, so coverage is free and only redundancy
-  # costs. Verified in staging 2026-08-26 — nodes in all three AZs egressed
-  # through a single 1a address.
+  # One address serves every AZ, so coverage is free and only redundancy
+  # costs. Verified 2026-08-26.
   nat_pinned_azs = ["${local.region}a"]
 
-  # ASSOCIATE with the environment's existing zone; do not create one. A
-  # second zone of the same name is the collision the whole naming scheme
-  # exists to prevent: names resolve locally, so a replica told to follow
-  # config-master would silently attach to whatever answers at home.
+  # ASSOCIATE with the environment's existing zone; never create one. A
+  # second zone of the same name resolves locally, so a replica told to
+  # follow config-master would silently attach to the wrong master.
   existing_zone_id  = local.peer.internal_dns_zone_id
   internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags
 }
 
-# --- Peering to the primary --------------------------------------------
+# --- Cross-region link (EDGE ONLY) --------------------------------------
 #
-# Required for the `config` fleet: this region's replicas dial the primary's
-# master on 6379, and all six Sentinels gossip both ways on 26379. Resolving
-# a name is not reaching it — the shared zone gives us the first, peering the
-# second (valkey_fleets.md §6).
+# The primary has no such section: it names no edge, and both ends of every
+# link are declared from the edge that needs it.
 #
-# BOTH ends live here, via the euc1 alias, so adding this region touches no
-# resource owned by eu-central-1's state file. Peering is not transitive: a
-# third region needs its own connections or a Transit Gateway.
+# Resolving a name is not reaching it — the shared zone gives the name,
+# this gives the path, security-group CIDRs give admission
+# (valkey_fleets.md §6).
 
 module "peering" {
   source = "../../modules/region-peering"
@@ -69,37 +65,102 @@ module "peering" {
   tags = local.tags
 }
 
-# --- Shared trust material (replicated, not minted here) ----------------
+# --- Credential store ---------------------------------------------------
 #
-# The edge does NOT call modules/valkey-tls. That module CREATES a CA, and
-# a second CA would defeat the point: `config` replicates cross-region over
-# mTLS, so an edge replica has to present a certificate the primary's master
-# already trusts. One CA per environment, replicated (valkey_fleets.md §4).
-#
-# Same for the AUTH token — one per environment, or the edge cannot
-# authenticate to the primary's master at all.
-#
-# Read by NAME from the LOCAL region: Secrets Manager is regional, and these
-# resolve because eu-central-1 declares us in its replica list. A node that
-# had to fetch cross-region would fail to boot whenever the primary was
-# unreachable, which is the failure this topology exists to survive.
+# The primary CREATES the table; an edge attaches a replica. The table
+# there carries a stream and no replica list, so regions are added without
+# editing it. See docs/credential_store.md.
 
-data "aws_secretsmanager_secret" "valkey_node" {
-  name = "meandr/valkey/${local.env}/node"
+resource "aws_dynamodb_table_replica" "creds" {
+  global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-creds-${local.env}"
+
+  # The proxy resolves credentials on the request path and decrypts with
+  # the replica key, so nothing about a tool call leaves this region.
+  kms_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
+
+  tags = local.tags
 }
+
+# --- Encryption keys ----------------------------------------------------
+#
+# The primary CREATES the cred and action keys; an edge replicates them.
+# Both are multi-Region because their ciphertext crosses (SOC-2.md §2a).
+
+module "kms_replicas" {
+  source = "../../modules/kms-replica-keys"
+
+  providers = {
+    aws         = aws
+    aws.primary = aws.euc1
+  }
+
+  keys = {
+    "meandr-cred-${local.env}"   = "Replica: server credentials"
+    "meandr-action-${local.env}" = "Replica: elicitation + approval form envelopes"
+  }
+
+  tags = local.tags
+}
+
+# Regional, and deliberately unreplicable so it cannot be adopted for
+# something that crosses. Each region encrypts only objects it reads, and
+# S3 replication re-encrypts with the destination's key.
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}-${local.region}"
+  purpose    = "SSE-KMS default for this region's payload buffer"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = 7
+  multi_region            = false
+
+  tags = local.tags
+}
+
+# Read, not replicated: replication needs it to re-encrypt into the
+# primary's bucket.
+data "aws_kms_key" "primary_payload" {
+  provider = aws.euc1
+  key_id   = "alias/meandr-payload-${local.env}"
+}
+
+# --- Shared secrets -----------------------------------------------------
+#
+# The primary CREATES these and lists its edges as replica targets; an edge
+# READS the local replica by name.
+#
+# Local by necessity: a node fetching cross-region could not boot while the
+# primary was unreachable, which is the failure this topology survives.
 
 data "aws_secretsmanager_secret" "redis_auth" {
   name = "meandr/redis/${local.env}/auth-token"
 }
 
+data "aws_secretsmanager_secret" "session_signing_key" {
+  name = "meandr/session/${local.env}/signing-key"
+}
+
+# --- Internal PKI -------------------------------------------------------
+#
+# The primary MINTS the CA; an edge reads the replicated leaves. A second
+# CA would break the cross-region mTLS that `config` replication runs over.
+
+data "aws_secretsmanager_secret" "valkey_node" {
+  name = "meandr/valkey/${local.env}/node"
+}
+
+data "aws_secretsmanager_secret" "valkey_client" {
+  name = "meandr/valkey/${local.env}/client"
+}
 
 # --- Valkey ------------------------------------------------------------
 #
-# No `api` fleet: that one is BE-local and BE lives in the primary.
+# No `api` fleet: that one is BE-local, and BE lives in the primary.
 #
 # client_cidrs spans both VPCs because the primary's Sentinels must reach
-# these nodes, and security-group references do not cross regions
-# (valkey_fleets.md §6).
+# these nodes and SG references do not cross regions.
 
 module "valkey" {
   source = "../../modules/valkey-region"
@@ -109,7 +170,7 @@ module "valkey" {
   region_code = "use1"
 
   fleets = {
-    # An edge holds no master: `config-master` is global and eu-central-1
+    # An edge holds no master: `config-master` is global and the primary
     # owns the name, and replica-priority 0 means a partition finds no
     # candidate here rather than a second master.
     config = {
@@ -143,88 +204,29 @@ module "valkey" {
 module "valkey_recipes" {
   source = "../../modules/valkey-recipes"
 
-  # Every node in the region. A fleet missing here keeps the recipes it
-  # already has and silently receives no new ones.
-  instance_ids = concat(
-    module.valkey.instance_ids,
-  )
+  # Every node in the region. A fleet missing here keeps the recipes it has
+  # and silently receives no new ones.
+  instance_ids = module.valkey.instance_ids
 
   aws_profile = local.aws_profile
   aws_region  = local.region
 }
 
-# --- Keys the edge attaches itself to -----------------------------------
+# --- meandr-api ---------------------------------------------------------
 #
-# Read through the euc1 alias rather than hardcoded: same account, so a
-# data source is cheaper than an ARN nobody will remember to update.
+# ABSENT. BE and Postgres are central; the region that runs them is the
+# primary by definition.
 
-# The payload key is NOT replicated — it is regional by design. Read only
-# so replication can re-encrypt into the primary's bucket.
-data "aws_kms_key" "primary_payload" {
-  provider = aws.euc1
-  key_id   = "alias/meandr-payload-${local.env}"
-}
-
-module "kms_replicas" {
-  source = "../../modules/kms-replica-keys"
-
-  providers = {
-    aws         = aws
-    aws.primary = aws.euc1
-  }
-
-  keys = {
-    "meandr-cred-${local.env}"   = "Replica: server credentials"
-    "meandr-action-${local.env}" = "Replica: elicitation + approval form envelopes"
-  }
-
-  tags = local.tags
-}
-
-# The payload key is NOT replicated — it is regional by design, and
-# deliberately unreplicable so it cannot be adopted for something that
-# crosses regions. This region gets its OWN, because each region encrypts
-# only objects it reads itself and S3 replication re-encrypts with the
-# destination's key on the way to the primary. See SOC-2.md §2a.
-module "payload_encryption_key" {
-  source = "../../modules/payload-encryption-key"
-
-  env        = local.env
-  alias_name = "meandr-payload-${local.env}-${local.region}"
-  purpose    = "SSE-KMS default for this region's payload buffer"
-
-  enable_key_rotation     = true
-  deletion_window_in_days = 7
-  multi_region            = false
-
-  tags = local.tags
-}
-
-# The creds table replica. Declared by the edge, not listed by the primary —
-# the table there carries a stream (making it replicable) and no replica
-# list, so regions are added and removed without editing it.
-resource "aws_dynamodb_table_replica" "creds" {
-  global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-creds-${local.env}"
-
-  # The proxy resolves upstream credentials on the request path and decrypts
-  # with the replica key above, so nothing about a tool call leaves this
-  # region.
-  kms_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
-
-  tags = local.tags
-}
+# --- Archive ------------------------------------------------------------
+#
+# ABSENT. One archive bucket and one Glue database per environment, both in
+# the primary — BE writes them from Postgres.
 
 # --- Payloads: a BUFFER, not a peer store -------------------------------
 #
-# Region 2 does not keep payloads. It writes them locally — the proxy is on
-# the hot path and cannot cross an ocean to store a body — and replicates
-# into the primary, which stays the single bucket BE and Athena read. That
-# is what keeps the backend topology-blind as regions come and go
+# Written locally because the proxy is on the hot path, then replicated
+# into the primary, which stays the single bucket BE and Athena read
 # (capture_and_archive.md §6.1).
-#
-# Versioning is required on BOTH ends by S3 replication; the primary was
-# flipped ahead of this, since it lives in another state file and its
-# absence would have made this region fail to apply.
 
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
@@ -234,32 +236,18 @@ module "payloads_bucket" {
   tags        = local.tags
 
   # Buffer semantics: one clock for everything, no retention tags. This
-  # side makes no retention promise — the primary does — so a catch-all is
-  # correct here and wrong there.
+  # side makes no retention promise — the primary does.
   retention_classes      = {}
   buffer_expiration_days = 7
 
+  # Required on BOTH ends by S3 replication. The primary's flag lives in
+  # another state file and had to be enabled there first.
   versioning_enabled = true
 
-  # Into the primary, which BE and Athena read. Versioning had to be
-  # enabled there first — it lives in another state file.
   replicate_to = {
     bucket_arn  = "arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}"
     kms_key_arn = data.aws_kms_key.primary_payload.arn
   }
-}
-
-# --- Replicated secrets, read locally -----------------------------------
-#
-# Written in eu-central-1 and replicated here; a cross-region fetch would
-# fail to boot this region whenever the primary is unreachable.
-
-data "aws_secretsmanager_secret" "session_signing_key" {
-  name = "meandr/session/${local.env}/signing-key"
-}
-
-data "aws_secretsmanager_secret" "valkey_client" {
-  name = "meandr/valkey/${local.env}/client"
 }
 
 # --- Proxy --------------------------------------------------------------
@@ -284,9 +272,9 @@ module "mcp" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  # `config-master` is global and resolves through the shared zone, so this
-  # bootstrap address is the same string in every region. Sentinel plus
-  # latency routing is what actually picks a replica.
+  # OWN REGION FIRST, then every other region's. Discovery walks the list
+  # in order and is not latency-aware; which replica gets READ is chosen by
+  # measured RTT in the client (rdb.New).
   config_reader_endpoint = module.valkey.fleets["config"].master_hostname
   config_sentinel_addrs = concat(
     module.valkey.fleets["config"].sentinel_addrs,
@@ -299,7 +287,7 @@ module "mcp" {
   )
   config_sentinel_master = "config"
 
-  # Events is standalone per region — local Sentinels only, and a remote
+  # Events is standalone per region — local Sentinels only, since a remote
   # one would name another region's master.
   event_writer_endpoint = module.valkey.fleets["events"].master_hostname
   event_sentinel_addrs  = module.valkey.fleets["events"].sentinel_addrs
@@ -312,8 +300,6 @@ module "mcp" {
 
   session_signing_key_secret_arn = data.aws_secretsmanager_secret.session_signing_key.arn
 
-  # The Global Table replica and the KMS replica key, both declared by this
-  # region. Same table name everywhere; the ARN is regional.
   cred_store_enabled      = true
   creds_table_name        = "meandr-creds-${local.env}"
   creds_table_arn         = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/meandr-creds-${local.env}"
@@ -330,7 +316,7 @@ module "mcp" {
 
   dns_zone_name = local.proxy_apex
 
-  # The accelerator owns *.meandr.live. Two regions creating it would be
+  # The accelerator owns the apex record. Two regions creating it would be
   # two state files overwriting each other.
   create_wildcard_record = false
 
@@ -356,14 +342,19 @@ resource "aws_globalaccelerator_endpoint_group" "local_region" {
   listener_arn          = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
   endpoint_group_region = local.region
 
+  # An unhealthy group is withdrawn from the anycast pair, so a broken
+  # deploy stops serving silently rather than erroring. Needs an alarm.
   health_check_protocol         = "TCP"
   health_check_port             = 443
   health_check_interval_seconds = 30
   threshold_count               = 3
 
   endpoint_configuration {
-    endpoint_id                    = module.mcp.nlb_arn
-    weight                         = 100
+    endpoint_id = module.mcp.nlb_arn
+    weight      = 100
+
+    # Without this the proxy sees accelerator addresses and clientguard's
+    # per-client limits collapse onto a handful of sources.
     client_ip_preservation_enabled = true
   }
 }
