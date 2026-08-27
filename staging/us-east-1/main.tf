@@ -233,185 +233,47 @@ data "aws_secretsmanager_secret" "redis_auth" {
   name = "meandr/redis/${local.env}/auth-token"
 }
 
-# --- Valkey artifacts ---------------------------------------------------
+
+# --- Valkey ------------------------------------------------------------
 #
-# Region-local by necessity: nodes fetch the source through the S3 GATEWAY
-# ENDPOINT, which only reaches the regional service. A bucket in the primary
-# would put NAT egress — and the internet — back on the boot path that
-# vendoring the source exists to keep off it.
-
-resource "aws_s3_bucket" "artifacts" {
-  bucket = "meandr-artifacts-${local.env}-${local.region}"
-  tags   = local.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_versioning" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_object" "valkey_source" {
-  bucket      = aws_s3_bucket.artifacts.id
-  key         = "valkey/${local.valkey_version}/valkey-src.tar.gz"
-  source      = local.valkey_source_path
-  source_hash = filemd5(local.valkey_source_path)
-
-  tags = local.tags
-}
-
-# TWO per AZ, not three: an edge runs `config` and `events` but no `api`
-# fleet, which is BE-local. Six slots against a 32-vCPU quota.
+# No `api` fleet: that one is BE-local and BE lives in the primary.
 #
-# Apply this FIRST and alone — nothing binds an instance to a reservation,
-# so the only thing that makes one count is existing before the launch:
-#
-#   terraform apply -target=aws_ec2_capacity_reservation.valkey_nano
-#
-# Never via depends_on on the node modules: that defers every data source
-# inside them, local.user_data goes unknown at plan time, and
-# user_data_replace_on_change silently stops firing — a user-data change
-# then plans as an in-place update that never actually runs.
-resource "aws_ec2_capacity_reservation" "valkey_nano" {
-  for_each = toset(["${local.region}a", "${local.region}b", "${local.region}c"])
+# client_cidrs spans both VPCs because the primary's Sentinels must reach
+# these nodes, and security-group references do not cross regions
+# (valkey_fleets.md §6).
 
-  instance_type           = "t4g.nano"
-  instance_platform       = "Linux/UNIX"
-  availability_zone       = each.value
-  instance_count          = 2
-  end_date_type           = "unlimited"
-  instance_match_criteria = "open"
+module "valkey" {
+  source = "../../modules/valkey-region"
 
-  tags = merge(local.tags, { Name = "valkey-nano-${each.value}" })
-}
-
-resource "aws_s3_bucket" "valkey_backups" {
-  bucket = local.valkey_backup_bucket
-  tags   = local.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "valkey_backups" {
-  bucket = aws_s3_bucket.valkey_backups.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "valkey_backups" {
-  bucket = aws_s3_bucket.valkey_backups.id
-
-  rule {
-    id     = "expire"
-    status = "Enabled"
-    filter {}
-    expiration { days = 30 }
-  }
-}
-
-# --- Valkey: config tier (EDGE REPLICAS) --------------------------------
-#
-# Three nodes, same shape as the primary — m+s, r+s, s-only — but NONE of
-# them may ever hold the master.
-#
-# `promotable = false` emits replica-priority 0, which makes them
-# structurally ineligible rather than merely unlikely. A partition that
-# isolates the primary therefore ends with these Sentinels agreeing the
-# master is down and finding nothing they are permitted to promote: the
-# failover dies for want of a candidate instead of splitting the fleet into
-# two masters that both accept writes.
-#
-# `role = "replica"` on BOTH data nodes, unlike the primary where one is
-# "master". That argument is only a bootstrap tie-break for when no master
-# record resolves yet — and `config-master` already exists, created once in
-# eu-central-1. These nodes read it and attach.
-#
-# There is deliberately NO aws_route53_record here. `config-master` is a
-# GLOBAL name with one owner; a second region writing it would point every
-# reader in the environment at a node that cannot serve writes.
-#
-# client_cidrs spans both VPCs: the primary's Sentinels must reach these
-# nodes to monitor them, and security-group references do not cross regions
-# (valkey_fleets.md §6), so the peer CIDR has to be named literally.
-
-module "valkey_config" {
-  source = "../../modules/valkey-fleet"
-
-  fleet       = "config"
+  env         = local.env
+  region      = local.region
   region_code = "use1"
 
-  # The two settings that make this an edge. No master record because
-  # `config-master` is global and eu-central-1 owns it; not promotable so a
-  # partition finds no candidate here rather than a second master.
-  promotable           = false
-  create_master_record = false
+  fleets = {
+    # An edge holds no master: `config-master` is global and eu-central-1
+    # owns the name, and replica-priority 0 means a partition finds no
+    # candidate here rather than a second master.
+    config = {
+      promotable           = false
+      create_master_record = false
+    }
 
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  backup_bucket        = local.valkey_backup_bucket
+    # Standalone per region, so a real master — region-qualified because
+    # the zone is shared.
+    events = {
+      master_record_label = "events-master-use1"
+    }
+  }
+
+  valkey_version     = local.valkey_version
+  valkey_source_path = local.valkey_source_path
+  backup_bucket      = local.valkey_backup_bucket
 
   auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
-  client_cidrs  = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = local.tags
-}
-
-# --- Valkey: events tier (STANDALONE) -----------------------------------
-#
-# Nothing edge-specific here: `events` is one INDEPENDENT fleet per region,
-# never replicated, so this region owns a real master and its nodes are
-# promotable like any other. BE reaches across to read it — the only
-# cross-region client in the system.
-#
-# Its Sentinel set is separate from eu-central-1's by construction: separate
-# masters mean separate sets, three voters each, quorum 2. Losing all three
-# loses this region's stream and nothing else, which is the accepted trade.
-
-module "valkey_events" {
-  source = "../../modules/valkey-fleet"
-
-  fleet       = "events"
-  region_code = "use1"
-
-  # A real master here — events is standalone per region. Region-qualified
-  # because the zone is shared: an unqualified `events-master` would name a
-  # different node in every region.
-  master_record_label  = "events-master-use1"
-  create_master_record = true
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  backup_bucket        = local.valkey_backup_bucket
-
-  auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = data.aws_secretsmanager_secret.valkey_node.arn
-
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
-  # Peer CIDR included because BE, in the primary region, is this fleet's
-  # only reader.
+  vpc_id        = module.vpc.vpc_id
+  subnet_ids    = module.vpc.private_subnet_ids
   client_cidrs  = [module.vpc.vpc_cidr_block, local.peer.cidr_block]
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -425,8 +287,7 @@ module "valkey_recipes" {
   # Every node in the region. A fleet missing here keeps the recipes it
   # already has and silently receives no new ones.
   instance_ids = concat(
-    module.valkey_config.instance_ids,
-    module.valkey_events.instance_ids,
+    module.valkey.instance_ids,
   )
 
   aws_profile = local.aws_profile
@@ -700,9 +561,9 @@ module "mcp" {
   # `config-master` is global and resolves through the shared zone, so this
   # bootstrap address is the same string in every region. Sentinel plus
   # latency routing is what actually picks a replica.
-  config_reader_endpoint = module.valkey_config.master_hostname
+  config_reader_endpoint = module.valkey.fleets["config"].master_hostname
   config_sentinel_addrs = concat(
-    module.valkey_config.sentinel_addrs,
+    module.valkey.fleets["config"].sentinel_addrs,
     flatten([
       for code in local.peer_node_codes : [
         for az in ["a", "b", "c"] :
@@ -714,8 +575,8 @@ module "mcp" {
 
   # Events is standalone per region — local Sentinels only, and a remote
   # one would name another region's master.
-  event_writer_endpoint = module.valkey_events.master_hostname
-  event_sentinel_addrs  = module.valkey_events.sentinel_addrs
+  event_writer_endpoint = module.valkey.fleets["events"].master_hostname
+  event_sentinel_addrs  = module.valkey.fleets["events"].sentinel_addrs
   event_sentinel_master = "events"
 
   valkey_client_secret_arn = data.aws_secretsmanager_secret.valkey_client.arn
