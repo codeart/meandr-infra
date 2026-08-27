@@ -37,9 +37,9 @@ locals {
   # publishing it keeps CI from enumerating regions a second time.
   regions = ["eu-central-1", "us-east-1"]
 
-  # Operational alarms, not billing. Same address today; split when there is
-  # somewhere for on-call to route.
-  alert_emails = ["aws-billing@meandr.com"]
+  # Operational alarms, not billing — the budget topic keeps aws-billing.
+  # Production uses aws-prd; aws-operations is the cross-env list.
+  alert_emails = ["aws-stg@meandr.com"]
 
   # The accelerator id is the CloudWatch dimension value, and it is the
   # listener arn's first path segment.
