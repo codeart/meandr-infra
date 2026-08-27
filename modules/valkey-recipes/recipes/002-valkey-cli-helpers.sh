@@ -5,6 +5,10 @@
 # API call, and it still works when the network is what you are debugging.
 # The files are root-only, so each wrapper re-execs under sudo rather than
 # failing with a permission error that looks like a TLS one.
+#
+# Values are dequoted because Sentinel's CONFIG REWRITE quotes them, which
+# reads as WRONGPASS — a credentials error for a parsing bug, on the node
+# that just failed over.
 set -euo pipefail
 
 cat >/usr/local/bin/vc <<'SH'
@@ -15,7 +19,7 @@ exec valkey-cli --tls \
   --cacert /etc/valkey/tls/ca.crt \
   --cert /etc/valkey/tls/node.crt \
   --key /etc/valkey/tls/node.key \
-  -a "$(awk '/^requirepass /{print $2; exit}' /etc/valkey/valkey.conf)" \
+  -a "$(awk '/^requirepass /{gsub(/^"|"$/,"",$2); print $2; exit}' /etc/valkey/valkey.conf)" \
   --no-auth-warning "$@"
 SH
 
@@ -26,8 +30,8 @@ cat >/usr/local/bin/vcs <<'SH'
 # asking for the wrong name is the usual first mistake.
 [ -r /etc/valkey/tls/node.key ] || exec sudo /usr/local/bin/vcs "$@"
 
-FLEET="$(awk '/^sentinel monitor /{print $3; exit}' /etc/valkey/sentinel.conf)"
-AUTH="$(awk '/^requirepass /{print $2; exit}' /etc/valkey/sentinel.conf)"
+FLEET="$(awk '/^sentinel monitor /{gsub(/^"|"$/,"",$3); print $3; exit}' /etc/valkey/sentinel.conf)"
+AUTH="$(awk '/^requirepass /{gsub(/^"|"$/,"",$2); print $2; exit}' /etc/valkey/sentinel.conf)"
 
 [ $# -eq 0 ] && set -- SENTINEL master "$FLEET"
 
