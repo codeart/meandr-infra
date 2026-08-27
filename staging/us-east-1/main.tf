@@ -146,68 +146,26 @@ module "vpc" {
 # resource owned by eu-central-1's state file. Peering is not transitive: a
 # third region needs its own connections or a Transit Gateway.
 
-resource "aws_vpc_peering_connection" "primary" {
-  vpc_id      = module.vpc.vpc_id
-  peer_vpc_id = local.peer.vpc_id
-  peer_region = local.peer.region
+module "peering" {
+  source = "../../modules/region-peering"
 
-  # Cross-region peering cannot auto-accept; the accepter below does it.
-  auto_accept = false
-
-  tags = merge(local.tags, {
-    Name = "${local.region} to ${local.peer.region}"
-  })
-}
-
-resource "aws_vpc_peering_connection_accepter" "primary" {
-  provider = aws.euc1
-
-  vpc_peering_connection_id = aws_vpc_peering_connection.primary.id
-  auto_accept               = true
-
-  tags = merge(local.tags, {
-    Name = "${local.peer.region} from ${local.region}"
-  })
-}
-
-# DNS resolution across the link. Without this an instance resolving a peer
-# hostname gets its PUBLIC address — which for private-only nodes is no
-# address at all. The shared zone makes the name resolvable; this makes it
-# resolve to the private IP from the other side.
-resource "aws_vpc_peering_connection_options" "local" {
-  vpc_peering_connection_id = aws_vpc_peering_connection_accepter.primary.id
-
-  requester {
-    allow_remote_vpc_dns_resolution = true
+  providers = {
+    aws      = aws
+    aws.peer = aws.euc1
   }
-}
 
-resource "aws_vpc_peering_connection_options" "primary" {
-  provider = aws.euc1
+  name = "${local.region} to ${local.peer.region}"
 
-  vpc_peering_connection_id = aws_vpc_peering_connection_accepter.primary.id
+  vpc_id         = module.vpc.vpc_id
+  cidr_block     = module.vpc.vpc_cidr_block
+  route_table_id = module.vpc.private_route_table_id
 
-  accepter {
-    allow_remote_vpc_dns_resolution = true
-  }
-}
+  peer_vpc_id         = local.peer.vpc_id
+  peer_region         = local.peer.region
+  peer_cidr_block     = local.peer.cidr_block
+  peer_route_table_id = local.peer.private_route_table
 
-# Routes, both directions. The primary's table is edited from HERE — it is
-# the one resource this stack touches in the other region, and it is additive:
-# the module's routes are separate aws_route resources, so nothing here is
-# clobbered by an apply of eu-central-1 (that is why they were split out).
-resource "aws_route" "to_primary" {
-  route_table_id            = module.vpc.private_route_table_id
-  destination_cidr_block    = local.peer.cidr_block
-  vpc_peering_connection_id = aws_vpc_peering_connection.primary.id
-}
-
-resource "aws_route" "from_primary" {
-  provider = aws.euc1
-
-  route_table_id            = local.peer.private_route_table
-  destination_cidr_block    = module.vpc.vpc_cidr_block
-  vpc_peering_connection_id = aws_vpc_peering_connection_accepter.primary.id
+  tags = local.tags
 }
 
 # --- Shared trust material (replicated, not minted here) ----------------
@@ -299,52 +257,27 @@ module "valkey_recipes" {
 # Read through the euc1 alias rather than hardcoded: same account, so a
 # data source is cheaper than an ARN nobody will remember to update.
 
-data "aws_kms_key" "primary_cred" {
-  provider = aws.euc1
-  key_id   = "alias/meandr-cred-${local.env}"
-}
-
-data "aws_kms_key" "primary_action" {
-  provider = aws.euc1
-  key_id   = "alias/meandr-action-${local.env}"
-}
-
+# The payload key is NOT replicated — it is regional by design. Read only
+# so replication can re-encrypt into the primary's bucket.
 data "aws_kms_key" "primary_payload" {
   provider = aws.euc1
   key_id   = "alias/meandr-payload-${local.env}"
 }
 
-# Replicas of the two multi-Region keys, declared HERE. The primary made
-# them replicable (multi_region = true) without naming a region; this is
-# the other half. Same key material, same key id, so ciphertext written in
-# either region opens in both — which is the whole requirement, since
-# Decrypt resolves the key from the blob and a regional key simply does not
-# exist at this endpoint.
+module "kms_replicas" {
+  source = "../../modules/kms-replica-keys"
 
-resource "aws_kms_replica_key" "cred" {
-  description             = "Replica: server credentials (meandr-cred-${local.env})"
-  primary_key_arn         = data.aws_kms_key.primary_cred.arn
-  deletion_window_in_days = 7
+  providers = {
+    aws         = aws
+    aws.primary = aws.euc1
+  }
 
-  tags = local.tags
-}
-
-resource "aws_kms_alias" "cred" {
-  name          = "alias/meandr-cred-${local.env}"
-  target_key_id = aws_kms_replica_key.cred.key_id
-}
-
-resource "aws_kms_replica_key" "action" {
-  description             = "Replica: elicitation + approval form envelopes (meandr-action-${local.env})"
-  primary_key_arn         = data.aws_kms_key.primary_action.arn
-  deletion_window_in_days = 7
+  keys = {
+    "meandr-cred-${local.env}"   = "Replica: server credentials"
+    "meandr-action-${local.env}" = "Replica: elicitation + approval form envelopes"
+  }
 
   tags = local.tags
-}
-
-resource "aws_kms_alias" "action" {
-  name          = "alias/meandr-action-${local.env}"
-  target_key_id = aws_kms_replica_key.action.key_id
 }
 
 # The payload key is NOT replicated — it is regional by design, and
@@ -375,11 +308,9 @@ resource "aws_dynamodb_table_replica" "creds" {
   # The proxy resolves upstream credentials on the request path and decrypts
   # with the replica key above, so nothing about a tool call leaves this
   # region.
-  kms_key_arn = aws_kms_replica_key.cred.arn
+  kms_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
 
   tags = local.tags
-
-  depends_on = [aws_kms_alias.cred]
 }
 
 # --- Payloads: a BUFFER, not a peer store -------------------------------
@@ -408,118 +339,12 @@ module "payloads_bucket" {
   buffer_expiration_days = 7
 
   versioning_enabled = true
-}
 
-# --- Replication into the primary ---------------------------------------
-
-data "aws_iam_policy_document" "replication_assume" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["s3.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "replication" {
-  name               = "meandr-payloads-replication-${local.env}-${local.region}"
-  assume_role_policy = data.aws_iam_policy_document.replication_assume.json
-  tags               = local.tags
-}
-
-data "aws_iam_policy_document" "replication" {
-  statement {
-    sid    = "ReadSource"
-    effect = "Allow"
-    actions = [
-      "s3:GetReplicationConfiguration",
-      "s3:ListBucket",
-    ]
-    resources = [module.payloads_bucket.arn]
-  }
-
-  statement {
-    sid    = "ReadSourceObjects"
-    effect = "Allow"
-    actions = [
-      "s3:GetObjectVersionForReplication",
-      "s3:GetObjectVersionAcl",
-      "s3:GetObjectVersionTagging",
-    ]
-    resources = ["${module.payloads_bucket.arn}/*"]
-  }
-
-  statement {
-    sid    = "WriteDestination"
-    effect = "Allow"
-    actions = [
-      "s3:ReplicateObject",
-      "s3:ReplicateDelete",
-      "s3:ReplicateTags",
-    ]
-    resources = ["arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}/*"]
-  }
-
-  # Replication DECRYPTS with this region's key and RE-ENCRYPTS with the
-  # primary's. That is why the payload keys can stay regional: no single
-  # key ever spans regions, only this role does.
-  statement {
-    sid       = "DecryptLocal"
-    effect    = "Allow"
-    actions   = ["kms:Decrypt"]
-    resources = [module.payload_encryption_key.key_arn]
-  }
-
-  statement {
-    sid       = "EncryptPrimary"
-    effect    = "Allow"
-    actions   = ["kms:Encrypt", "kms:GenerateDataKey"]
-    resources = [data.aws_kms_key.primary_payload.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "replication" {
-  name   = "replication"
-  role   = aws_iam_role.replication.id
-  policy = data.aws_iam_policy_document.replication.json
-}
-
-resource "aws_s3_bucket_replication_configuration" "buffer" {
-  bucket = module.payloads_bucket.bucket
-  role   = aws_iam_role.replication.arn
-
-  rule {
-    id     = "buffer-to-primary"
-    status = "Enabled"
-
-    filter {}
-
-    # OFF, and load-bearing. With it on, the buffer's 7-day sweep could
-    # propagate deletions into the primary — turning a local cleanup into
-    # data loss in the bucket that holds the only copy. (S3 never replicates
-    # LIFECYCLE-created markers, but this makes the guarantee explicit
-    # rather than relying on that distinction.)
-    delete_marker_replication {
-      status = "Disabled"
-    }
-
-    # Objects here are SSE-KMS, and replication skips encrypted objects
-    # unless told to handle them.
-    source_selection_criteria {
-      sse_kms_encrypted_objects {
-        status = "Enabled"
-      }
-    }
-
-    destination {
-      bucket = "arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}"
-
-      encryption_configuration {
-        replica_kms_key_id = data.aws_kms_key.primary_payload.arn
-      }
-    }
+  # Into the primary, which BE and Athena read. Versioning had to be
+  # enabled there first — it lives in another state file.
+  replicate_to = {
+    bucket_arn  = "arn:aws:s3:::meandr-mcp-payloads-${local.peer.region}-${local.env}"
+    kms_key_arn = data.aws_kms_key.primary_payload.arn
   }
 }
 
@@ -591,7 +416,7 @@ module "mcp" {
   cred_store_enabled      = true
   creds_table_name        = "meandr-creds-${local.env}"
   creds_table_arn         = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/meandr-creds-${local.env}"
-  cred_encryption_key_arn = aws_kms_replica_key.cred.arn
+  cred_encryption_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
 
   capture_enabled            = true
   payloads_bucket            = module.payloads_bucket.bucket
@@ -599,8 +424,8 @@ module "mcp" {
   payload_encryption_key_arn = module.payload_encryption_key.key_arn
 
   action_key_enabled           = true
-  envelope_encryption_key_arn  = aws_kms_replica_key.action.arn
-  payload_encryption_key_alias = aws_kms_alias.action.name
+  envelope_encryption_key_arn  = module.kms_replicas.key_arns["meandr-action-${local.env}"]
+  payload_encryption_key_alias = module.kms_replicas.alias_names["meandr-action-${local.env}"]
 
   dns_zone_name = local.proxy_apex
 
@@ -648,4 +473,4 @@ output "vpc_id" { value = module.vpc.vpc_id }
 output "vpc_cidr_block" { value = module.vpc.vpc_cidr_block }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
-output "peering_connection_id" { value = aws_vpc_peering_connection.primary.id }
+output "peering_connection_id" { value = module.peering.connection_id }

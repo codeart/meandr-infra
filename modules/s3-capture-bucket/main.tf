@@ -250,3 +250,120 @@ data "aws_iam_policy_document" "this" {
   }
 
 }
+
+# --- Replication (optional) ---------------------------------------------
+#
+# Set replicate_to and this bucket becomes a regional buffer feeding one
+# authoritative store. S3 requires versioning on BOTH ends.
+
+data "aws_iam_policy_document" "replication_assume" {
+  count = var.replicate_to == null ? 0 : 1
+
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["s3.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "replication" {
+  count = var.replicate_to == null ? 0 : 1
+
+  name               = "${var.name}-replication"
+  assume_role_policy = data.aws_iam_policy_document.replication_assume[0].json
+  tags               = var.tags
+}
+
+data "aws_iam_policy_document" "replication" {
+  count = var.replicate_to == null ? 0 : 1
+
+  statement {
+    sid       = "ReadSource"
+    effect    = "Allow"
+    actions   = ["s3:GetReplicationConfiguration", "s3:ListBucket"]
+    resources = [aws_s3_bucket.this.arn]
+  }
+
+  statement {
+    sid    = "ReadSourceObjects"
+    effect = "Allow"
+    actions = [
+      "s3:GetObjectVersionForReplication",
+      "s3:GetObjectVersionAcl",
+      "s3:GetObjectVersionTagging",
+    ]
+    resources = ["${aws_s3_bucket.this.arn}/*"]
+  }
+
+  statement {
+    sid       = "WriteDestination"
+    effect    = "Allow"
+    actions   = ["s3:ReplicateObject", "s3:ReplicateDelete", "s3:ReplicateTags"]
+    resources = ["${var.replicate_to.bucket_arn}/*"]
+  }
+
+  # Decrypts with THIS bucket's key and re-encrypts with the destination's,
+  # which is why both keys stay regional — only the role spans regions.
+  statement {
+    sid       = "DecryptLocal"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [var.kms_key_arn]
+  }
+
+  statement {
+    sid       = "EncryptDestination"
+    effect    = "Allow"
+    actions   = ["kms:Encrypt", "kms:GenerateDataKey"]
+    resources = [var.replicate_to.kms_key_arn]
+  }
+}
+
+resource "aws_iam_role_policy" "replication" {
+  count = var.replicate_to == null ? 0 : 1
+
+  name   = "replication"
+  role   = aws_iam_role.replication[0].id
+  policy = data.aws_iam_policy_document.replication[0].json
+}
+
+resource "aws_s3_bucket_replication_configuration" "this" {
+  count = var.replicate_to == null ? 0 : 1
+
+  bucket = aws_s3_bucket.this.id
+  role   = aws_iam_role.replication[0].arn
+
+  rule {
+    id     = "to-primary"
+    status = "Enabled"
+
+    filter {}
+
+    # OFF, and load-bearing: with it on, this bucket's own expiry sweep
+    # would propagate deletions into the store holding the only copy.
+    delete_marker_replication {
+      status = "Disabled"
+    }
+
+    # Objects are SSE-KMS, and replication skips encrypted objects unless
+    # told to handle them.
+    source_selection_criteria {
+      sse_kms_encrypted_objects {
+        status = "Enabled"
+      }
+    }
+
+    destination {
+      bucket = var.replicate_to.bucket_arn
+
+      encryption_configuration {
+        replica_kms_key_id = var.replicate_to.kms_key_arn
+      }
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.this]
+}

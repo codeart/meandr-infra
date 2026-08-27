@@ -112,3 +112,23 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "replicate_to" {
+  description = <<-EOT
+    Replicate this bucket into another. Null (default) means no
+    replication.
+
+    Requires versioning on BOTH ends — S3 refuses otherwise, and the
+    destination's flag lives in another state file, so it must be enabled
+    there first.
+
+    The role decrypts with this bucket's key and re-encrypts with the
+    destination's, so neither key has to span regions.
+  EOT
+
+  type = object({
+    bucket_arn  = string
+    kms_key_arn = string
+  })
+  default = null
+}
