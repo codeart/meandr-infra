@@ -1,47 +1,27 @@
 #!/usr/bin/env bash
-# Drop redundant CloudWatch metrics from the agent config.
+# Drop redundant CloudWatch metrics: mem_available, swap_used, and procstat
+# (double-counted, since valkey-sentinel is a symlink to valkey-server).
+# Billing is per name PER NODE, so each costs nine metrics, not one.
 #
-# CloudWatch bills per unique namespace + name + DIMENSION SET, so a name
-# published by nine nodes is nine billable metrics, not one. At $0.30 each
-# these cost ~$9/month and grow with every node and every region.
+# Two non-obvious agent behaviours:
+#   1. `fetch-config` MOVES the JSON into file_<name>.json; the path
+#      userdata wrote to no longer exists afterwards.
+#   2. The agent reads the GENERATED .toml, so editing JSON in place does
+#      nothing until fetch-config regenerates.
 #
-#   mem_available    — derivable from mem_used_percent, which we keep
-#   swap_used        — swap_used_percent carries the same signal; the
-#                      absolute figure adds nothing on a fixed-size node
-#   procstat         — 12 metrics, and DOUBLE-COUNTED by accident:
-#                      valkey-sentinel is a symlink to valkey-server (the
-#                      mode comes from argv[0]), so a filter on
-#                      `exe: valkey-server` matches both processes and
-#                      emits a set for each. UsedMemory from INFO is a
-#                      better memory number than procstat_memory_rss, and
-#                      we already publish it.
+# Hence: jq-edit a copy and hand it to fetch-config. jq rather than a
+# rewrite so one recipe serves both node shapes without duplicating either.
 #
-# TWO THINGS ABOUT THE AGENT THAT ARE NOT OBVIOUS:
-#
-# 1. `fetch-config` MOVES the JSON you hand it into
-#    etc/amazon-cloudwatch-agent.d/file_<name>.json. The path userdata
-#    wrote to does not exist afterwards.
-# 2. The running agent reads the GENERATED .toml, not the JSON. Editing
-#    the JSON in place changes nothing until fetch-config regenerates.
-#
-# So: edit a copy, hand the copy to fetch-config, let it regenerate and
-# restart. Edited with jq rather than rewritten so one recipe serves both
-# node shapes — a data node and an arbiter have different configs, and
-# duplicating that here would give it a second place to drift.
-#
-# The userdata template is deliberately NOT changed: that would rewrite
-# user_data and replace all nine nodes to save $9/month. A node built
-# later comes up with the extra metrics and the next apply trims them,
-# because a new instance replays the whole backlog.
+# Userdata is deliberately NOT changed — that would replace all nine nodes.
+# A node built later comes up untrimmed and replays this from the backlog.
 set -euo pipefail
 
 CTL=/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
 CONF_DIR=/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.d
 
-# No agent at all is a legitimate "nothing to do". An agent that IS
-# installed but whose config cannot be found is NOT — it means an
-# assumption here is wrong, and reporting success would hide that. The
-# first version of this recipe did exactly that on all nine nodes.
+# No agent is a legitimate no-op. An agent installed with no findable
+# config is not — that means an assumption here is wrong, and exiting 0
+# would hide it.
 if [ ! -x "$CTL" ]; then
   echo "no CloudWatch agent installed; nothing to trim"
   exit 0

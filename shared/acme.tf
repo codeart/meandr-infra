@@ -1,38 +1,23 @@
-# ACME DNS-01 delegation — cross-account roles the BE assumes to write
-# `_acme-challenge` TXT records into the public zones.
+# Cross-account roles the BE assumes to write `_acme-challenge` TXT records
+# into the public zones, which live here in Shared.
 #
-# The zones live here in Shared, the workloads that need them run in the
-# other accounts. Rather than granting those accounts Route 53 access
-# directly, each env gets its OWN role here, trusting only that env's
-# principal. The point of the split is blast radius: staging and
-# production zones share an account, so a single role scoped to both
-# would let staging credentials rewrite production DNS.
+# One role PER ENV, for blast radius: staging and production zones share an
+# account, so a role scoped to both would let staging rewrite production DNS.
 #
 # Every role is scoped three ways, and all three matter:
-#   - resource   → exactly one hosted zone
-#   - RecordTypes→ TXT only, so a stolen session can't move an A/ALIAS
-#                  record and hijack traffic
-#   - Names      → `_acme-challenge.*` only, so it can't touch a live
-#                  hostname even as TXT (SPF/DMARC/verification records)
+#   - resource     exactly one hosted zone
+#   - RecordTypes  TXT only, so a stolen session cannot move an A/ALIAS
+#   - Names        `_acme-challenge.*`, so it cannot touch SPF or DMARC
 #
-# The zones are operator-managed (see main.tf header), so all three are
-# looked up by name rather than declared. That is deliberate: this file
-# grants access to zones it does not own, and creating one by accident
-# here would be worse than a failed plan — a plan that fails because a
-# zone is missing says exactly what to go do.
+# Zones are looked up, never declared: this file grants access to zones it
+# does not own, and a plan that fails on a missing zone is the better outcome.
 
 locals {
-  # env → (zone it may write, principal allowed to assume). Adding an env
+  # env -> (zone it may write, principal allowed to assume). Adding an env
   # is one entry plus the role ARN on that env's task definition.
   #
-  # Principals differ by env on purpose: staging and production run as
-  # ECS task roles, dev runs as the local engineer's IAM user. Trust
-  # names the exact principal, never the account root — root would let
-  # ANY role in that account assume this one.
-  #
-  # meandr.dev is a real, delegated TLD (and HSTS-preloaded), so unlike
-  # the meandr.local sandbox it replaced, a development order can
-  # actually complete instead of failing at validation.
+  # Principals differ by env: staging and production are ECS task roles,
+  # dev is the local engineer's IAM user.
   acme_envs = {
     staging = {
       zone       = "meandr.live"
@@ -67,22 +52,14 @@ resource "aws_iam_role" "acme_dns" {
   name        = "meandr-acme-dns-${each.key}"
   description = "ACME DNS-01 challenge writes into ${each.value.zone}, assumed by ${each.key}"
 
-  # Principal is the workload ACCOUNT ROOT, narrowed to the exact caller
-  # by aws:PrincipalArn. Effective access is identical to naming the
-  # principal directly, and it avoids two failure modes that idiom has:
+  # ACCOUNT ROOT narrowed to one caller by aws:PrincipalArn — NOT "anyone in
+  # the account". Effective access equals naming the principal directly, and
+  # it avoids two failure modes of that idiom:
   #
-  #   1. Ordering. IAM validates principals when a role is CREATED, so
-  #      naming a not-yet-deployed task role fails the apply outright
-  #      (`MalformedPolicyDocument: Invalid principal in policy`).
-  #      production's BE isn't deployed yet; root always exists, so this
-  #      file no longer has to know or care.
-  #   2. Recreation. A directly-named principal is stored internally as
-  #      its unique id, NOT its ARN — delete and recreate the task role
-  #      under the same name and the trust silently stops matching. The
-  #      condition compares ARNs, which survive recreation.
-  #
-  # Root here does NOT mean "anyone in that account": it delegates to
-  # that account's IAM, and the condition then admits exactly one ARN.
+  #   1. IAM validates principals at role CREATION, so naming a not-yet
+  #      deployed task role fails the apply. Root always exists.
+  #   2. A named principal is stored as its unique id, not its ARN, so
+  #      recreating the task role silently breaks trust. ARNs survive.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -110,13 +87,10 @@ resource "aws_iam_role_policy" "acme_dns" {
     Version = "2012-10-17"
     Statement = [
       {
-        # The write, fenced to TXT records named _acme-challenge.*.
-        # Both condition keys are multi-valued — a single ChangeBatch can
-        # carry several changes — so ForAllValues is required: it fails
-        # the whole batch unless EVERY entry satisfies the condition.
-        # StringEquals/StringLike alone would pass a batch that merely
-        # CONTAINS a compliant change, letting an A-record edit ride
-        # along beside a legitimate TXT one.
+        # ForAllValues is REQUIRED, not stylistic: a ChangeBatch is
+        # multi-valued, so plain StringEquals would pass a batch that merely
+        # CONTAINS a compliant change — letting an A-record edit ride along
+        # beside a legitimate TXT one.
         Sid      = "AcmeChallengeWrite"
         Effect   = "Allow"
         Action   = "route53:ChangeResourceRecordSets"

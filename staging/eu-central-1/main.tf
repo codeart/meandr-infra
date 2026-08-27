@@ -32,16 +32,11 @@ module "vpc" {
   tags = local.tags
 }
 
-# --- Credential store (Dynamo + KMS envelope) --------------------------
+# --- Credential store ---------------------------------------------------
 #
-# BE writes AES-256-GCM-encrypted server creds to the cred Dynamo table
-# alongside the cred_version + key_version metadata; proxy reads on
-# cfg.server events and decrypts locally with a KMS-wrapped data key
-# fetched from SM. See docs/credential_store.md for the full Ruby↔Go
-# wire contract.
-#
-# Replication is declared by the edge, not here — see the module. This
-# region only makes the table replicable and never names a consumer.
+# The primary CREATES the table; an edge attaches a replica. The table
+# carries a stream and no replica list, so regions are added without
+# editing it. See docs/credential_store.md.
 
 module "creds_table" {
   source = "../../modules/dynamodb-creds-table"
@@ -72,20 +67,9 @@ module "cred_encryption_key" {
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
 
-  # Multi-region, because the cred store is the one dataset that CROSSES
-  # regions: BE encrypts a blob once, the Global Table replicates it, and
-  # every region's proxy must decrypt that same ciphertext on the request
-  # path. Decrypt resolves the key from the blob, and a single-region key
-  # simply does not exist at the edge's KMS endpoint.
-  #
-  # Contrast the payload key, which stays regional — each region encrypts
-  # objects only it reads, and S3 replication re-encrypts with the
-  # destination's key, so no payload ciphertext ever needs one key to
-  # span regions.
-  #
-  # Replicas are declared by the edge (aws_kms_replica_key), not listed
-  # here: this flag makes the key REPLICABLE without naming who takes it
-  # up, exactly like the creds table's stream.
+  # Ciphertext CROSSES: BE encrypts once, the Global Table replicates it,
+  # and every region's proxy decrypts that same blob. Replicas are declared
+  # by the edge — this flag only makes the key replicable.
   multi_region = true
 
   tags = local.tags
@@ -101,48 +85,22 @@ module "payload_encryption_key" {
   enable_key_rotation     = true
   deletion_window_in_days = 7 # staging: short window for easy iteration
 
-  # BUCKET-AT-REST ONLY, and single-region on purpose.
-  #
-  # S3 replication decrypts with the source key and re-encrypts with the
-  # destination's, so a per-region bucket key replicates fine — there is
-  # nothing to gain from a multi-region key here, and flipping the flag
-  # would recreate the CMK and orphan every payload and archive object
-  # already written under it.
-  #
-  # The application envelope moved to its own key (below), which is what
-  # actually needed to exist in more than one region.
-  #
-  # Regional is also the GUARDRAIL, not merely the cheaper default. A key
-  # that cannot be replicated cannot be quietly adopted for something that
-  # crosses regions — that misuse would work in one region and fail in the
-  # next, which is the hardest shape of bug to find. Immutability is doing
-  # useful work here: keep it.
+  # Regional, and deliberately unreplicable so it cannot be adopted for
+  # something that crosses. Each region encrypts only objects it reads, and
+  # S3 replication re-encrypts with the destination's key. Flipping this
+  # recreates the CMK and orphans every object already written.
   multi_region = false
 
   tags = local.tags
 }
 
-# The ACTION-form key — payloadcrypt, which wraps the answer to an
-# UPSTREAM-initiated elicitation. Separate from the bucket key because the
-# two have different geography, not because they hold different secrets.
+# Wraps the answer to an UPSTREAM-initiated elicitation, which can ask for
+# anything. Our own approval form stays plaintext — it is an OTP that BE
+# must read to validate. See buildResponded in action_responded.go.
 #
-# Only upstream forms are encrypted. Our own approval form rides in
-# plaintext on purpose: it is an OTP and a comment, BE must read the OTP to
-# validate it, and encrypting it would hand BE kms:Decrypt over every form
-# to check a six-digit code. An upstream form can ask for anything — a
-# token, a card number — so it must never sit on the event stream in clear.
-# See buildResponded in internal/middleware/action_responded.go.
-#
-# A form is wrapped by whichever region's proxy handled the elicitation and
-# unwrapped by BE in the primary region. A region-local key would put a
-# transatlantic KMS call on one side or the other; a MULTI-REGION key has a
-# replica in each region, so both ends stay local.
-#
-# Splitting it costs nothing and loses nothing: the bucket key keeps every
-# object already written under it, and envelopes record their own CMK
-# (payloadcrypt.Envelope.CMK, passed to kms:Decrypt), so envelopes wrapped
-# by the older key keep decrypting for as long as it exists. Both keys are
-# granted to both consumers for exactly that reason.
+# Multi-region because a form is wrapped at the edge that handled it and
+# unwrapped by BE in the primary; a replica each side keeps both KMS calls
+# local. Separate from the bucket key for that geography alone.
 module "action_encryption_key" {
   source = "../../modules/payload-encryption-key"
 
@@ -160,23 +118,14 @@ module "action_encryption_key" {
   tags = local.tags
 }
 
-# --- Redis AUTH token (shared across all three planes) -----------------
+# --- Shared secrets -----------------------------------------------------
 #
-# One token per env, used by config-stream + event-stream + api-redis.
-# Network isolation (private subnets + SG ingress) stays the primary
-# trust boundary; AUTH is defense-in-depth and helps with SOC 2 / HIPAA
-# questionnaires that ask specifically about data-tier auth.
+# The primary CREATES these and lists its edges as replica targets; an edge
+# READS the local replica by name.
 #
-# Rollout sequence on a cluster that's already running without AUTH:
-#   1. First apply with `auth_token_update_strategy = "ROTATE"` (the
-#      default in the elasticache-valkey module) — cluster starts
-#      accepting both no-auth and the new token. Apps can roll their
-#      task defs onto the new password env vars during this window
-#      without disconnects.
-#   2. Second apply with no changes (still ROTATE) — cluster has been
-#      auth-only since the first apply finished propagating, but a
-#      no-op second apply makes the state explicit.
-# To rotate later: change the random_password length/keepers, apply.
+# One AUTH token per env across all three fleets. Network isolation stays
+# the trust boundary; AUTH is defense-in-depth. Rotate by changing the
+# random_password length or keepers.
 
 resource "random_password" "redis_auth" {
   length  = 64
@@ -238,27 +187,13 @@ resource "aws_secretsmanager_secret_version" "session_signing_key" {
   secret_string = random_password.session_signing_key.result
 }
 
-# --- Proxy wildcard TLS cert -------------------------------------------
+# Terraform owns the CONTAINER and its replication; the ACME pipeline owns
+# the VALUE (cert_store.md §5). NO secret_version here — writing one would
+# fight the renewal cron.
 #
-# Terraform owns the CONTAINER and its replication; BE owns the VALUE.
-# The cert is issued and renewed by the ACME pipeline (cert_store.md §5),
-# which writes through Meandr::Secrets — create_secret, falling back to
-# put_secret_value when it already exists. So declaring the shell here
-# costs BE nothing and needs no code change.
-#
-# This exists ONLY to make replication declarative. The proxy resolves its
-# cert by NAME against its own region's Secrets Manager, so an edge with
-# no local copy gets ResourceNotFound and fails the TLS handshake — it
-# would serve nothing, and only at the first request. A cert also renews
-# roughly every 60 days, so the alternative (a copy per region) would mean
-# an apply per region per renewal, failing silently on the one forgotten.
-#
-# NO aws_secretsmanager_secret_version here on purpose: the value is not
-# Terraform's, and writing one would fight the renewal cron.
-#
-# Only OUR apexes live in SM — one per environment. Customer certs move to
-# DynamoDB precisely because per-secret replication does not scale to
-# them (cert_store.md §4.1).
+# Declared only to make replication automatic: the proxy resolves its cert
+# by name in its own region, and a renewal every 60 days would otherwise
+# mean an apply per region, failing silently on the one forgotten.
 resource "aws_secretsmanager_secret" "proxy_cert" {
   name        = "meandr/certs/${local.env}/${local.proxy_apex}"
   description = "TLS cert + key for *.${local.proxy_apex} (${local.env}). Written by the ACME pipeline; replication managed here."
@@ -272,39 +207,11 @@ resource "aws_secretsmanager_secret" "proxy_cert" {
   }
 }
 
-# --- Config-stream Valkey ----------------------------------------------
+# --- Internal PKI -------------------------------------------------------
 #
-# The shared Redis where the BE writes config records (projects, servers,
-# agents, policies, tokens, hosts, tools) and produces the inbound event
-# stream that the proxy consumes. Lives at region level (not inside an
-# app module) because both meandr-api and meandr-mcp consume it.
-# Standalone today; promotes to gd_primary when production launches a
-# second region. TLS-on from day 1 — required for Global Datastore
-# eligibility, can't be toggled in place.
+# The primary MINTS the CA; an edge reads the replicated leaves. A second
+# CA would break the cross-region mTLS that `config` replication runs over.
 
-# --- Self-hosted Valkey (config tier) -----------------------------------
-#
-# Replaced the `config_stream` ElastiCache cluster, removed 2026-08-25
-# once both sides had cut over — verified zero commands across every
-# metric type before deletion, not merely zero connections, which never
-# reaches zero while ElastiCache health-checks itself.
-#
-# Both the proxy and BE reach these through Sentinel over mTLS. See
-# docs/valkey_fleets.md.
-
-# How vendored source reaches an instance. User-data caps at 16 KB and the
-# Valkey tarball is megabytes, so it cannot ride inline; this is the
-# transport.
-#
-# In THIS account and region on purpose. A gateway endpoint only routes to
-# the regional S3 service, so a bucket anywhere else would mean NAT egress
-# on every boot — putting the internet back on the path we vendored the
-# source to keep it off. Re-uploading 4 MB per environment is the cheaper
-# side of that trade.
-#
-# Not the capture or payloads buckets: those hold customer data under a
-# retention policy, and a blob read by an instance role at boot has no
-# business sharing either.
 module "internal_pki" {
   source = "../../modules/internal-pki"
 
@@ -366,53 +273,18 @@ module "valkey" {
 
 
 
-# --- Sentinel arbiters (AZ-c) -------------------------------------------
-#
-# One per fleet, and the reason is arithmetic: Sentinel authorises a
-# failover by MAJORITY OF THE WHOLE SET, not by the quorum setting. Two
-# Sentinels have a majority of two, so losing either one left the fleet
-# with no automatic failover at all — the pair could detect a dead master
-# and still be unable to replace it.
-#
-# A third vote in a third zone makes the majority reachable after any
-# single-AZ loss. Quorum stays 2 precisely because it was already right;
-# what changes is how many Sentinels survive to reach it.
-#
-# `sentinel_only` means no valkey-server: these hold no data, take no
-# backups, run no metrics timer, and are never a promotion target. A nano
-# is sufficient for a fleet of any size, which is why the third zone costs
-# three small instances rather than three more replicas.
-#
-# AZ-c deliberately holds nothing else. Apps stay in a and b; this zone
-# exists so a zone failure cannot take two of three votes with it.
-
-
-# --- Valkey recipes ----------------------------------------------------
-#
-# Ordered, once-per-node changes applied to RUNNING instances over SSM.
-#
-# The counterpart to user-data, not a replacement for it: anything
-# identity-level or restart-required stays in user-data and is worth the
-# instance replacement. Everything else — a logrotate file, a sysctl, a
-# unit tweak — lands here and costs nothing.
-#
-# Adding a recipe can never produce a plan that rebuilds the fleet,
-# because recipes are never embedded in user-data.
-
 module "valkey_recipes" {
   source = "../../modules/valkey-recipes"
 
-  # Every node in the region. A fleet missing here keeps the recipes it
-  # already has and silently receives no new ones.
-  instance_ids = concat(
-    module.valkey.instance_ids,
-  )
+  # Every node in the region. A fleet missing here keeps the recipes it has
+  # and silently receives no new ones.
+  instance_ids = module.valkey.instance_ids
 
   aws_profile = local.aws_profile
   aws_region  = local.region
 }
 
-# --- meandr-api --------------------------------------------------------
+# --- meandr-api ---------------------------------------------------------
 
 module "api" {
   source = "../../modules/meandr-api"
@@ -576,20 +448,9 @@ module "mcp" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  # Self-hosted fleets. The ADDRs are bootstrap only — Sentinel is what
-  # the client actually follows, so a failover moves it without waiting
-  # on a DNS TTL.
-  #
-  # Local Sentinels by necessity: Sentinel answers with a node HOSTNAME,
-  # so another region's set would name something this VPC cannot resolve.
-  # OWN REGION FIRST, then every other region's.
-  #
-  # Order is load-bearing and does exactly one thing: Sentinel DISCOVERY
-  # walks the list in order until one answers, and is not latency-aware.
-  # Which REPLICA gets read is a separate mechanism — the client measures
-  # RTT and picks the nearest (rdb.New, RouteByLatency) — so the remote
-  # entries cost nothing while the local ones answer, and become the
-  # difference between degraded and dead when they stop.
+  # OWN REGION FIRST, then every other region's. Discovery walks the list
+  # in order and is not latency-aware; which replica gets READ is chosen by
+  # measured RTT in the client (rdb.New).
   config_reader_endpoint = module.valkey.fleets["config"].master_hostname
   config_sentinel_addrs = concat(
     module.valkey.fleets["config"].sentinel_addrs,

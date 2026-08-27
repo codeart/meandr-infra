@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# Rotate the Valkey and Sentinel logs.
+# Rotate the Valkey and Sentinel logs. Valkey never rotates `logfile`
+# itself, and building from source means no packaged logrotate config.
 #
-# Valkey inherits Redis's behaviour: it writes to `logfile` and never
-# rotates it. Distro packages ship a logrotate config alongside the
-# binary; we build from source, so we get the daemon without the
-# packaging that normally covers this. Nothing on these nodes rotates
-# /var/log/valkey/*.log.
-#
-# copytruncate is mandatory, not stylistic. Redis-lineage servers do not
+# copytruncate is mandatory, not stylistic: Redis-lineage servers do not
 # reopen their log on SIGHUP, so rotating by rename leaves the daemon
-# writing to an unlinked inode: the disk fills with a file that `ls`
-# cannot show you and only a restart releases.
+# writing to an unlinked inode that only a restart releases.
 set -euo pipefail
 
 command -v logrotate >/dev/null 2>&1 || dnf install -y logrotate

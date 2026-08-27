@@ -1,19 +1,6 @@
-# VPC module — reusable across envs/regions.
-#
-# Each AZ gets:
-#   - One /24 public subnet  (for NAT GW, ALB; 256 addresses each)
-#   - One /20 private subnet (for workloads, ECS task ENIs, RDS, ElastiCache; 4096 addresses each)
-#
-# CIDR layout for a /16 VPC:
-#   Public  AZ-index i:  cidrsubnet(cidr, 8, i)        → /24
-#   Private AZ-index i:  cidrsubnet(cidr, 4, 1 + i)    → /20 starting at .16
-#
-# Single NAT Gateway when enable_nat is true (cost vs. HA trade-off; multi-NAT
-# for production HA is a future flag).
-#
-# Internal DNS: one Route 53 private hosted zone per VPC. Future RDS / ElastiCache
-# / EC2 modules add CNAMEs/A records here so connection strings can use friendly,
-# env-tagged hostnames like `pg.staging.meandr.internal`.
+# CIDR layout for a /16, per AZ index i:
+#   Public   cidrsubnet(cidr, 8, i)      -> /24, NAT and load balancers
+#   Private  cidrsubnet(cidr, 4, 1 + i)  -> /20, workloads, starts at .16
 
 locals {
   # Subnet CIDRs derived from the VPC's /16:
@@ -137,32 +124,15 @@ resource "aws_route_table_association" "private" {
 
 # --- Gateway VPC endpoints (S3, DynamoDB) --------------------------------
 #
-# Unconditional and free. Gateway endpoints are route-table entries, not
-# PrivateLink interfaces: no hourly charge, no per-GB charge, no ENIs, no
-# security groups.
+# Unconditional and free — route-table entries, not PrivateLink. Without
+# them the capture pipeline pays NAT data processing on every captured body,
+# which is the dominant cost line at volume.
 #
-# Without them, every byte a private-subnet workload sends to S3 or DynamoDB
-# egresses through the NAT Gateway and pays NAT data processing (~$0.045/GB,
-# the same rate quoted on var.enable_nat). That is the dominant cost line for
-# the capture pipeline, which writes every request body to S3:
+# Private route table only, and created even when enable_nat is false: with
+# no NAT they are the ONLY route to S3 and DynamoDB from a private subnet.
 #
-#     1 TB/month captured        →   ~$45/month in NAT processing
-#     10 GB/minute (~432 TB/mo)  →  ~$19,400/month
-#
-# The proxy also reads upstream credentials from DynamoDB on the request path
-# (cred-store), so both services belong here.
-#
-# Created even when enable_nat is false: with no NAT, these are the *only*
-# route to S3/DynamoDB from a private subnet, which is precisely when they
-# matter most.
-#
-# Private route table only. Public subnets host the NAT Gateway and the ALB,
-# no workloads, and they reach S3 via the Internet Gateway at no data
-# processing charge — so an association there would buy nothing.
-#
-# No endpoint policy attached: the default is full access, and access is
-# already constrained by the task roles. A restrictive endpoint policy is a
-# second place to get bucket permissions wrong.
+# No endpoint policy: task roles already constrain access, and a second
+# place to get bucket permissions wrong is worth avoiding.
 
 data "aws_region" "current" {}
 
@@ -190,37 +160,19 @@ resource "aws_vpc_endpoint" "dynamodb" {
 
 # --- NAT Gateway (conditional) -------------------------------------------
 #
-# REGIONAL NAT in manual mode: one gateway for the VPC, holding addresses
-# in `nat_pinned_azs` only, and serving every AZ — including the ones it
-# holds no address in. Traffic from an unpinned AZ is processed by an
-# address in a pinned one.
+# REGIONAL NAT in manual mode: one gateway holding addresses in
+# `nat_pinned_azs` only, serving every AZ — an unpinned AZ's traffic is
+# processed by a pinned AZ's address.
 #
-# Manual mode is the whole point. Supplying availability_zone_address
-# DISABLES auto-expansion permanently: the gateway will not quietly add an
-# address in a new AZ when a workload appears there. That keeps the bill
-# and the egress IP set fixed and predictable — an allow-list on a
-# customer's firewall stays correct, which auto-expansion cannot promise.
-#
-# The cost shape is the reason to pin fewer AZs than the VPC spans: AZ-c
-# holds only a Sentinel arbiter, which needs no egress at steady state, so
-# paying for an address there buys nothing.
+# Supplying availability_zone_address DISABLES auto-expansion permanently,
+# so the egress IP set stays fixed and a customer's allow-list stays
+# correct. That is the reason to pin fewer AZs than the VPC spans.
 
-# Deliberately NOT the old `aws_eip.nat` / `aws_nat_gateway.main`
-# addresses. Provider 6.61 cannot plan a zonal -> regional transition on an
-# existing gateway: it fails during diff with
-#
-#   setting regional_nat_gateway_auto_mode to ForceNew:
-#   ForceNew: No changes for regional_nat_gateway_auto_mode
-#
-# and -replace hits the same path, so there is no way to express the change
-# in place. New addresses make it an ordinary create instead: Terraform
-# builds the regional gateway, repoints the route, then tears down the
-# zonal one — so egress is only interrupted for the route update rather
-# than for the minutes a NAT takes to delete and recreate.
-#
-# The egress IP changes as a result, because an EIP cannot be attached to
-# two gateways at once. Fine here; a region with customer allow-lists would
-# want the slower reuse instead.
+# A NEW address, not the old `aws_eip.nat` / `aws_nat_gateway.main`:
+# provider 6.61 cannot plan a zonal -> regional transition on an existing
+# gateway, and -replace hits the same path. Renaming makes it an ordinary
+# create, so egress pauses only for the route update. Do not "tidy" these
+# back to the old names.
 
 resource "aws_eip" "regional_nat" {
   count = var.enable_nat ? length(var.nat_pinned_azs) : 0
@@ -258,23 +210,13 @@ resource "aws_nat_gateway" "regional" {
 
 # --- Internal DNS --------------------------------------------------------
 #
-# ONE private hosted zone per environment, associated with every region's
-# VPC — not one zone per region sharing a name.
+# ONE private zone per environment, associated with every region's VPC. The
+# FIRST region creates it; later regions pass existing_zone_id.
 #
-# That distinction is the whole design. Two same-named private zones on
-# peered VPCs is a collision, and the failure is silent rather than loud:
-# a node told to replicate from `config-euc1a.valkey.<zone>` resolves it in
-# its OWN zone and attaches to whatever lives there, with no error and a
-# healthy-looking replication link. Sentinel makes it worse, because it
-# answers with hostnames — so every name it can return has to mean the same
-# node everywhere, which is a property of the zone, not of any record.
-#
-# The FIRST region creates the zone. Every later region passes
-# existing_zone_id and associates instead. A region that creates its own is
-# the bug this is built to prevent.
-#
-# `moved` below, not a rewrite: adding count to a live zone would otherwise
-# read as destroy-and-recreate, taking every record with it.
+# Two same-named zones on peered VPCs collide SILENTLY: a node resolves a
+# peer's hostname in its own zone and replicates from the wrong node with a
+# healthy-looking link. Sentinel answers with hostnames, so a name must mean
+# the same node in every region.
 
 resource "aws_route53_zone" "internal" {
   count = var.existing_zone_id == "" ? 1 : 0

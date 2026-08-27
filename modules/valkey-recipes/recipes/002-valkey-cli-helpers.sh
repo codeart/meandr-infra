@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # `vc` and `vcs` — valkey-cli that already knows the TLS material and AUTH.
 #
-# The full invocation is four flags, three paths and a Secrets Manager
-# round-trip, which nobody types correctly at 3am and which turns every
-# diagnostic into a copy-paste from a doc.
-#
 # AUTH comes from the running config, not Secrets Manager: same value, no
-# API call, and it still works when the thing you are debugging is the
-# network. The files are root-only, so each wrapper re-execs under sudo
-# rather than failing with a permission error that looks like a TLS one.
+# API call, and it still works when the network is what you are debugging.
+# The files are root-only, so each wrapper re-execs under sudo rather than
+# failing with a permission error that looks like a TLS one.
 set -euo pipefail
 
 cat >/usr/local/bin/vc <<'SH'
