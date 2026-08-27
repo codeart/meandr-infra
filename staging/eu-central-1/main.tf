@@ -446,121 +446,6 @@ resource "aws_secretsmanager_secret" "proxy_cert" {
 # Not the capture or payloads buckets: those hold customer data under a
 # retention policy, and a blob read by an instance role at boot has no
 # business sharing either.
-resource "aws_s3_bucket" "artifacts" {
-  bucket = "meandr-artifacts-${local.env}-${local.region}"
-  tags   = local.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-# Versioned so that overwriting a key cannot destroy the source a running
-# node would fetch if it were replaced today.
-resource "aws_s3_bucket_versioning" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-# The vendored Valkey source, uploaded by the same apply that creates the
-# nodes — so a node can never boot against a version that was never
-# published. source_hash re-uploads when the vendored file changes; without
-# it Terraform compares only metadata and a re-vendored tarball would sit
-# in the repo while the old bytes stayed in the bucket.
-resource "aws_s3_object" "valkey_source" {
-  bucket      = aws_s3_bucket.artifacts.id
-  key         = "valkey/${local.valkey_version}/valkey-src.tar.gz"
-  source      = local.valkey_source_path
-  source_hash = filemd5(local.valkey_source_path)
-
-  tags = local.tags
-}
-
-# Capacity for every Valkey node in the region: three per AZ — the config,
-# events and api members in a and b, the three arbiters in c. Nine slots.
-#
-# One resource rather than one per fleet because a reservation matches on
-# type and zone, not on purpose. Every node is a t4g.nano, so a single pool
-# per AZ covers whichever of them lands there.
-#
-# Billed at the on-demand rate whether occupied or not, so for nodes that
-# run continuously this is not extra cost. It guarantees the slot across
-# the instance replacement that every user-data change triggers.
-#
-# "open" match: any t4g.nano launched in the AZ uses it, with no
-# per-instance wiring. Nothing binds an instance to a reservation, so the
-# only thing that makes one count is existing BEFORE the launch — apply it
-# first and on its own:
-#
-#   terraform apply -target=aws_ec2_capacity_reservation.valkey_nano
-#
-# NOT with depends_on on the valkey modules. A module-level depends_on
-# defers every data source inside it, which makes local.user_data unknown
-# at plan time; user_data_replace_on_change can only compare known values,
-# so it silently stops firing and a user-data change plans as an in-place
-# update. User-data runs once per instance, so that update would never
-# take effect — the node keeps its old config and nothing says so.
-#
-# eu-central-1c ran dry of t4g.nano for hours on 2026-08-25.
-resource "aws_ec2_capacity_reservation" "valkey_nano" {
-  for_each = toset(["${local.region}a", "${local.region}b", "${local.region}c"])
-
-  instance_type           = "t4g.nano"
-  instance_platform       = "Linux/UNIX"
-  availability_zone       = each.value
-  instance_count          = 3
-  end_date_type           = "unlimited"
-  instance_match_criteria = "open"
-
-  tags = merge(local.tags, { Name = "valkey-nano-${each.value}" })
-}
-
-
-# RDB backups, written by whichever node is currently the replica.
-#
-# Lifecycle rather than versioning: keys are timestamped and never
-# overwritten, so there is nothing to version — only to expire.
-resource "aws_s3_bucket" "valkey_backups" {
-  bucket = local.valkey_backup_bucket
-  tags   = local.tags
-}
-
-resource "aws_s3_bucket_public_access_block" "valkey_backups" {
-  bucket = aws_s3_bucket.valkey_backups.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "valkey_backups" {
-  bucket = aws_s3_bucket.valkey_backups.id
-
-  rule {
-    id     = "expire"
-    status = "Enabled"
-    filter {}
-    expiration { days = 30 }
-  }
-}
-
-# Renamed from valkey_tls: the ROOT it issues is environment-wide, not a
-# Valkey thing. A module-level moved block relocates every resource inside
-# it, so nothing is destroyed and no certificate is reissued.
-moved {
-  from = module.valkey_tls
-  to   = module.internal_pki
-}
-
 module "internal_pki" {
   source = "../../modules/internal-pki"
 
@@ -578,27 +463,41 @@ module "internal_pki" {
   tags = local.tags
 }
 
-module "valkey_config" {
-  source = "../../modules/valkey-fleet"
+module "valkey" {
+  source = "../../modules/valkey-region"
 
-  fleet       = "config"
+  env         = local.env
+  region      = local.region
   region_code = "euc1"
 
-  # Master lives here, so this region bootstraps the record and its nodes
-  # stay promotable. An edge sets both false.
-  create_master_record = true
+  fleets = {
+    # Masters live here, so this region bootstraps every record and its
+    # nodes stay promotable — an edge sets both false.
+    config = {}
 
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  backup_bucket        = local.valkey_backup_bucket
+    # Region-qualified because the zone is shared: an unqualified
+    # `events-master` would name a different node in every region.
+    events = {
+      master_record_label = "events-master-euc1"
+    }
+
+    # allkeys-lru unlike the other two — dropping the coldest key IS the
+    # behaviour here. Rails-owned, and takes no backups.
+    api = {
+      maxmemory_policy      = "allkeys-lru"
+      backup_bucket_enabled = false
+    }
+  }
+
+  valkey_version     = local.valkey_version
+  valkey_source_path = local.valkey_source_path
+  backup_bucket      = local.valkey_backup_bucket
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = module.internal_pki.node_secret_arn
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
+  vpc_id        = module.vpc.vpc_id
+  subnet_ids    = module.vpc.private_subnet_ids
   client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
@@ -607,91 +506,6 @@ module "valkey_config" {
 }
 
 
-# --- Self-hosted Valkey (events tier) -----------------------------------
-#
-# The proxy→BE bus: proxy writes events, BE reads them. Per region and
-# NEVER replicated across regions — an event belongs to the region that
-# produced it, and shipping the stream transatlantically would put write
-# volume on a link the config tier needs for reads.
-#
-# Its own fleet rather than a database on the config nodes: the profiles
-# are opposites. Config is read-heavy with a small projection; events are
-# write-heavy and carry the rate-limit hashes whose per-field TTLs are why
-# the whole fleet runs 9.x.
-#
-# Shares the CA, the vendored source and the capacity reservations with
-# the config tier. Everything else — subdomain, master record, Sentinel
-# group — is fleet-scoped and therefore separate by construction.
-
-module "valkey_events" {
-  source = "../../modules/valkey-fleet"
-
-  fleet       = "events"
-  region_code = "euc1"
-
-  # Region-qualified because the zone is shared: an unqualified
-  # `events-master` would name a different node in every region while
-  # resolving to whichever wrote it last.
-  master_record_label  = "events-master-euc1"
-  create_master_record = true
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-  backup_bucket        = local.valkey_backup_bucket
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
-  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = local.tags
-}
-
-# --- Self-hosted Valkey (api tier) --------------------------------------
-#
-# Rails-owned: ActionCable pub/sub, and cache later. allkeys-lru because
-# dropping the coldest key IS the behaviour here — the opposite of the
-# other two fleets, where the eventbus refuses to start against anything
-# but noeviction.
-#
-# Gains a replica and failover, which the ElastiCache instance it replaces
-# does not have (num_cache_clusters = 1, automatic_failover disabled).
-
-module "valkey_api" {
-  source = "../../modules/valkey-fleet"
-
-  fleet       = "api"
-  region_code = "euc1"
-
-  create_master_record = true
-
-  # allkeys-lru, unlike the other two: dropping the coldest key IS the
-  # behaviour here, where the eventbus refuses to start against anything
-  # but noeviction.
-  maxmemory_policy = "allkeys-lru"
-
-  valkey_version       = local.valkey_version
-  valkey_source_bucket = aws_s3_bucket.artifacts.id
-  valkey_source_sha256 = filesha256(local.valkey_source_path)
-
-  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
-  tls_secret_arn  = module.internal_pki.node_secret_arn
-
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-
-  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
-  dns_zone_id   = module.vpc.internal_dns_zone_id
-  dns_zone_name = module.vpc.internal_dns_zone_name
-
-  tags = local.tags
-}
 
 # --- Sentinel arbiters (AZ-c) -------------------------------------------
 #
@@ -732,9 +546,7 @@ module "valkey_recipes" {
   # Every node in the region. A fleet missing here keeps the recipes it
   # already has and silently receives no new ones.
   instance_ids = concat(
-    module.valkey_config.instance_ids,
-    module.valkey_events.instance_ids,
-    module.valkey_api.instance_ids,
+    module.valkey.instance_ids,
   )
 
   aws_profile = local.aws_profile
@@ -789,13 +601,13 @@ module "api" {
   #
   # EVERY region's event group, unlike the proxy which only needs its
   # own: BE consumes every region's stream. Positional with `regions`.
-  config_sentinel_addrs  = module.valkey_config.sentinel_addrs
+  config_sentinel_addrs  = module.valkey.fleets["config"].sentinel_addrs
   config_sentinel_master = "config"
 
-  event_sentinel_groups = [join(",", module.valkey_events.sentinel_addrs)]
+  event_sentinel_groups = [join(",", module.valkey.fleets["events"].sentinel_addrs)]
   event_sentinel_master = "events"
 
-  api_sentinel_addrs  = module.valkey_api.sentinel_addrs
+  api_sentinel_addrs  = module.valkey.fleets["api"].sentinel_addrs
   api_sentinel_master = "api"
 
   valkey_client_secret_arn = module.internal_pki.client_secret_arn
@@ -919,9 +731,9 @@ module "mcp" {
   # RTT and picks the nearest (rdb.New, RouteByLatency) — so the remote
   # entries cost nothing while the local ones answer, and become the
   # difference between degraded and dead when they stop.
-  config_reader_endpoint = module.valkey_config.master_hostname
+  config_reader_endpoint = module.valkey.fleets["config"].master_hostname
   config_sentinel_addrs = concat(
-    module.valkey_config.sentinel_addrs,
+    module.valkey.fleets["config"].sentinel_addrs,
     flatten([
       for code in local.peer_node_codes : [
         for az in ["a", "b", "c"] :
@@ -931,8 +743,8 @@ module "mcp" {
   )
   config_sentinel_master = "config"
 
-  event_writer_endpoint = module.valkey_events.master_hostname
-  event_sentinel_addrs  = module.valkey_events.sentinel_addrs
+  event_writer_endpoint = module.valkey.fleets["events"].master_hostname
+  event_sentinel_addrs  = module.valkey.fleets["events"].sentinel_addrs
   event_sentinel_master = "events"
 
   # Required to reach either fleet: the nodes run `tls-auth-clients yes`
@@ -1042,9 +854,9 @@ output "internal_ca_secret_arn" {
   value       = module.internal_pki.ca_secret_arn
 }
 
-output "valkey_config_master" { value = module.valkey_config.master_hostname }
-output "valkey_events_master" { value = module.valkey_events.master_hostname }
-output "valkey_api_master" { value = module.valkey_api.master_hostname }
+output "valkey_config_master" { value = module.valkey.fleets["config"].master_hostname }
+output "valkey_events_master" { value = module.valkey.fleets["events"].master_hostname }
+output "valkey_api_master" { value = module.valkey.fleets["api"].master_hostname }
 output "event_stream_writer_endpoint" { value = module.mcp.event_writer_endpoint }
 
 output "hostname" { value = module.api.hostname }
