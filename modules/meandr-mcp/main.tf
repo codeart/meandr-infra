@@ -239,9 +239,9 @@ locals {
 # meaningless at best, and at worst tenants throttling each other.
 resource "aws_lb" "main" {
   name               = "meandr-mcp-nlb"
-  internal           = false
+  internal           = var.internal_nlb
   load_balancer_type = "network"
-  subnets            = var.public_subnet_ids
+  subnets            = var.internal_nlb ? var.private_subnet_ids : var.public_subnet_ids
   security_groups    = [aws_security_group.nlb.id]
 
   enable_deletion_protection       = false
@@ -250,14 +250,14 @@ resource "aws_lb" "main" {
   tags = merge(local.base_tags, { Name = "MCP NLB" })
 }
 
-# World-open on the proxy's two ports, and correct: this is the public
-# entry point and the proxy terminates TLS itself. Recorded in SOC-2.md §2
-# as expected rather than a finding.
+# World-open on the proxy's two ports, and correct either way: the proxy
+# terminates TLS itself. Recorded in SOC-2.md §2 as expected, not a finding.
 #
 # Cannot be narrowed to whatever fronts it, precisely BECAUSE client IPs
 # are preserved: the NLB evaluates these rules against the caller's
 # address, not the intermediary's, so a narrowed range would reject every
-# real request.
+# real request. When internal_nlb is set, reachability is bounded by the
+# subnet having no route from the internet — never by these rules.
 resource "aws_security_group" "nlb" {
   name        = "meandr-mcp-nlb"
   description = "MCP proxy NLB - public ingress on the proxy HTTP and TLS ports"

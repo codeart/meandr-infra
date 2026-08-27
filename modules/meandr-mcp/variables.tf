@@ -420,6 +420,25 @@ variable "payload_encryption_key_alias" {
   type        = string
 }
 
+variable "internal_nlb" {
+  description = <<-EOT
+    Put the NLB in the private subnets, with no public address.
+
+    TRUE whenever an accelerator fronts this region — the same condition as
+    create_wildcard_record being false, because both answer "does something
+    above own the public entrance". An internet-facing NLB behind an
+    accelerator is a second, unadvertised front door: it bypasses the
+    proxy's self-IP guard, which only knows the anycast pair.
+
+    Keeps client IP preservation, which needs security groups and a TCP
+    listener, not TLS termination — all already true here.
+
+    The scheme is IMMUTABLE, so flipping this replaces the load balancer.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "create_wildcard_record" {
   description = <<-EOT
     Whether this region owns the `*.<dns_zone_name>` A record.

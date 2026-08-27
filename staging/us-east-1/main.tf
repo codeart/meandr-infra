@@ -324,6 +324,10 @@ module "mcp" {
   # two state files overwriting each other.
   create_wildcard_record = false
 
+  # Reachable ONLY through the accelerator. A public NLB behind one is a
+  # second front door that the proxy's self-IP guard does not know about.
+  internal_nlb = true
+
   self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
 
   oauth_issuer_host       = "staging-mcp.meandr.com"

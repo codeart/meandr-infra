@@ -537,6 +537,10 @@ module "mcp" {
   # other's answer.
   create_wildcard_record = false
 
+  # Reachable ONLY through the accelerator. A public NLB behind one is a
+  # second front door that the proxy's self-IP guard does not know about.
+  internal_nlb = true
+
   # Written per region by account-staging/ from the accelerator's anycast
   # pair. Derived, not copied: the same line works in every region, and the
   # value changes without a Terraform change here.
