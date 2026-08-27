@@ -548,15 +548,26 @@ module "mcp" {
 # The accelerator lives in account-staging/; each region attaches its own
 # endpoint group, so the accelerator holds no list of regions.
 #   terraform -chdir=../../account-staging output ga_listener_arn
+#   terraform -chdir=../../account-staging output ga_alerts_topic_arn
+
+locals {
+  ga_listener_arn     = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  ga_alerts_topic_arn = "arn:aws:sns:us-west-2:259534890849:meandr-staging-ga-alerts"
+
+  # CloudWatch dimension values, both path segments of the listener arn.
+  ga_accelerator_id = split("/", local.ga_listener_arn)[1]
+  ga_listener_id    = split("/", local.ga_listener_arn)[3]
+}
 
 resource "aws_globalaccelerator_endpoint_group" "local_region" {
   provider = aws.usw2
 
-  listener_arn          = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  listener_arn          = local.ga_listener_arn
   endpoint_group_region = local.region
 
   # An unhealthy group is withdrawn from the anycast pair, so a broken
-  # deploy stops serving silently rather than erroring. Needs an alarm.
+  # deploy stops serving silently rather than erroring — hence the alarm
+  # below. 3 checks at 30s means withdrawal takes ~90s.
   health_check_protocol         = "TCP"
   health_check_port             = 443
   health_check_interval_seconds = 30
@@ -570,5 +581,36 @@ resource "aws_globalaccelerator_endpoint_group" "local_region" {
     # per-client limits collapse onto a handful of sources.
     client_ip_preservation_enabled = true
   }
+}
+
+# This region withdrawn from the anycast pair. Traffic still serves from the
+# others, which is why nothing else reports it.
+resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
+  provider = aws.usw2
+
+  alarm_name        = "meandr-${local.env}-ga-unhealthy-${local.region}"
+  alarm_description = "Global Accelerator withdrew ${local.region}; it is serving no anycast traffic."
+
+  namespace   = "AWS/GlobalAccelerator"
+  metric_name = "HealthyEndpointCount"
+  dimensions = {
+    Accelerator   = local.ga_accelerator_id
+    Listener      = local.ga_listener_id
+    EndpointGroup = local.region
+  }
+
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  period              = 60
+  evaluation_periods  = 3
+  datapoints_to_alarm = 2
+
+  # Silence is the failure being alarmed on, so absent data is not healthy.
+  treat_missing_data = "breaching"
+
+  alarm_actions = [local.ga_alerts_topic_arn]
+  ok_actions    = [local.ga_alerts_topic_arn]
+  tags          = local.tags
 }
 

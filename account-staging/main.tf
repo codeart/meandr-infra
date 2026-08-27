@@ -37,6 +37,14 @@ locals {
   # publishing it keeps CI from enumerating regions a second time.
   regions = ["eu-central-1", "us-east-1"]
 
+  # Operational alarms, not billing. Same address today; split when there is
+  # somewhere for on-call to route.
+  alert_emails = ["aws-billing@meandr.com"]
+
+  # The accelerator id is the CloudWatch dimension value, and it is the
+  # listener arn's first path segment.
+  ga_accelerator_id = split("/", module.global_accelerator.listener_arn)[1]
+
   account_tags = {
     "meandr:env"        = "staging"
     "meandr:managed-by" = "terraform"
@@ -113,6 +121,63 @@ resource "aws_ssm_parameter" "regions" {
 output "ga_listener_arn" {
   description = "What a region attaches its endpoint group to."
   value       = module.global_accelerator.listener_arn
+}
+
+# --- Accelerator alerting -----------------------------------------------
+#
+# In us-west-2 because GA publishes its metrics there with its control
+# plane, and an alarm can only notify a topic in its own region.
+#
+# Regions attach their own per-endpoint-group alarm to this topic, so it
+# names no region — same inversion as the listener above.
+
+resource "aws_sns_topic" "ga_alerts" {
+  provider = aws.usw2
+
+  name = "meandr-staging-ga-alerts"
+  tags = local.account_tags
+}
+
+resource "aws_sns_topic_subscription" "ga_alerts" {
+  provider = aws.usw2
+  for_each = toset(local.alert_emails)
+
+  topic_arn = aws_sns_topic.ga_alerts.arn
+  protocol  = "email"
+  endpoint  = each.value
+}
+
+# Zero healthy endpoints ACROSS ALL REGIONS is a different incident from one
+# region dropping: with nothing healthy, GA stops withdrawing and routes to
+# every endpoint instead, so traffic keeps arriving at dead regions.
+resource "aws_cloudwatch_metric_alarm" "ga_no_healthy_endpoints" {
+  provider = aws.usw2
+
+  alarm_name        = "meandr-staging-ga-no-healthy-endpoints"
+  alarm_description = "Global Accelerator has no healthy endpoint in any region; it is now failing open to all of them."
+
+  namespace   = "AWS/GlobalAccelerator"
+  metric_name = "HealthyEndpointCount"
+  dimensions  = { Accelerator = local.ga_accelerator_id }
+
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  period              = 60
+  evaluation_periods  = 3
+  datapoints_to_alarm = 2
+
+  # Silence is the failure being alarmed on, so absent data is not healthy.
+  treat_missing_data = "breaching"
+
+  alarm_actions = [aws_sns_topic.ga_alerts.arn]
+  ok_actions    = [aws_sns_topic.ga_alerts.arn]
+  tags          = local.account_tags
+}
+
+output "ga_alerts_topic_arn" {
+  description = "Regions hardcode this for their per-endpoint-group alarm."
+  value       = aws_sns_topic.ga_alerts.arn
 }
 
 output "ga_static_ips" {
