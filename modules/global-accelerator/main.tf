@@ -47,12 +47,14 @@ resource "aws_globalaccelerator_accelerator" "main" {
 
 # One TCP listener covering both proxy ports.
 #
-# CLIENT AFFINITY IS SOURCE_IP, and it is load-bearing rather than an
-# optimisation. An MCP client opens more than one connection — a POST for
-# the call and often a GET for the stream — and the proxy's upstream
-# session is REGION-LOCAL. Split those across regions and the second
-# connection lands somewhere with no knowledge of the first, which surfaces
-# as a session that mysteriously does not exist.
+# Affinity NONE: routing to an endpoint group is by proximity and health, so
+# a client's connections still land in one region under normal conditions.
+# SOURCE_IP additionally pins every client behind one NAT to a single
+# endpoint, which is the wrong trade for a shared-egress caller.
+#
+# What that costs at a region boundary or during a health flap: the proxy's
+# upstream session is region-local, and clientguard counts against the
+# events Valkey, which does not replicate. See docs/cross_node_delivery.md.
 #
 # TCP, not TLS: the proxy terminates TLS itself and owns SNI-based cert
 # selection (cert_store.md §2). Terminating at the accelerator would take
@@ -61,7 +63,7 @@ resource "aws_globalaccelerator_listener" "main" {
   provider = aws.usw2
 
   accelerator_arn = aws_globalaccelerator_accelerator.main.id
-  client_affinity = "SOURCE_IP"
+  client_affinity = "NONE"
   protocol        = "TCP"
 
   port_range {
