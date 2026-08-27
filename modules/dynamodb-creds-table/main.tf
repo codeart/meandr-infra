@@ -57,6 +57,11 @@ resource "aws_dynamodb_table" "main" {
     ignore_changes = [
       # Rewritten by AWS auto-tagging on busy tables.
       tags["aws:dynamodb:tableArn"],
+
+      # REQUIRED for edge-declared replicas. This block is authoritative,
+      # so without it the primary plans to destroy every replica it does
+      # not itself declare — undoing the edge on the next apply here.
+      replica,
     ]
   }
 }
