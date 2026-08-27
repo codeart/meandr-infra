@@ -63,6 +63,15 @@ resource "aws_iam_role" "gh_actions_deploy" {
 }
 
 data "aws_iam_policy_document" "ecs_deploy" {
+  # CI reads /meandr/<env>/regions to learn which regions to deploy to, so
+  # the region list is never enumerated in the workflow.
+  statement {
+    sid       = "ReadDeployParameters"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:*:${var.account_id}:parameter/meandr/*"]
+  }
+
   # Register new task definitions (the image-update flow).
   statement {
     sid    = "RegisterTaskDefinitions"

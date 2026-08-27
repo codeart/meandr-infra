@@ -30,6 +30,12 @@ provider "aws" {
 
 locals {
   self_ips_param = "/meandr/staging/self-ips"
+  regions_param  = "/meandr/staging/regions"
+
+  # Every region running a proxy. Each already needs a provider alias above
+  # and a self_ips block below, so this file is where the list has to live;
+  # publishing it keeps CI from enumerating regions a second time.
+  regions = ["eu-central-1", "us-east-1"]
 
   account_tags = {
     "meandr:env"        = "staging"
@@ -88,6 +94,16 @@ resource "aws_ssm_parameter" "self_ips_use1" {
   name  = local.self_ips_param
   type  = "StringList"
   value = join(",", module.global_accelerator.static_ips)
+  tags  = local.account_tags
+}
+
+# Read by CI to fan a deploy across every region. Written only here, in the
+# env's primary region, because CI has one place to look before it knows
+# where else to go.
+resource "aws_ssm_parameter" "regions" {
+  name  = local.regions_param
+  type  = "StringList"
+  value = join(",", local.regions)
   tags  = local.account_tags
 }
 

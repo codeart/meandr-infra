@@ -162,10 +162,18 @@ variable "dns_zone_name" {
 
 # --- Image --------------------------------------------------------------
 
-variable "ecr_registry" {
-  description = "ECR registry URL."
+variable "ecr_registry_account_id" {
+  description = "Account holding the ECR registry. Empty uses the shared account."
   type        = string
-  default     = "303529433558.dkr.ecr.eu-central-1.amazonaws.com"
+  default     = "303529433558"
+}
+
+# Set only to pull from a region that is NOT this one. Empty resolves to
+# this region's replica, so a new region needs no entry.
+variable "ecr_registry" {
+  description = "Override the ECR registry URL. Empty derives it from this region."
+  type        = string
+  default     = ""
 }
 
 variable "image_repository" {

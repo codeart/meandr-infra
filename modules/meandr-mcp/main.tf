@@ -37,7 +37,13 @@ data "aws_route53_zone" "public" {
 
 locals {
   region = data.aws_region.current.region
-  image  = "${var.ecr_registry}/${var.image_repository}:${var.image_tag}"
+
+  # Pull from THIS region's ECR replica, never the source registry: a
+  # cross-region pull puts another region on the task-start path, which is
+  # the dependency a second region exists to remove. shared/ecr.tf
+  # replicates account-wide, so the copy is already there.
+  ecr_registry = var.ecr_registry != "" ? var.ecr_registry : "${var.ecr_registry_account_id}.dkr.ecr.${local.region}.amazonaws.com"
+  image        = "${local.ecr_registry}/${var.image_repository}:${var.image_tag}"
 
   meandr_env = {
     staging    = "stg"
