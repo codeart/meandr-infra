@@ -50,11 +50,15 @@ locals {
   # replaces no node.
   edge_cidrs = ["10.20.0.0/16"]
 
-  # Node-name prefixes for every OTHER region, used to build the CONFIG
-  # Sentinel list — one set spanning regions, so a proxy here can discover
-  # through a Sentinel there when its own are gone. Not for `events`, whose
-  # fleets are per-region with their own masters.
-  peer_node_codes = ["use1"]
+  # Every OTHER region: name -> node-name prefix. Drives the CONFIG Sentinel
+  # list (one set spanning regions, so a proxy here can discover through a
+  # Sentinel there when its own are gone) and BE's per-region event groups.
+  #
+  # A map, not two lists: keys() and values() share one order, which is what
+  # keeps `regions` and `event_sentinel_groups` positionally aligned.
+  peers = { "us-east-1" = "use1" }
+
+  peer_node_codes = values(local.peers)
 
   tags = {
     "meandr:env"        = local.env

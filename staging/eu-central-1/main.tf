@@ -324,11 +324,9 @@ module "api" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  # State-plane regions BE consumes streams from. Just our own region
-  # today; expand when more come online with meandr-mcp. In a multi-region
-  # production setup the extra regions' groups arrive via
-  # terraform_remote_state.
-  regions = [local.region]
+  # State-plane regions BE consumes streams from: this one and every peer.
+  # An edge produces events no one reads until its region appears here.
+  regions = concat([local.region], keys(local.peers))
 
   # BE reaches every fleet through Sentinel — no URL fallback, because a
   # URL cannot carry a client certificate and the fleets refuse a
@@ -339,7 +337,17 @@ module "api" {
   config_sentinel_addrs  = module.valkey.fleets["config"].sentinel_addrs
   config_sentinel_master = "config"
 
-  event_sentinel_groups = [join(",", module.valkey.fleets["events"].sentinel_addrs)]
+  # Own region first, then one group per peer — positional with `regions`.
+  # Remote groups are built from names, not from another region's state.
+  event_sentinel_groups = concat(
+    [join(",", module.valkey.fleets["events"].sentinel_addrs)],
+    [
+      for code in values(local.peers) : join(",", [
+        for az in ["a", "b", "c"] :
+        "events-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ])
+    ],
+  )
   event_sentinel_master = "events"
 
   api_sentinel_addrs  = module.valkey.fleets["api"].sentinel_addrs
