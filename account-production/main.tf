@@ -1,23 +1,4 @@
-provider "aws" {
-  region  = "us-east-1"
-  profile = "meandr-production"
-}
-
-# Global Accelerator's control plane exists ONLY in us-west-2, whatever
-# region the endpoints live in. Nothing about the accelerator runs there.
-provider "aws" {
-  alias   = "usw2"
-  region  = "us-west-2"
-  profile = "meandr-production"
-}
-
-# The public zones live in the Shared account — ACM DNS validation and the
-# public hostname records.
-provider "aws" {
-  alias   = "shared"
-  region  = "eu-central-1"
-  profile = "meandr-shared"
-}
+# Identical across environments. Everything that differs is in account.tf.
 
 variable "github_org" {
   description = "GitHub org for trust policy scoping."
@@ -25,24 +6,15 @@ variable "github_org" {
 }
 
 locals {
-  self_ips_param = "/meandr/production/self-ips"
-  regions_param  = "/meandr/production/regions"
-
-  # Every region running a proxy. Each also needs a provider alias above
-  # and a self_ips block below, so this file is where the list has to live;
-  # publishing it keeps CI from enumerating regions a second time.
-  regions = ["us-east-1"]
-
-  # Operational alarms, not billing — aws-billing stays on the budget and
-  # cost-anomaly topics.
-  alert_emails = ["aws-prd@meandr.com"]
+  self_ips_param = "/meandr/${local.env}/self-ips"
+  regions_param  = "/meandr/${local.env}/regions"
 
   # The accelerator id is the CloudWatch dimension value, and it is the
   # listener arn's first path segment.
   ga_accelerator_id = split("/", module.global_accelerator.listener_arn)[1]
 
   account_tags = {
-    "meandr:env"        = "production"
+    "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"
     "meandr:owner"      = "infra"
   }
@@ -51,75 +23,13 @@ locals {
 module "account_bootstrap" {
   source = "../modules/account-bootstrap"
 
-  account_id = "393686273464" # Production
+  account_id = local.account_id
   github_org = var.github_org
 
-  # Production only trusts:
-  #   - main branch of trusted repos (the "production-track" branch), AND
-  #   - GH Actions Environment "production" (with required reviewers configured in GH)
-  # The combination means: a deploy needs both a green main + a human approval.
-  allowed_refs = [
-    "refs/heads/main",
-  ]
-  allowed_gh_environments = [
-    "production",
-  ]
+  allowed_refs            = local.allowed_refs
+  allowed_gh_environments = local.allowed_gh_environments
 
-  tags = {
-    "meandr:env"        = "production"
-    "meandr:managed-by" = "terraform"
-    "meandr:owner"      = "infra"
-  }
-}
-
-# --- Cost-control guards (budget + anomaly detection) ------------------
-#
-# Production gets a tiered budget — 50% / 75% / 95% / 100% gives both
-# the early heads-up (50%) and the holy-shit signal (100%) without
-# spamming on every small percentage move. ACTUAL-only since this is
-# a DAILY budget (AWS rejects FORECASTED on daily, per the variable
-# doc in modules/aws-budget). Four notifications max per day worst case.
-# Notification only; the "apply brakes" Lambda is deferred per memory
-# `project_budget_alerts.md` until we have a week of real spend data
-# to pick the brake thresholds from.
-#
-# Instance-size guard lives at the Org Root as an SCP — see
-# account-master/main.tf §size_guard_scp. Member-account IAM-level
-# guard was dropped in the same commit that landed the SCP.
-
-module "daily_budget" {
-  source = "../modules/aws-budget"
-
-  name                = "meandr-production-daily"
-  amount_usd          = 100
-  time_unit           = "DAILY"
-  threshold_percents  = [50, 75, 95, 100]
-  notification_emails = ["aws-billing@meandr.com"]
-
-  tags = {
-    "meandr:env"        = "production"
-    "meandr:managed-by" = "terraform"
-    "meandr:owner"      = "infra"
-  }
-}
-
-# Cost Anomaly Detection — ML spike alerts in addition to the daily
-# budget. $20/day deviation threshold (higher than dev/staging because
-# production has real traffic-driven variation, lower threshold would
-# alert on legitimate weekend → Monday spikes). Fires within minutes
-# via the same SNS topic as the budget.
-module "cost_anomaly" {
-  source = "../modules/aws-cost-anomaly"
-
-  name          = "meandr-production"
-  threshold_usd = 20
-  sns_topic_arn = module.daily_budget.sns_topic_arn
-
-  tags = {
-    "meandr:env"        = "production"
-    "meandr:managed-by" = "terraform"
-    "meandr:owner"      = "infra"
-  }
+  tags = local.account_tags
 }
 
 # --- Global Accelerator -------------------------------------------------
@@ -127,17 +37,18 @@ module "cost_anomaly" {
 # Here rather than in a region's state because it is ENV-GLOBAL and names
 # no region. Putting it in the primary's state would make the primary own a
 # resource every region depends on — the exact coupling the regional stacks
-# were restructured to remove.
+# were restructured to remove, and it would mean the primary's state file
+# had to exist before any edge could serve traffic.
 #
 # It holds no list of regions either. Each region declares its own
 # aws_globalaccelerator_endpoint_group against the listener arn below,
 # pointing at its own NLB, so adding or removing a region never touches
 # this file.
 #
-# Standing this up BEFORE the region is deliberate: with the accelerator
-# present, production's first apply creates an INTERNAL NLB and never has
-# a public front door to migrate away from later. Staging had to do that
-# migration; production does not.
+# Standing this up BEFORE a region is deliberate: with the accelerator
+# present, that region's first apply creates an INTERNAL NLB and never has
+# a public front door to migrate away from later. An NLB's scheme is
+# immutable, so that migration is a replacement.
 module "global_accelerator" {
   source = "../modules/global-accelerator"
 
@@ -147,26 +58,18 @@ module "global_accelerator" {
     aws.dns  = aws.shared
   }
 
-  env           = "production"
-  dns_zone_name = "meandr.io"
+  env           = local.env
+  dns_zone_name = local.proxy_apex
 
   tags = local.account_tags
-}
-
-# Our public ingress, written once per region because SSM parameters are
-# regional and have no replication. Read by the proxy AND by BE, so both
-# validate against the same string — if they disagreed, BE would accept an
-# upstream the proxy refuses to dial.
-resource "aws_ssm_parameter" "self_ips_use1" {
-  name  = local.self_ips_param
-  type  = "StringList"
-  value = join(",", module.global_accelerator.static_ips)
-  tags  = local.account_tags
 }
 
 # Read by CI to fan a deploy across every region. Written only here, in the
 # env's primary region, because CI has one place to look before it knows
 # where else to go.
+#
+# The per-region self_ips parameters are in account.tf: their providers must
+# be static references, so they cannot loop over local.regions.
 resource "aws_ssm_parameter" "regions" {
   name  = local.regions_param
   type  = "StringList"
@@ -185,7 +88,7 @@ resource "aws_ssm_parameter" "regions" {
 resource "aws_sns_topic" "ga_alerts" {
   provider = aws.usw2
 
-  name = "meandr-production-ga-alerts"
+  name = "meandr-${local.env}-ga-alerts"
   tags = local.account_tags
 }
 
@@ -204,7 +107,7 @@ resource "aws_sns_topic_subscription" "ga_alerts" {
 resource "aws_cloudwatch_metric_alarm" "ga_no_healthy_endpoints" {
   provider = aws.usw2
 
-  alarm_name        = "meandr-production-ga-no-healthy-endpoints"
+  alarm_name        = "meandr-${local.env}-ga-no-healthy-endpoints"
   alarm_description = "Global Accelerator has no healthy endpoint in any region; it is now failing open to all of them."
 
   namespace   = "AWS/GlobalAccelerator"
@@ -226,24 +129,58 @@ resource "aws_cloudwatch_metric_alarm" "ga_no_healthy_endpoints" {
   tags          = local.account_tags
 }
 
+# --- Cost-control guards (budget + anomaly detection) --------------------
+#
+# Notification only; the "apply brakes" Lambda is deferred until there is
+# real spend data to pick brake thresholds from.
+#
+# Instance-size guard lives at the Org Root as an SCP — see
+# account-master/main.tf §size_guard_scp. The member-account IAM-level
+# guard was dropped in the same commit that landed the SCP.
+
+module "daily_budget" {
+  source = "../modules/aws-budget"
+
+  name                = "meandr-${local.env}-daily"
+  amount_usd          = local.budget_usd
+  time_unit           = "DAILY"
+  threshold_percents  = local.budget_thresholds
+  notification_emails = ["aws-billing@meandr.com"]
+
+  tags = local.account_tags
+}
+
+# ML spike alerts alongside the daily budget, on the same SNS topic. Fires
+# within minutes rather than waiting for a daily total to cross a line.
+module "cost_anomaly" {
+  source = "../modules/aws-cost-anomaly"
+
+  name          = "meandr-${local.env}"
+  threshold_usd = local.anomaly_usd
+  sns_topic_arn = module.daily_budget.sns_topic_arn
+
+  tags = local.account_tags
+}
+
 # --- Outputs ------------------------------------------------------------
 
 # Regions hardcode these arns, the same call made for acme_dns_role_arn:
 # a literal keeps their only cross-stack dependency the provider alias.
-#   terraform -chdir=account-production output ga_listener_arn
+#   terraform -chdir=account-<env> output ga_listener_arn
+
 output "ga_listener_arn" {
   description = "What a region attaches its endpoint group to."
   value       = module.global_accelerator.listener_arn
 }
 
-output "ga_static_ips" {
-  description = "Anycast pair. Stable for the accelerator's lifetime — safe for a customer allow-list, and what the proxy's SSRF dial guard must load as its self IPs."
-  value       = module.global_accelerator.static_ips
-}
-
 output "ga_alerts_topic_arn" {
   description = "Regions hardcode this for their per-endpoint-group alarm."
   value       = aws_sns_topic.ga_alerts.arn
+}
+
+output "ga_static_ips" {
+  description = "Anycast pair. Stable for the accelerator's lifetime — safe for a customer allow-list, and what the proxy's SSRF dial guard must load as its self IPs."
+  value       = module.global_accelerator.static_ips
 }
 
 output "github_oidc_provider_arn" {
