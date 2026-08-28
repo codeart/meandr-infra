@@ -622,8 +622,9 @@ resource "aws_iam_role_policy" "task_ssm_exec" {
 
 # --- Proxy security group ----------------------------------------------
 #
-# Proxy ENI accepts traffic from anywhere on the proxy_port (NLB passes the
-# client's source IP through unchanged when target_type = ip + TCP).
+# Accepts only what came through the load balancer. Health checks ride the
+# same rules: they originate from the NLB's security group and target the
+# traffic port.
 
 resource "aws_security_group" "proxy" {
   # name_prefix + create_before_destroy lets TF spin up a replacement SG
@@ -642,15 +643,28 @@ resource "aws_security_group" "proxy" {
   }
 }
 
+# Source is the NLB's SECURITY GROUP, not a CIDR.
+#
+# The obvious rule here is 0.0.0.0/0, because client IP preservation makes
+# the task see the caller's address rather than the load balancer's — so a
+# CIDR narrower than the world rejects real traffic. Referencing the load
+# balancer's group is the exception AWS added for exactly this: it "ensures
+# that your targets accept traffic from your Network Load Balancer even if
+# you enable client IP preservation… but prevents them from sending traffic
+# directly to your targets."
+#
+# So the tasks accept only what arrived through the load balancer, and
+# preservation still holds.
+
 resource "aws_security_group_rule" "proxy_ingress_plain" {
   type              = "ingress"
   security_group_id = aws_security_group.proxy.id
 
-  from_port   = var.proxy_port
-  to_port     = var.proxy_port
-  protocol    = "tcp"
-  cidr_blocks = ["0.0.0.0/0"]
-  description = "Plain HTTP customer traffic via NLB :80 (client IP preserved when target_type=ip)"
+  from_port                = var.proxy_port
+  to_port                  = var.proxy_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nlb.id
+  description              = "Plain HTTP via NLB :80 - through the load balancer only"
 
   lifecycle {
     create_before_destroy = true
@@ -661,11 +675,11 @@ resource "aws_security_group_rule" "proxy_ingress_tls" {
   type              = "ingress"
   security_group_id = aws_security_group.proxy.id
 
-  from_port   = var.proxy_tls_port
-  to_port     = var.proxy_tls_port
-  protocol    = "tcp"
-  cidr_blocks = ["0.0.0.0/0"]
-  description = "TLS customer traffic via NLB :443 (proxy terminates TLS; client IP preserved when target_type=ip)"
+  from_port                = var.proxy_tls_port
+  to_port                  = var.proxy_tls_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.nlb.id
+  description              = "TLS via NLB :443 - through the load balancer only; proxy terminates"
 
   lifecycle {
     create_before_destroy = true
