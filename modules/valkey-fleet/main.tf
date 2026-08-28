@@ -118,7 +118,7 @@ module "c" {
   valkey_version       = local.common.valkey_version
   valkey_source_bucket = local.common.valkey_source_bucket
   valkey_source_sha256 = local.common.valkey_source_sha256
-  instance_type        = local.common.instance_type
+  instance_type        = var.arbiter_instance_type
   create_timeout       = local.common.create_timeout
   auth_secret_arn      = local.common.auth_secret_arn
   tls_secret_arn       = local.common.tls_secret_arn

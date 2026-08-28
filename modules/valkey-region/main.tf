@@ -3,6 +3,10 @@
 
 locals {
   azs = [for az in ["a", "b", "c"] : "${var.region}${az}"]
+
+  # The fleet module places its arbiter in the third zone. Named here so
+  # the reservation and the node sizing cannot disagree about which one.
+  arbiter_az = local.azs[2]
 }
 
 # Region-local by necessity: nodes fetch through the S3 GATEWAY ENDPOINT,
@@ -58,7 +62,10 @@ resource "aws_s3_object" "valkey_source" {
 resource "aws_ec2_capacity_reservation" "nodes" {
   for_each = toset(local.azs)
 
-  instance_type           = var.instance_type
+  # AZ-c holds the arbiters and only the arbiters, so it reserves their
+  # type. A reservation matches on instance type exactly — one sized for
+  # the data nodes would go unused there and leave the arbiters unreserved.
+  instance_type           = each.value == local.arbiter_az ? var.arbiter_instance_type : var.instance_type
   instance_platform       = "Linux/UNIX"
   availability_zone       = each.value
   instance_count          = length(var.fleets)
@@ -115,8 +122,9 @@ module "fleet" {
   valkey_source_bucket = aws_s3_bucket.artifacts.id
   valkey_source_sha256 = filesha256(var.valkey_source_path)
 
-  instance_type   = var.instance_type
-  sentinel_quorum = var.sentinel_quorum
+  instance_type         = var.instance_type
+  arbiter_instance_type = var.arbiter_instance_type
+  sentinel_quorum       = var.sentinel_quorum
 
   auth_secret_arn = var.auth_secret_arn
   tls_secret_arn  = var.tls_secret_arn

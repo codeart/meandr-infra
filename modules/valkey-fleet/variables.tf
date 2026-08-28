@@ -45,6 +45,12 @@ variable "instance_type" {
   default     = "t4g.nano"
 }
 
+variable "arbiter_instance_type" {
+  description = "ARM64 instance type for the AZ-c arbiter, which runs valkey-sentinel and holds no data. Need not match the data nodes: it is never a promotion target."
+  type        = string
+  default     = "t4g.nano"
+}
+
 variable "maxmemory_percent" {
   description = "Percent of RAM for the dataset. t4g.nano is 512 MiB total and the OS takes ~250."
   type        = number

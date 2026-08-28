@@ -8,6 +8,10 @@ locals {
   region     = "us-east-1"
   account_id = "393686273464"
 
+  # Node-name prefix. Short because it is in every Valkey hostname, and
+  # those are what Sentinel answers with.
+  region_code = "use1"
+
   # Named because recipes run SSM from the OPERATOR's machine, where there
   # is no provider to inherit credentials from.
   aws_profile = "meandr-production"
@@ -68,6 +72,19 @@ locals {
   acme_dns_role_arn = "arn:aws:iam::303529433558:role/meandr-acme-dns-${local.env}"
 
   # --- Sizing ----------------------------------------------------------
+  #
+  # Two vCPUs, not one: command execution is single-threaded, but the AOF
+  # fsync thread, rewrite forks, and the CloudWatch and SSM agents all want
+  # CPU, and a second core keeps them off the event loop's. 1 GiB is ample
+  # at current volume.
+  #
+  # Covers every fleet's data nodes, api included. Sizing api down to nano
+  # would save ~$12/mo and cost a per-fleet instance type in the module —
+  # the reservations are per-AZ with a count, so mixed types need grouping.
+  # Revisit with real usage rather than guessing now.
+  valkey_instance_type = "t4g.micro"
+  valkey_arbiter_type  = "t4g.nano"
+
   db_instance_class = "db.t4g.small"
   puma              = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 8, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 6, target_cpu_utilization = 70 }

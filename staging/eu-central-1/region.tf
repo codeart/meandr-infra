@@ -8,6 +8,10 @@ locals {
   region     = "eu-central-1"
   account_id = "259534890849"
 
+  # Node-name prefix. Short because it is in every Valkey hostname, and
+  # those are what Sentinel answers with.
+  region_code = "euc1"
+
   # Named because recipes run SSM from the OPERATOR's machine, where there
   # is no provider to inherit credentials from.
   aws_profile = "meandr-staging"
@@ -69,6 +73,13 @@ locals {
   acme_dns_role_arn = "arn:aws:iam::303529433558:role/meandr-acme-dns-${local.env}"
 
   # --- Sizing ----------------------------------------------------------
+  #
+  # Staging runs the smallest thing that exercises the topology. Production
+  # uses m7g for the data nodes — see its region.tf for why the shape
+  # matters more than the size.
+  valkey_instance_type = "t4g.nano"
+  valkey_arbiter_type  = "t4g.nano"
+
   db_instance_class = "db.t4g.micro"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
   jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }

@@ -236,7 +236,7 @@ module "valkey" {
 
   env         = local.env
   region      = local.region
-  region_code = "euc1"
+  region_code = local.region_code
 
   fleets = {
     # Masters live here, so this region bootstraps every record and its
@@ -260,6 +260,9 @@ module "valkey" {
   valkey_version     = local.valkey_version
   valkey_source_path = local.valkey_source_path
   backup_bucket      = local.valkey_backup_bucket
+
+  instance_type         = local.valkey_instance_type
+  arbiter_instance_type = local.valkey_arbiter_type
 
   auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
   tls_secret_arn  = module.internal_pki.node_secret_arn

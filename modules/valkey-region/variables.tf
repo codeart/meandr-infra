@@ -58,8 +58,26 @@ variable "backup_retention_days" {
 }
 
 variable "instance_type" {
-  type    = string
-  default = "t4g.nano"
+  description = <<-EOT
+    The DATA nodes (AZ-a, AZ-b). Valkey executes commands single-threaded,
+    so one dedicated vCPU is all a node can use and a burstable type's
+    baseline is the real ceiling: t4g.small sustains 0.4 vCPU across two,
+    and past that the request path develops a latency cliff under exactly
+    the load that caused it. Production uses m7g.medium for that reason,
+    not for the memory.
+  EOT
+  type        = string
+  default     = "t4g.nano"
+}
+
+variable "arbiter_instance_type" {
+  description = <<-EOT
+    AZ-c, which runs valkey-sentinel and nothing else: no data, no
+    backups, no metrics timer. A vote does not need the data nodes' size,
+    and paying for three of them is most of the cost of a third zone.
+  EOT
+  type        = string
+  default     = "t4g.nano"
 }
 
 variable "sentinel_quorum" {
