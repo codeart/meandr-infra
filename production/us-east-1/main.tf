@@ -1,96 +1,408 @@
-# production / us-east-1 — primary region. Hosts the BE; will also host MCP
-# once the proxy code ships. EU + other regions become mcp-only secondaries.
+# Applications run in a and b ONLY. Zone c exists for the Sentinel arbiter,
+# so that losing a zone never costs two of three votes — putting a third
+# Sentinel in a zone that already holds one would defeat the purpose.
 #
-# Status: PARTIALLY APPLIED (2026-08-03). The capture buckets and the
-# payload CMK they encrypt with are LIVE; everything else is still
-# deferred. Sizing is initial-production conservative; tune before first
-# apply of the rest.
-#
-# Why those three and nothing else: S3's namespace is GLOBAL, so a bucket
-# name is claimable by any AWS account on earth until we hold it. Empty
-# buckets bill nothing and the CMK is ~$1/month, which production needs
-# eventually anyway — cheap insurance against having to rename at launch.
-#
-# *** THE REST OF THE PRODUCTION WORKLOAD IS DEFERRED ***
-#
-# VPC, config_stream, creds, meandr-api, meandr-mcp and their outputs are
-# wrapped in /* */ block comments so `terraform apply` here creates
-# nothing new. The intent: routine TF activity (re-init, plan checks,
-# sibling-module edits) doesn't accidentally trigger production bring-up.
-# When ready for the planned production launch:
-#   1. Remove the two `/* WORKLOAD-DEFERRED START */` and
-#      `/* WORKLOAD-DEFERRED END */` markers (one wraps modules, one wraps
-#      outputs).
-#   2. Have prereqs in hand: config/credentials/production.key for
-#      rails-master-key, a *.meandr.io cert ready to upload after first
-#      apply, headspace for the bring-up event.
-#   3. `terraform apply` — expect ~95 resources created (the buckets and
-#      the payload CMK are already there and will not reappear).
-#
-# Account-level policy work (cost alerts, IAM, anomaly detection,
-# org-wide SCP) lives in account-master/ and account-production/, NOT
-# here — those states are live and applicable independently of this one.
-
-provider "aws" {
-  region  = local.region
-  profile = "meandr-production"
-}
-
-# meandr.com + meandr.io hosted zones live in the Shared account.
-provider "aws" {
-  alias   = "shared"
-  region  = "eu-central-1"
-  profile = "meandr-shared"
-}
-
+# Everything that takes a whole subnet list gets these, not the module's
+# outputs: an ALB or ECS service handed three subnets would spread into c
+# and quietly make it a third app zone.
 locals {
-  # This stack's identity. Everything below derives from these — the
-  # provider, resource names, ARNs — so onboarding a region is a copy of
-  # this file with the three edited.
-  env        = "production"
-  region     = "us-east-1"
-  account_id = "393686273464"
+  app_public_subnet_ids  = slice(module.vpc.public_subnet_ids, 0, 2)
+  app_private_subnet_ids = slice(module.vpc.private_subnet_ids, 0, 2)
+}
 
-  # Is this the env's PRIMARY region? The archive is written by BE from
-  # Postgres, which is central, so there is ONE archive per env and it
-  # lives here. Secondary regions are mcp-only: they get a payloads
-  # bucket — which IS per region, because the proxy writes it on the hot
-  # path — and no archive.
-  #
-  # Deliberately NOT derived from whether the api module is present.
-  # Production creates the archive bucket ahead of its deferred workload
-  # to reserve the global S3 name, and development has no ECS at all yet
-  # still writes an archive from a laptop.
-  #
-  # S3 catches half a mistake: `meandr-mcp-archive-<env>` is globally
-  # unique, so a second region trying to create it fails loudly. The Glue
-  # database would NOT — catalogs are per region, so a duplicate would
-  # silently stand up an empty database whose queries return nothing.
-  primary = true
+# --- VPC ---------------------------------------------------------------
 
-  tags = {
-    "meandr:env"        = local.env
-    "meandr:managed-by" = "terraform"
-    "meandr:owner"      = "infra"
+module "vpc" {
+  source = "../../modules/vpc"
+
+  env = local.env
+
+  cidr_block = local.vpc_cidr
+  # APPEND only. Subnet ids are output in this order and callers index them
+  # positionally, so inserting an AZ would move existing nodes.
+  azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  enable_nat = true
+
+  nat_pinned_azs = local.nat_pinned_azs
+
+  internal_dns_zone = "${local.env}.meandr.internal"
+
+  tags = local.tags
+}
+
+# --- Credential store ---------------------------------------------------
+#
+# The primary CREATES the table; an edge attaches a replica. The table
+# carries a stream and no replica list, so regions are added without
+# editing it. See docs/credential_store.md.
+
+module "creds_table" {
+  source = "../../modules/dynamodb-creds-table"
+
+  name = "meandr-creds-${local.env}"
+
+  pitr_enabled = local.pitr_enabled
+
+  # A protected replica cannot be removed either, which is what turns an
+  # accidental replica destroy into a failed apply. Flip false and apply
+  # before an intentional teardown.
+  deletion_protection_enabled = true
+
+  # No replica list here. The proxy resolves upstream credentials on the
+  # request path, so every region needs this table locally — but an edge
+  # declares ITSELF with aws_dynamodb_table_replica in its own state. This
+  # region only makes the table replicable (streams), and never learns who
+  # took it up.
+  tags = local.tags
+}
+
+module "cred_encryption_key" {
+  source = "../../modules/cred-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-cred-${local.env}"
+
+  # Annual auto-rotation on. There is NO data-key layer and no bootstrap:
+  # BE encrypts each cred blob directly with KMS.Encrypt(KeyId=alias), so
+  # replacing this key needs nothing seeded — only the existing blobs
+  # re-written. See credential_store.md §"terraform apply".
+  enable_key_rotation     = true
+  deletion_window_in_days = local.kms_deletion_window
+
+  # Ciphertext CROSSES: BE encrypts once, the Global Table replicates it,
+  # and every region's proxy decrypts that same blob. Replicas are declared
+  # by the edge — this flag only makes the key replicable.
+  multi_region = true
+
+  tags = local.tags
+}
+
+module "payload_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-payload-${local.env}"
+  purpose    = "SSE-KMS default for the payload + archive buckets"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = local.kms_deletion_window
+
+  # Regional, and deliberately unreplicable so it cannot be adopted for
+  # something that crosses. Each region encrypts only objects it reads, and
+  # S3 replication re-encrypts with the destination's key. Flipping this
+  # recreates the CMK and orphans every object already written.
+  multi_region = false
+
+  tags = local.tags
+}
+
+# Wraps the answer to an UPSTREAM-initiated elicitation, which can ask for
+# anything. Our own approval form stays plaintext — it is an OTP that BE
+# must read to validate. See buildResponded in action_responded.go.
+#
+# Multi-region because a form is wrapped at the edge that handled it and
+# unwrapped by BE in the primary; a replica each side keeps both KMS calls
+# local. Separate from the bucket key for that geography alone.
+module "action_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-action-${local.env}"
+  purpose    = "AEAD envelope key for elicitation + approval form payloads"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = local.kms_deletion_window
+
+  # The whole point of this key. IMMUTABLE — created right the first time
+  # rather than flipped later, which is what the bucket key cannot do.
+  multi_region = true
+
+  tags = local.tags
+}
+
+# --- Shared secrets -----------------------------------------------------
+#
+# The primary CREATES these and lists its edges as replica targets; an edge
+# READS the local replica by name.
+#
+# One AUTH token per env across all three fleets. Network isolation stays
+# the trust boundary; AUTH is defense-in-depth. Rotate by changing the
+# random_password length or keepers.
+
+resource "random_password" "redis_auth" {
+  length  = 64
+  special = false # ElastiCache AUTH tokens allow printable ASCII; staying alphanumeric avoids URL-encoding traps in BE / proxy code.
+}
+
+resource "aws_secretsmanager_secret" "redis_auth" {
+  name        = "meandr/redis/${local.env}/auth-token"
+  description = "Shared Redis AUTH token — config-stream + event-stream + api-redis."
+  tags        = local.tags
+
+  # One token per environment, so an edge node needs THIS value — but read
+  # from its own region, since it fetches at boot and a node that cannot
+  # reach Secrets Manager does not start.
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
   }
 }
 
+resource "aws_secretsmanager_secret_version" "redis_auth" {
+  secret_id     = aws_secretsmanager_secret.redis_auth.id
+  secret_string = random_password.redis_auth.result
+}
+
+# --- Proxy client-session JWT signing key ------------------------------
+#
+# Signs the Mcp-Session-Id JWT (HS256, symmetric). Every proxy task in
+# the env fleet must verify with the same key; rotating means bumping
+# random_password.session_signing_key.keepers so a new random is
+# generated + re-applied. Rotation invalidates existing JWTs → clients
+# re-initialize on their next call (spec-compliant 404 flow). 64 bytes
+# is plenty for HS256 (needs ≥32).
+resource "random_password" "session_signing_key" {
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "session_signing_key" {
+  name        = "meandr/session/${local.env}/signing-key"
+  description = "HS256 key signing client-session JWTs (Mcp-Session-Id) on the proxy."
+  tags        = local.tags
+
+  # Every proxy task in the environment must verify with the same key —
+  # an agent's next call can land in any region, and a session signed in
+  # one must validate in another. Same value, local copy.
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "session_signing_key" {
+  secret_id     = aws_secretsmanager_secret.session_signing_key.id
+  secret_string = random_password.session_signing_key.result
+}
+
+# Terraform owns the CONTAINER and its replication; the ACME pipeline owns
+# the VALUE (cert_store.md §5). NO secret_version here — writing one would
+# fight the renewal cron.
+#
+# Declared only to make replication automatic: the proxy resolves its cert
+# by name in its own region, and a renewal every 60 days would otherwise
+# mean an apply per region, failing silently on the one forgotten.
+resource "aws_secretsmanager_secret" "proxy_cert" {
+  name        = "meandr/certs/${local.env}/${local.proxy_apex}"
+  description = "TLS cert + key for *.${local.proxy_apex} (${local.env}). Written by the ACME pipeline; replication managed here."
+  tags        = local.tags
+
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
+}
+
+# --- Internal PKI -------------------------------------------------------
+#
+# The primary MINTS the CA; an edge reads the replicated leaves. A second
+# CA would break the cross-region mTLS that `config` replication runs over.
+
+module "internal_pki" {
+  source = "../../modules/internal-pki"
+
+  env           = local.env
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  # One CA for the whole environment. It MUST be shared, not regenerated
+  # per region: config replicates cross-region over mTLS, so an edge
+  # replica presents a certificate the primary's master has to trust.
+  #
+  # The leaf needs no change — `*.valkey.<zone>` already covers every node
+  # name in every region — so this adds read-only copies, nothing rotates.
+  replica_regions = local.edge_regions
+
+  tags = local.tags
+}
+
+module "valkey" {
+  source = "../../modules/valkey-region"
+
+  env         = local.env
+  region      = local.region
+  region_code = "euc1"
+
+  fleets = {
+    # Masters live here, so this region bootstraps every record and its
+    # nodes stay promotable — an edge sets both false.
+    config = {}
+
+    # Region-qualified because the zone is shared: an unqualified
+    # `events-master` would name a different node in every region.
+    events = {
+      master_record_label = "events-master-euc1"
+    }
+
+    # allkeys-lru unlike the other two — dropping the coldest key IS the
+    # behaviour here. Rails-owned, and takes no backups.
+    api = {
+      maxmemory_policy      = "allkeys-lru"
+      backup_bucket_enabled = false
+    }
+  }
+
+  valkey_version     = local.valkey_version
+  valkey_source_path = local.valkey_source_path
+  backup_bucket      = local.valkey_backup_bucket
+
+  auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+  tls_secret_arn  = module.internal_pki.node_secret_arn
+
+  vpc_id        = module.vpc.vpc_id
+  subnet_ids    = module.vpc.private_subnet_ids
+  client_cidrs  = concat([module.vpc.vpc_cidr_block], local.edge_cidrs)
+  dns_zone_id   = module.vpc.internal_dns_zone_id
+  dns_zone_name = module.vpc.internal_dns_zone_name
+
+  tags = local.tags
+}
+
+
+
+module "valkey_recipes" {
+  source = "../../modules/valkey-recipes"
+
+  # Every node in the region. A fleet missing here keeps the recipes it has
+  # and silently receives no new ones.
+  instance_ids = module.valkey.instance_ids
+
+  aws_profile = local.aws_profile
+  aws_region  = local.region
+}
+
+# --- meandr-api ---------------------------------------------------------
+
+module "api" {
+  source = "../../modules/meandr-api"
+
+  providers = {
+    aws     = aws
+    aws.dns = aws.shared
+  }
+
+  env        = local.env
+  account_id = local.account_id
+
+  hostname  = local.api_hostname
+  image_tag = local.image_tag
+
+  # Same parameter the proxy reads, so BE validation and the proxy's dial
+  # guard cannot disagree about what our own ingress is.
+  self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
+
+  # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
+  extra_hostnames = [local.oauth_issuer_host]
+
+  # ACME DNS-01 into the env's apex, whose zone lives in Shared. Created by
+  # shared/acme.tf (apply that first); a literal rather than a remote-state
+  # read keeps this stack's only cross-account dependency the provider
+  # alias. `terraform -chdir=shared output acme_dns_role_arns`.
+  acme_dns_role_arn = local.acme_dns_role_arn
+
+  vpc_id                 = module.vpc.vpc_id
+  vpc_cidr_block         = module.vpc.vpc_cidr_block
+  public_subnet_ids      = local.app_public_subnet_ids
+  private_subnet_ids     = local.app_private_subnet_ids
+  internal_dns_zone_id   = module.vpc.internal_dns_zone_id
+  internal_dns_zone_name = module.vpc.internal_dns_zone_name
+
+  # State-plane regions BE consumes streams from: this one and every peer.
+  # An edge produces events no one reads until its region appears here.
+  regions = concat([local.region], keys(local.peers))
+
+  # BE reaches every fleet through Sentinel — no URL fallback, because a
+  # URL cannot carry a client certificate and the fleets refuse a
+  # connection without one.
+  #
+  # EVERY region's event group, unlike the proxy which only needs its
+  # own: BE consumes every region's stream. Positional with `regions`.
+  config_sentinel_addrs  = module.valkey.fleets["config"].sentinel_addrs
+  config_sentinel_master = "config"
+
+  # Own region first, then one group per peer — positional with `regions`.
+  # Remote groups are built from names, not from another region's state.
+  event_sentinel_groups = concat(
+    [join(",", module.valkey.fleets["events"].sentinel_addrs)],
+    [
+      for code in values(local.peers) : join(",", [
+        for az in ["a", "b", "c"] :
+        "events-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ])
+    ],
+  )
+  event_sentinel_master = "events"
+
+  api_sentinel_addrs  = module.valkey.fleets["api"].sentinel_addrs
+  api_sentinel_master = "api"
+
+  valkey_client_secret_arn = module.internal_pki.client_secret_arn
+
+  redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
+
+  cred_store_enabled        = true
+  creds_table_name          = module.creds_table.table_name
+  creds_table_arn           = module.creds_table.table_arn
+  cred_encryption_key_arn   = module.cred_encryption_key.key_arn
+  cred_encryption_key_alias = module.cred_encryption_key.alias_name
+
+  # Even staging holds real developer credentials and dashboard state; it
+  # is not scratch. Flip false and apply before an intentional teardown.
+  db_deletion_protection = true
+
+  db_instance_class = local.db_instance_class
+  db_multi_az       = local.db_multi_az
+  puma              = local.puma
+  jobs              = local.jobs
+  ingest            = local.ingest
+  migrate           = local.migrate
+
+  log_retention_days = local.log_retention_days
+
+  # BE writes the archive (daily Parquet) and READS + RETAGS payloads —
+  # never writes bodies. Retag is the cancellation flow: move an
+  # account's objects from `inf` to `1d` and let the bucket's lifecycle
+  # do the deleting.
+  capture_enabled            = true
+  archive_bucket_arn         = one(module.archive_bucket[*].arn)
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
+
+  # BE unwraps upstream form answers, which the proxy wrapped with the
+  # action key. Granted alongside the bucket key, not instead of it.
+  action_key_enabled          = true
+  envelope_encryption_key_arn = module.action_encryption_key.key_arn
+}
+
+# --- meandr-mcp --------------------------------------------------------
+#
+# Proxy stack: writer Valkey + NLB + ECS cluster + proxy service. NLB has
+# two plain TCP listeners (80 + 443) forwarding to proxy:8080; proxy
+# terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
+# Customer HTTPS traffic won't work end-to-end until then — expected v0.
+
 # --- Capture buckets ----------------------------------------------------
 #
-# NOT deferred, unlike the rest of production.
-#
-# S3's namespace is GLOBAL — a bucket name is claimable by any AWS
-# account on earth until we hold it — so these are created ahead of the
-# workload purely to reserve the names. An empty bucket bills nothing;
-# the only cost is the CMK below, at roughly $1/month, which production
-# needs eventually anyway.
-#
-# The payload CMK is lifted out with them because the buckets encrypt
-# with it. multi_region = true is set at creation deliberately: the flag
-# is immutable, and production goes multi-region.
-#
-# The task-role grant (capture_enabled + the two ARNs) goes in when the
-# mcp module below is uncommented; until then nothing writes here.
+# Split by who writes and how it is read (capture_and_archive.md §6):
+# archive is BE-written Parquet queried by Athena, so ONE per env and
+# single-region; payloads are proxy-written bodies, regional because the
+# proxy writes them on the hot path, and never scanned — a ref names the
+# bucket and a byte range.
 
 module "archive_bucket" {
   source = "../../modules/s3-capture-bucket"
@@ -104,151 +416,35 @@ module "archive_bucket" {
   prefix_expirations = { "athena-results/" = 1 }
 }
 
+module "archive_database" {
+  source = "../../modules/glue-database"
+  count  = local.primary ? 1 : 0
+
+  name        = "meandr_${local.env}"
+  description = "meandr archive (${local.env}) — external tables over ${one(module.archive_bucket[*].bucket)}"
+  tags        = local.tags
+}
+
 module "payloads_bucket" {
   source = "../../modules/s3-capture-bucket"
 
   name        = "meandr-mcp-payloads-${local.region}-${local.env}"
   kms_key_arn = module.payload_encryption_key.key_arn
   tags        = local.tags
-}
 
-module "payload_encryption_key" {
-  source = "../../modules/payload-encryption-key"
-
-  env        = local.env
-  alias_name = "meandr-payload-${local.env}"
-  purpose    = "SSE-KMS default for the payload + archive buckets"
-
-  # BUCKET-AT-REST ONLY, and regional on purpose. Each region encrypts
-  # only objects it reads itself, and S3 replication decrypts with the
-  # source key and re-encrypts with the destination's, so no payload
-  # ciphertext ever needs one key to span regions.
+  # Every payloads bucket is one end of a replication pair — the primary
+  # receives, a regional buffer sends (capture_and_archive.md §6.1) — and
+  # S3 requires versioning on BOTH. Not local.primary: a buffer needs it
+  # just as much, for the opposite reason.
   #
-  # Regional is the GUARDRAIL, not merely the cheaper default. A key that
-  # cannot be replicated cannot be quietly adopted for something that
-  # crosses regions — that misuse would work in one region and fail in the
-  # next, which is the hardest shape of bug to find. Immutability is doing
-  # useful work here: keep it.
-  #
-  # The envelope key (elicitation forms) is the one that crosses and must
-  # be multi-region. Staging has it as `action_encryption_key`; production
-  # gains it when this region is rebuilt from staging.
-  multi_region = false
-
-  enable_key_rotation     = true
-  deletion_window_in_days = 30
-
-  tags = local.tags
+  # Enabled ahead of the first buffer because it lives in a different
+  # state file. Without it, region 2's replication config fails to create
+  # and that region stops being a single apply.
+  versioning_enabled = true
 }
 
-/* WORKLOAD-DEFERRED START — modules wrapped until first-deploy day; see header.
-
-# --- VPC ---------------------------------------------------------------
-
-module "vpc" {
-  source = "../../modules/vpc"
-
-  env = local.env
-
-  cidr_block        = "10.20.0.0/16"
-  azs               = ["${local.region}a", "${local.region}b"]
-  enable_nat = true
-
-  # Two addresses, so losing a zone still leaves one behind. Pinned rather
-  # than automatic: production egress IPs must be stable enough to put on a
-  # customer's allow-list, and auto-expansion would add addresses on its own.
-  nat_pinned_azs = ["${local.region}a", "${local.region}b"]
-  internal_dns_zone = "${local.env}.meandr.internal"
-
-  tags = local.tags
-}
-
-# --- Config-stream Valkey ----------------------------------------------
-#
-# GD-eligible node family (r-series) so we can attach secondaries later
-# without rebuild. Multi-AZ replication with auto failover. TLS-on
-# (required for GD). When the second proxy region comes online, this
-# becomes the GD primary; secondaries reference its global RG ID via
-# remote state. For now, standalone.
-#
-# Cluster name `meandr-config-stream` matches the role: config records
-# (BE writes / proxy reads) + the `<env>:in` event stream (BE produces /
-# proxy consumes). Both apps connect to AWS-internal hostnames directly
-# so the cluster's wildcard cert verifies cleanly — no CNAME aliasing.
-
-module "config_stream" {
-  source = "../../modules/elasticache-valkey"
-
-  name        = "meandr-config-stream"
-  description = "Config-stream Valkey production - BE writes config + inbound events, proxy reads config + consumes inbound events"
-
-  engine_version = "9.1"
-  node_type      = "cache.r7g.large"
-
-  num_cache_clusters         = 2
-  automatic_failover_enabled = true
-  multi_az_enabled           = true
-
-  transit_encryption_enabled = true
-  at_rest_encryption_enabled = true
-
-  snapshot_retention_days = 7
-
-  vpc_id             = module.vpc.vpc_id
-  vpc_cidr_block     = module.vpc.vpc_cidr_block
-  private_subnet_ids = module.vpc.private_subnet_ids
-
-  tags = merge(local.tags, { "meandr:plane" = "config" })
-}
-
-# --- Credential store (Dynamo + KMS envelope) --------------------------
-#
-# Production cred-store. Multi-region replication is empty for now
-# (single proxy region today) — add region codes here when secondary
-# proxy regions come online and AWS spins up Global Tables replicas.
-#
-# PITR + deletion protection on: cred rotations are audit-relevant and
-# irrecoverable if the blob is destroyed (the AEAD plaintext only
-# exists in BE memory between rotations). 35-day continuous backup
-# window + explicit destroy guard.
-
-module "creds_table" {
-  source = "../../modules/dynamodb-creds-table"
-
-  name = "meandr-creds-${local.env}"
-
-  # Secondary regions declare themselves — see the module.
-  pitr_enabled                = true
-  deletion_protection_enabled = true
-
-  tags = local.tags
-}
-
-module "cred_encryption_key" {
-  source = "../../modules/cred-encryption-key"
-
-  env        = local.env
-  alias_name = "meandr-cred-${local.env}"
-
-  # Multi-region from day one — production will expand beyond us-east-1
-  # over time; multi_region is IMMUTABLE after key creation so we must
-  # set it correctly on first apply. Replicas in other regions are
-  # provisioned separately (aws_kms_replica_key) when those regions
-  # come online; this primary can then be decrypted from any replica
-  # region without cross-region API calls at Decrypt time.
-  multi_region = true
-
-  enable_key_rotation     = true
-  deletion_window_in_days = 30 # production: max window for ScheduleKeyDeletion safety
-
-  tags = local.tags
-}
-
-
-# --- meandr-api --------------------------------------------------------
-
-module "api" {
-  source = "../../modules/meandr-api"
+module "mcp" {
+  source = "../../modules/meandr-mcp"
 
   providers = {
     aws     = aws
@@ -258,142 +454,165 @@ module "api" {
   env        = local.env
   account_id = local.account_id
 
-  hostname  = "api.meandr.com"
-  image_tag = "main"
-
-  # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
-  extra_hostnames = ["mcp.meandr.com"]
-
-  # ACME DNS-01 into meandr.io, whose zone lives in Shared. Created by
-  # shared/acme.tf (apply that first); hardcoded rather than remote-state
-  # read to keep this stack's only cross-account dependency the provider
-  # alias. `terraform -chdir=shared output acme_dns_role_arns`.
-  acme_dns_role_arn = "arn:aws:iam::303529433558:role/meandr-acme-dns-production"
+  image_tag = local.image_tag
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
-  public_subnet_ids      = module.vpc.public_subnet_ids
-  private_subnet_ids     = module.vpc.private_subnet_ids
+  public_subnet_ids      = local.app_public_subnet_ids
+  private_subnet_ids     = local.app_private_subnet_ids
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  config_writer_endpoint          = module.config_stream.primary_endpoint_address
-  config_stream_security_group_id = module.config_stream.security_group_id
+  # OWN REGION FIRST, then every other region's. Discovery walks the list
+  # in order and is not latency-aware; which replica gets READ is chosen by
+  # measured RTT in the client (rdb.New).
+  config_reader_endpoint = module.valkey.fleets["config"].master_hostname
+  config_sentinel_addrs = concat(
+    module.valkey.fleets["config"].sentinel_addrs,
+    flatten([
+      for code in local.peer_node_codes : [
+        for az in ["a", "b", "c"] :
+        "config-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ]
+    ]),
+  )
+  config_sentinel_master = "config"
 
-  # State-plane regions BE should consume streams from. Empty until the
-  # MCP module is uncommented below — at that point both lists pick up
-  # the local region (and event-stream writer endpoint).
-  regions                = []
-  event_writer_endpoints = []
+  event_writer_endpoint = module.valkey.fleets["events"].master_hostname
+  event_sentinel_addrs  = module.valkey.fleets["events"].sentinel_addrs
+  event_sentinel_master = "events"
 
-  cred_store_enabled        = true
-  creds_table_name          = module.creds_table.table_name
-  creds_table_arn           = module.creds_table.table_arn
-  cred_encryption_key_arn   = module.cred_encryption_key.key_arn
-  cred_encryption_key_alias = module.cred_encryption_key.alias_name
+  # Required to reach either fleet: the nodes run `tls-auth-clients yes`
+  # and refuse a connection with no client certificate.
+  valkey_client_secret_arn = module.internal_pki.client_secret_arn
 
-  # Production sizing — conservative starting point; revisit after first weeks of real traffic.
-  db_instance_class           = "db.t4g.medium"
-  db_allocated_storage_gb     = 50
-  db_max_allocated_storage_gb = 500
-  db_multi_az                 = true
-  db_backup_retention_days    = 14
-  db_deletion_protection      = true
+  redis_auth_enabled    = true
+  redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
-  puma    = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 70 }
-  jobs    = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 70 }
-  migrate = { cpu = 1024, memory = 2048 }
+  session_signing_key_secret_arn = aws_secretsmanager_secret.session_signing_key.arn
+
+  cred_store_enabled      = true
+  creds_table_name        = module.creds_table.table_name
+  creds_table_arn         = module.creds_table.table_arn
+  cred_encryption_key_arn = module.cred_encryption_key.key_arn
+
+  # On ahead of the writer. The grant and the env var are inert until
+  # the proxy has capture code — nothing reads MEANDR_CAPTURE_BUCKET yet
+  # — but wiring them now means the writer ships without a second task
+  # definition revision and a second rolling restart.
+  capture_enabled            = true
+  payloads_bucket            = module.payloads_bucket.bucket
+  payloads_bucket_arn        = module.payloads_bucket.arn
+  payload_encryption_key_arn = module.payload_encryption_key.key_arn
+
+  # The ALIAS is the action key — it is what payloadcrypt wraps with. The
+  # bucket key is granted above but never named in env: SSE-KMS is a
+  # property of the bucket, not something the proxy chooses per write.
+  action_key_enabled           = true
+  envelope_encryption_key_arn  = module.action_encryption_key.key_arn
+  payload_encryption_key_alias = module.action_encryption_key.alias_name
+
+  # Staging customer-facing MCP traffic lands at *.meandr.live. Production
+  # uses the module default *.meandr.io. The split keeps staging traffic
+  # off the production-shaped hostname and lets us roll DNS / certs on
+  # meandr.live without touching production's apex.
+  #
+  # Single-sourced with the cert secret below it: the proxy derives its
+  # cert path from this apex, so the two cannot drift.
+  dns_zone_name = local.proxy_apex
+
+  # The authorization server lives on BE's zone, not the tenant wildcard
+  # above — see the module's oauth_issuer_host. Kept dark until the record
+  # resolves and BE answers on it; flipping the flag is the whole switch.
+  oauth_issuer_host       = local.oauth_issuer_host
+  oauth_discovery_enabled = true
+
+  proxy = local.proxy
+
+  log_retention_days = local.log_retention_days
+
+  # The accelerator owns *.meandr.live now. One apex means one owner, and
+  # a second region creating it would have two state files overwriting each
+  # other's answer.
+  create_wildcard_record = false
+
+  # Reachable ONLY through the accelerator. A public NLB behind one is a
+  # second front door that the proxy's self-IP guard does not know about.
+  internal_nlb = true
+
+  # Written per region by account-staging/ from the accelerator's anycast
+  # pair. Derived, not copied: the same line works in every region, and the
+  # value changes without a Terraform change here.
+  self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
 }
 
-WORKLOAD-DEFERRED END (modules) */
+# --- Global Accelerator endpoint ---------------------------------------
+#
+# The accelerator lives in account-<env>/; each region attaches its own
+# endpoint group, so the accelerator holds no list of regions. Its listener
+# arn is in region.tf.
 
-# --- meandr-mcp (not deployed yet — uncomment when proxy code is ready) -
-#
-# When uncommented:
-#   1. Set regions + event_writer_endpoints on module.api above:
-#        regions                = [local.region]
-#        event_writer_endpoints = [module.mcp.event_writer_endpoint]
-#   2. Apply to provision event-stream Valkey + NLB + idle proxy service.
-#   3. Push a real image; set proxy.desired_count >= 2 and re-apply.
-#
-# module "mcp" {
-#   source = "../../modules/meandr-mcp"
-#
-#   providers = {
-#     aws     = aws
-#     aws.dns = aws.shared
-#   }
-#
-#   env        = local.env
-#   account_id = local.account_id
-#
-#   image_tag = "main"
-#
-#   vpc_id                 = module.vpc.vpc_id
-#   vpc_cidr_block         = module.vpc.vpc_cidr_block
-#   public_subnet_ids      = module.vpc.public_subnet_ids
-#   private_subnet_ids     = module.vpc.private_subnet_ids
-#   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
-#   internal_dns_zone_name = module.vpc.internal_dns_zone_name
-#
-#   config_reader_endpoint = module.config_stream.reader_endpoint_address
-#
-#   cred_store_enabled      = true
-#   creds_table_name        = module.creds_table.table_name
-#   creds_table_arn         = module.creds_table.table_arn
-#   cred_encryption_key_arn = module.cred_encryption_key.key_arn
-#
-#   event_stream_node_type             = "cache.t4g.small"  # bump above staging; event stream can take more load
-#   event_stream_snapshot_retention_days = 7
-#   proxy = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 20, target_cpu_utilization = 60 }
-# }
+locals {
+  # Deterministic from region + account + name — no literal, no lookup.
+  ga_alerts_topic_arn = "arn:aws:sns:us-west-2:${local.account_id}:meandr-${local.env}-ga-alerts"
 
-# --- Outputs -----------------------------------------------------------
-
-# --- Outputs (live) -----------------------------------------------------
-#
-# Only what is actually deployed. The rest sits in the deferred block
-# below and comes back with the workload — same list as staging, minus
-# what production does not run yet.
-
-output "archive_bucket" {
-  description = "Calls + actions Parquet. The only bucket Athena scans."
-  value       = one(module.archive_bucket[*].bucket)
+  # CloudWatch dimension values, both path segments of the listener arn.
+  ga_accelerator_id = split("/", local.ga_listener_arn)[1]
+  ga_listener_id    = split("/", local.ga_listener_arn)[3]
 }
 
-output "payloads_bucket" {
-  description = "Request/response bodies. Written by the proxy, read by ranged GET; never scanned."
-  value       = module.payloads_bucket.bucket
+resource "aws_globalaccelerator_endpoint_group" "local_region" {
+  provider = aws.usw2
+
+  listener_arn          = local.ga_listener_arn
+  endpoint_group_region = local.region
+
+  # An unhealthy group is withdrawn from the anycast pair, so a broken
+  # deploy stops serving silently rather than erroring — hence the alarm
+  # below. 3 checks at 30s means withdrawal takes ~90s.
+  health_check_protocol         = "TCP"
+  health_check_port             = 443
+  health_check_interval_seconds = 30
+  threshold_count               = 3
+
+  endpoint_configuration {
+    endpoint_id = module.mcp.nlb_arn
+    weight      = 100
+
+    # Without this the proxy sees accelerator addresses and clientguard's
+    # per-client limits collapse onto a handful of sources.
+    client_ip_preservation_enabled = true
+  }
 }
 
-output "payload_encryption_key_alias" {
-  description = "Payload KMS alias (full form, including `alias/`). SSE-KMS for both buckets, and the approval-flow envelope key once the workload lands."
-  value       = module.payload_encryption_key.alias_name
+# This region withdrawn from the anycast pair. Traffic still serves from the
+# others, which is why nothing else reports it.
+resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
+  provider = aws.usw2
+
+  alarm_name        = "meandr-${local.env}-ga-unhealthy-${local.region}"
+  alarm_description = "Global Accelerator withdrew ${local.region}; it is serving no anycast traffic."
+
+  namespace   = "AWS/GlobalAccelerator"
+  metric_name = "HealthyEndpointCount"
+  dimensions = {
+    Accelerator   = local.ga_accelerator_id
+    Listener      = local.ga_listener_id
+    EndpointGroup = local.region
+  }
+
+  statistic           = "Minimum"
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  period              = 60
+  evaluation_periods  = 3
+  datapoints_to_alarm = 2
+
+  # Silence is the failure being alarmed on, so absent data is not healthy.
+  treat_missing_data = "breaching"
+
+  alarm_actions = [local.ga_alerts_topic_arn]
+  ok_actions    = [local.ga_alerts_topic_arn]
+  tags          = local.tags
 }
-
-output "payload_encryption_key_arn" {
-  description = "Payload KMS CMK ARN."
-  value       = module.payload_encryption_key.key_arn
-}
-
-/* WORKLOAD-DEFERRED START — outputs wrapped until first-deploy day; see header.
-
-output "vpc_id"             { value = module.vpc.vpc_id }
-output "vpc_cidr_block"     { value = module.vpc.vpc_cidr_block }
-output "public_subnet_ids"  { value = module.vpc.public_subnet_ids }
-output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
-
-output "config_stream_writer_endpoint" { value = module.config_stream.primary_endpoint_address }
-output "config_stream_reader_endpoint" { value = module.config_stream.reader_endpoint_address }
-# event_stream_writer_endpoint is exposed by module.mcp once uncommented.
-
-output "hostname"             { value = module.api.hostname }
-output "alb_dns_name"         { value = module.api.alb_dns_name }
-output "cluster_name"         { value = module.api.cluster_name }
-output "puma_service_name"    { value = module.api.puma_service_name }
-output "jobs_service_name"    { value = module.api.jobs_service_name }
-output "migrate_task_family"  { value = module.api.migrate_task_family }
-output "worker_sg_id"         { value = module.api.worker_security_group_id }
-
-WORKLOAD-DEFERRED END (outputs) */
 

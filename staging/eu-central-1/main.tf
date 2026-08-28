@@ -17,17 +17,13 @@ module "vpc" {
 
   env = local.env
 
-  cidr_block = "10.10.0.0/16"
+  cidr_block = local.vpc_cidr
   # APPEND only. Subnet ids are output in this order and callers index them
   # positionally, so inserting an AZ would move existing nodes.
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  # One address, in AZ-a, serving all three zones. AZ-c holds only the
-  # Sentinel arbiters, which do not egress at steady state, and AZ-b's
-  # workloads can be processed by AZ-a's address — so a second address
-  # would be paid for and idle. Production pins two.
-  nat_pinned_azs = ["${local.region}a"]
+  nat_pinned_azs = local.nat_pinned_azs
 
   internal_dns_zone = "${local.env}.meandr.internal"
 
@@ -45,7 +41,7 @@ module "creds_table" {
 
   name = "meandr-creds-${local.env}"
 
-  pitr_enabled = false # staging: throwaway data, no audit need
+  pitr_enabled = local.pitr_enabled
 
   # A protected replica cannot be removed either, which is what turns an
   # accidental replica destroy into a failed apply. Flip false and apply
@@ -71,7 +67,7 @@ module "cred_encryption_key" {
   # replacing this key needs nothing seeded — only the existing blobs
   # re-written. See credential_store.md §"terraform apply".
   enable_key_rotation     = true
-  deletion_window_in_days = 7 # staging: short window for easy iteration
+  deletion_window_in_days = local.kms_deletion_window
 
   # Ciphertext CROSSES: BE encrypts once, the Global Table replicates it,
   # and every region's proxy decrypts that same blob. Replicas are declared
@@ -89,7 +85,7 @@ module "payload_encryption_key" {
   purpose    = "SSE-KMS default for the payload + archive buckets"
 
   enable_key_rotation     = true
-  deletion_window_in_days = 7 # staging: short window for easy iteration
+  deletion_window_in_days = local.kms_deletion_window
 
   # Regional, and deliberately unreplicable so it cannot be adopted for
   # something that crosses. Each region encrypts only objects it reads, and
@@ -115,7 +111,7 @@ module "action_encryption_key" {
   purpose    = "AEAD envelope key for elicitation + approval form payloads"
 
   enable_key_rotation     = true
-  deletion_window_in_days = 7
+  deletion_window_in_days = local.kms_deletion_window
 
   # The whole point of this key. IMMUTABLE — created right the first time
   # rather than flipped later, which is what the bucket key cannot do.
@@ -303,21 +299,21 @@ module "api" {
   env        = local.env
   account_id = local.account_id
 
-  hostname  = "staging-api.meandr.com"
-  image_tag = "develop"
+  hostname  = local.api_hostname
+  image_tag = local.image_tag
 
   # Same parameter the proxy reads, so BE validation and the proxy's dial
   # guard cannot disagree about what our own ingress is.
   self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
 
   # OAuth 2.1 issuer host — see meandr-mcp's oauth_issuer_host.
-  extra_hostnames = ["staging-mcp.meandr.com"]
+  extra_hostnames = [local.oauth_issuer_host]
 
-  # ACME DNS-01 into meandr.live, whose zone lives in Shared. Created by
-  # shared/acme.tf (apply that first); hardcoded rather than remote-state
-  # read to keep this stack's only cross-account dependency the provider
+  # ACME DNS-01 into the env's apex, whose zone lives in Shared. Created by
+  # shared/acme.tf (apply that first); a literal rather than a remote-state
+  # read keeps this stack's only cross-account dependency the provider
   # alias. `terraform -chdir=shared output acme_dns_role_arns`.
-  acme_dns_role_arn = "arn:aws:iam::303529433558:role/meandr-acme-dns-staging"
+  acme_dns_role_arn = local.acme_dns_role_arn
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
@@ -365,17 +361,18 @@ module "api" {
   cred_encryption_key_arn   = module.cred_encryption_key.key_arn
   cred_encryption_key_alias = module.cred_encryption_key.alias_name
 
-  # Staging holds real developer credentials and dashboard state; it is not
-  # scratch. Flip false and apply before an intentional teardown.
+  # Even staging holds real developer credentials and dashboard state; it
+  # is not scratch. Flip false and apply before an intentional teardown.
   db_deletion_protection = true
 
-  db_instance_class = "db.t4g.micro"
-  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
-  jobs              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
-  ingest            = { cpu = 256, memory = 512, desired_count = 1 }
-  migrate           = { cpu = 512, memory = 1024 }
+  db_instance_class = local.db_instance_class
+  db_multi_az       = local.db_multi_az
+  puma              = local.puma
+  jobs              = local.jobs
+  ingest            = local.ingest
+  migrate           = local.migrate
 
-  log_retention_days = 7
+  log_retention_days = local.log_retention_days
 
   # BE writes the archive (daily Parquet) and READS + RETAGS payloads —
   # never writes bodies. Retag is the cancellation flow: move an
@@ -457,7 +454,7 @@ module "mcp" {
   env        = local.env
   account_id = local.account_id
 
-  image_tag = "develop"
+  image_tag = local.image_tag
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
@@ -527,12 +524,12 @@ module "mcp" {
   # The authorization server lives on BE's zone, not the tenant wildcard
   # above — see the module's oauth_issuer_host. Kept dark until the record
   # resolves and BE answers on it; flipping the flag is the whole switch.
-  oauth_issuer_host       = "staging-mcp.meandr.com"
+  oauth_issuer_host       = local.oauth_issuer_host
   oauth_discovery_enabled = true
 
-  proxy = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+  proxy = local.proxy
 
-  log_retention_days = 7
+  log_retention_days = local.log_retention_days
 
   # The accelerator owns *.meandr.live now. One apex means one owner, and
   # a second region creating it would have two state files overwriting each
@@ -551,16 +548,11 @@ module "mcp" {
 
 # --- Global Accelerator endpoint ---------------------------------------
 #
-# The accelerator lives in account-staging/; each region attaches its own
-# endpoint group, so the accelerator holds no list of regions.
-#   terraform -chdir=../../account-staging output ga_listener_arn
+# The accelerator lives in account-<env>/; each region attaches its own
+# endpoint group, so the accelerator holds no list of regions. Its listener
+# arn is in region.tf.
 
 locals {
-  # A literal because there IS no listener data source — only the
-  # accelerator has one, and the listener id is AWS-generated. Remote state
-  # would work and is deliberately not used: it would give every region a
-  # read dependency on the account stack rather than a provider alias.
-  ga_listener_arn = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
   # Deterministic from region + account + name — no literal, no lookup.
   ga_alerts_topic_arn = "arn:aws:sns:us-west-2:${local.account_id}:meandr-${local.env}-ga-alerts"
 
