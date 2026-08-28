@@ -246,7 +246,7 @@ module "valkey" {
     # Region-qualified because the zone is shared: an unqualified
     # `events-master` would name a different node in every region.
     events = {
-      master_record_label = "events-master-euc1"
+      master_record_label = "events-master-${local.region_code}"
     }
 
     # allkeys-lru unlike the other two — dropping the coldest key IS the
