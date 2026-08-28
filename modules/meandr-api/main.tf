@@ -239,7 +239,7 @@ resource "aws_security_group" "alb" {
   description = "Public ingress for meandr-api ALB"
   vpc_id      = var.vpc_id
 
-  tags = merge(local.base_tags, { Name = "Main ALB SG (${var.env})" })
+  tags = merge(local.base_tags, { Name = "Main ALB SG - ${var.env}" })
 }
 
 resource "aws_security_group_rule" "alb_ingress_443" {
@@ -282,7 +282,7 @@ resource "aws_lb" "main" {
   enable_deletion_protection = false
   drop_invalid_header_fields = true
 
-  tags = merge(local.base_tags, { Name = "Main ALB (${var.env})" })
+  tags = merge(local.base_tags, { Name = "Main ALB - ${var.env}" })
 }
 
 resource "aws_lb_listener" "https" {

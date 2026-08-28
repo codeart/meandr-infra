@@ -85,6 +85,10 @@ variable "env" {
     Resource Explorer, tag-based cost reports, a console with several
     accounts open. The region is already carried by the resource itself;
     the environment is not.
+
+    Separated by " - " and not parentheses: ELB tag values accept only
+    `\p{L}\p{Z}\p{N}_.:/=+-@`, and reject a bracket mid-apply rather than
+    at plan.
   EOT
   type        = string
 }
