@@ -18,16 +18,21 @@ locals {
   #
   # Principals differ by env: staging and production are ECS task roles,
   # dev is the local engineer's IAM user.
+  #
+  # The ACME role, NOT the general task role. meandr-api runs the ACME
+  # order under a dedicated `meandr-api-acme-<env>` task role — that is the
+  # one holding sts:AssumeRole on these, so naming any other principal
+  # produces an AccessDenied that reads like a missing grant on this side.
   acme_envs = {
     staging = {
       zone       = "meandr.live"
       account_id = "259534890849"
-      principal  = "arn:aws:iam::259534890849:role/meandr-api-task-staging"
+      principal  = "arn:aws:iam::259534890849:role/meandr-api-acme-staging"
     }
     production = {
       zone       = "meandr.io"
       account_id = "393686273464"
-      principal  = "arn:aws:iam::393686273464:role/meandr-api-task-production"
+      principal  = "arn:aws:iam::393686273464:role/meandr-api-acme-production"
     }
     development = {
       zone       = "meandr.dev"
