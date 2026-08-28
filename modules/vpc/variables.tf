@@ -76,6 +76,19 @@ variable "internal_dns_zone" {
   type        = string
 }
 
+variable "env" {
+  description = <<-EOT
+    Environment, used only to qualify Name tags.
+
+    Without it every region in every account calls its VPC "Main VPC",
+    which is ambiguous in any view that spans regions or accounts —
+    Resource Explorer, tag-based cost reports, a console with several
+    accounts open. The region is already carried by the resource itself;
+    the environment is not.
+  EOT
+  type        = string
+}
+
 variable "tags" {
   description = "Common tags applied to every resource."
   type        = map(string)

@@ -148,6 +148,8 @@ module "payload_encryption_key" {
 module "vpc" {
   source = "../../modules/vpc"
 
+  env = local.env
+
   cidr_block        = "10.20.0.0/16"
   azs               = ["${local.region}a", "${local.region}b"]
   enable_nat = true

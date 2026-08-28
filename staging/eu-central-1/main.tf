@@ -15,6 +15,8 @@ locals {
 module "vpc" {
   source = "../../modules/vpc"
 
+  env = local.env
+
   cidr_block = "10.10.0.0/16"
   # APPEND only. Subnet ids are output in this order and callers index them
   # positionally, so inserting an AZ would move existing nodes.

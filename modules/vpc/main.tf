@@ -19,7 +19,7 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = merge(var.tags, {
-    Name = "Main VPC"
+    Name = "Main VPC (${var.env})"
   })
 }
 
@@ -29,7 +29,7 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = merge(var.tags, {
-    Name = "Main IGW"
+    Name = "Main IGW (${var.env})"
   })
 }
 
@@ -202,7 +202,7 @@ resource "aws_nat_gateway" "regional" {
   }
 
   tags = merge(var.tags, {
-    Name = "Main NAT"
+    Name = "Main NAT (${var.env})"
   })
 
   depends_on = [aws_internet_gateway.main]

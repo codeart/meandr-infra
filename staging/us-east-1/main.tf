@@ -16,6 +16,8 @@ locals {
 module "vpc" {
   source = "../../modules/vpc"
 
+  env = local.env
+
   cidr_block = "10.20.0.0/16"
   # APPEND only — subnet ids are consumed positionally.
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
