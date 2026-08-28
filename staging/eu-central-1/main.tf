@@ -554,11 +554,15 @@ module "mcp" {
 # The accelerator lives in account-staging/; each region attaches its own
 # endpoint group, so the accelerator holds no list of regions.
 #   terraform -chdir=../../account-staging output ga_listener_arn
-#   terraform -chdir=../../account-staging output ga_alerts_topic_arn
 
 locals {
-  ga_listener_arn     = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
-  ga_alerts_topic_arn = "arn:aws:sns:us-west-2:259534890849:meandr-staging-ga-alerts"
+  # A literal because there IS no listener data source — only the
+  # accelerator has one, and the listener id is AWS-generated. Remote state
+  # would work and is deliberately not used: it would give every region a
+  # read dependency on the account stack rather than a provider alias.
+  ga_listener_arn = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  # Deterministic from region + account + name — no literal, no lookup.
+  ga_alerts_topic_arn = "arn:aws:sns:us-west-2:${local.account_id}:meandr-${local.env}-ga-alerts"
 
   # CloudWatch dimension values, both path segments of the listener arn.
   ga_accelerator_id = split("/", local.ga_listener_arn)[1]
