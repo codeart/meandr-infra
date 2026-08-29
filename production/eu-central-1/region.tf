@@ -4,8 +4,14 @@
 # backend.tf's key. Everything else should be identical.
 
 locals {
-  env        = "production"
-  region     = "eu-central-1"
+  env    = "production"
+  region = "eu-central-1"
+
+  # Set beside `region` because the two must move together. It is in every
+  # Valkey hostname, and the internal zone is ONE zone shared by every
+  # region, so a stale code collides with a live region's records.
+  region_code = "euc1"
+
   account_id = "393686273464"
 
   # Named because recipes run SSM from the OPERATOR's machine, where there
@@ -21,7 +27,7 @@ locals {
   # reads at handshake time, so it cannot disagree with DNS.
   proxy_apex = "meandr.io"
 
-  # Written by account-staging/ into every region. Same path everywhere.
+  # Written by account-production/ into every region. Same path everywhere.
   self_ips_param = "/meandr/production/self-ips"
 
   # Upgrade order is replicas first, master last: a replica newer than its
@@ -30,6 +36,12 @@ locals {
   valkey_version       = "9.1.1"
   valkey_source_path   = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
   valkey_backup_bucket = "meandr-valkey-backups-${local.env}-${local.region}"
+
+  # Data nodes carry Valkey; arbiters carry a Sentinel vote and nothing
+  # else. Explicit rather than defaulted so an edge cannot end up a size
+  # below its own primary without anyone choosing that.
+  valkey_instance_type = "t4g.micro"
+  valkey_arbiter_type  = "t4g.nano"
 
   # --- Region and environment specifics --------------------------------
   #

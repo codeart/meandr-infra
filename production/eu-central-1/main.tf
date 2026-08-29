@@ -173,7 +173,7 @@ module "valkey" {
 
   env         = local.env
   region      = local.region
-  region_code = "use1"
+  region_code = local.region_code
 
   fleets = {
     # An edge holds no master: `config-master` is global and the primary
@@ -187,9 +187,12 @@ module "valkey" {
     # Standalone per region, so a real master — region-qualified because
     # the zone is shared.
     events = {
-      master_record_label = "events-master-use1"
+      master_record_label = "events-master-${local.region_code}"
     }
   }
+
+  instance_type         = local.valkey_instance_type
+  arbiter_instance_type = local.valkey_arbiter_type
 
   valkey_version     = local.valkey_version
   valkey_source_path = local.valkey_source_path

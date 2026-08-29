@@ -4,13 +4,15 @@
 # backend.tf's key. Everything else should be identical.
 
 locals {
-  env        = "production"
-  region     = "us-east-1"
-  account_id = "393686273464"
+  env    = "production"
+  region = "us-east-1"
 
-  # Node-name prefix. Short because it is in every Valkey hostname, and
-  # those are what Sentinel answers with.
+  # Set beside `region` because the two must move together. It is in every
+  # Valkey hostname, and the internal zone is ONE zone shared by every
+  # region, so a stale code collides with a live region's records.
   region_code = "use1"
+
+  account_id = "393686273464"
 
   # Named because recipes run SSM from the OPERATOR's machine, where there
   # is no provider to inherit credentials from.

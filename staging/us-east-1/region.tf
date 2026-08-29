@@ -4,8 +4,14 @@
 # backend.tf's key. Everything else should be identical.
 
 locals {
-  env        = "staging"
-  region     = "us-east-1"
+  env    = "staging"
+  region = "us-east-1"
+
+  # Set beside `region` because the two must move together. It is in every
+  # Valkey hostname, and the internal zone is ONE zone shared by every
+  # region, so a stale code collides with a live region's records.
+  region_code = "use1"
+
   account_id = "259534890849"
 
   # Named because recipes run SSM from the OPERATOR's machine, where there
@@ -30,6 +36,12 @@ locals {
   valkey_version       = "9.1.1"
   valkey_source_path   = "${path.root}/../../modules/valkey-node/vendor/valkey-${local.valkey_version}.tar.gz"
   valkey_backup_bucket = "meandr-valkey-backups-${local.env}-${local.region}"
+
+  # Data nodes carry Valkey; arbiters carry a Sentinel vote and nothing
+  # else. Explicit rather than defaulted so an edge cannot end up a size
+  # below its own primary without anyone choosing that.
+  valkey_instance_type = "t4g.nano"
+  valkey_arbiter_type  = "t4g.nano"
 
   # --- Region and environment specifics --------------------------------
   #
