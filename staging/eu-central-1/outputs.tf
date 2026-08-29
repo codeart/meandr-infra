@@ -3,6 +3,12 @@ output "vpc_cidr_block" { value = module.vpc.vpc_cidr_block }
 output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
+# The rest of an EDGE's `peer` block. Exposed because every new edge needs
+# exactly these two and nothing else surfaced them — the alternative was
+# reading them out of the console.
+output "private_route_table_id" { value = module.vpc.private_route_table_id }
+output "internal_dns_zone_id" { value = module.vpc.internal_dns_zone_id }
+
 # The environment's internal root, for consumers with no Valkey bundle to
 # take ca_crt from.
 output "internal_ca_secret_arn" {
