@@ -189,6 +189,14 @@ locals {
       MEANDR_REDIS_EVENT_WRITER_CLIENT_CERT = "${var.valkey_client_secret_arn}:client_crt::"
       MEANDR_REDIS_EVENT_WRITER_CLIENT_KEY  = "${var.valkey_client_secret_arn}:client_key::"
     },
+    # Intercom identity: server AND client auth on one cert, one name for
+    # the whole fleet. Empty until the mesh listener ships, so the grant
+    # and the env vars can land ahead of the code.
+    var.mesh_secret_arn == "" ? {} : {
+      MEANDR_MESH_CA_CERT = "${var.mesh_secret_arn}:ca_crt::"
+      MEANDR_MESH_CERT    = "${var.mesh_secret_arn}:mesh_crt::"
+      MEANDR_MESH_KEY     = "${var.mesh_secret_arn}:mesh_key::"
+    },
     {
       MEANDR_SESSION_SIGNING_KEY = var.session_signing_key_secret_arn
     },
@@ -592,6 +600,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
         # with a secret-fetch error, which reads nothing like the TLS
         # problem it would otherwise be mistaken for.
         var.valkey_client_secret_arn,
+        var.mesh_secret_arn,
       ])
       }], var.self_ips_parameter_arn == "" ? [] : [{
       Effect   = "Allow"
@@ -680,6 +689,31 @@ resource "aws_security_group_rule" "proxy_ingress_tls" {
   protocol                 = "tcp"
   source_security_group_id = aws_security_group.nlb.id
   description              = "TLS via NLB :443 - through the load balancer only; proxy terminates"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Intercom: proxy tasks reaching proxy tasks in another region.
+#
+# Literal CIDRs, not a security-group reference, because SG references do
+# not cross regions (valkey_fleets.md §6) — the peer's tasks are in another
+# VPC in another region and can only be named by address range.
+#
+# for_each over a list that is empty until intercom ships, so this is inert
+# in a single-region environment.
+resource "aws_security_group_rule" "proxy_ingress_mesh" {
+  for_each = toset(var.mesh_peer_cidrs)
+
+  type              = "ingress"
+  security_group_id = aws_security_group.proxy.id
+
+  from_port   = var.mesh_port
+  to_port     = var.mesh_port
+  protocol    = "tcp"
+  cidr_blocks = [each.value]
+  description = "Intercom from peer region ${each.value} - mTLS, both ends verify against the internal CA"
 
   lifecycle {
     create_before_destroy = true

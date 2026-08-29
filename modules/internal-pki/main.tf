@@ -32,14 +32,20 @@ terraform {
 
 locals {
   # 20 years. Long-lived leaf certs are normally poor practice; the trade
-  # here is deliberate and narrow — this CA never leaves our infrastructure,
-  # signs exactly one keypair, and secures a service that is already behind
-  # a security group and an AUTH token. Rotation machinery we would never
-  # exercise is worth less than the certainty of never touching it.
+  # here is deliberate and narrow — this CA never leaves our infrastructure
+  # and everything it fronts already sits behind a security group. Rotation
+  # machinery we would never exercise is worth less than the certainty of
+  # never touching it.
   #
   # Not 100 years: some TLS stacks reject implausible validity, and the
   # difference between 20 and 100 is not a difference anyone lives to see.
   validity_hours = 20 * 365 * 24
+
+  # The one name every proxy pins as ServerName when dialing a peer.
+  # Deliberately flat, and deliberately not in DNS: peers are reached at the
+  # address they publish in their heartbeat, so this only has to satisfy the
+  # certificate.
+  mesh_name = "mesh.${var.dns_zone_name}"
 
   subject = {
     organization = "Meandr, Inc."
@@ -253,4 +259,78 @@ resource "aws_secretsmanager_secret" "ca" {
 resource "aws_secretsmanager_secret_version" "ca" {
   secret_id     = aws_secretsmanager_secret.ca.id
   secret_string = tls_self_signed_cert.ca.cert_pem
+}
+
+# --- Mesh keypair -------------------------------------------------------
+#
+# The proxy's identity when proxy tasks talk to each other directly
+# (intercom). Distinct from the client keypair because this one needs
+# `server_auth` too, and the client secret is also handed to BE — which
+# has no business being able to answer as a proxy.
+#
+# ONE name for the whole fleet, not one per node. Callers dial a peer by
+# the address it published in its heartbeat and pin this name as the TLS
+# ServerName, so verification answers "is this one of ours" rather than
+# "is this specifically node X". Per-node identity would need per-node
+# issuance, which means a task minting its own cert — strictly worse.
+
+resource "tls_private_key" "mesh" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "tls_cert_request" "mesh" {
+  private_key_pem = tls_private_key.mesh.private_key_pem
+
+  dns_names = [local.mesh_name]
+
+  subject {
+    common_name    = local.mesh_name
+    organization   = local.subject.organization
+    street_address = local.subject.street
+    locality       = local.subject.locality
+    province       = local.subject.province
+    postal_code    = local.subject.postal_code
+    country        = local.subject.country
+  }
+}
+
+resource "tls_locally_signed_cert" "mesh" {
+  cert_request_pem   = tls_cert_request.mesh.cert_request_pem
+  ca_private_key_pem = tls_private_key.ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.ca.cert_pem
+
+  validity_period_hours = local.validity_hours
+
+  # Both directions: a proxy dialing a peer is a client, the peer
+  # answering is a server, and the same task does both.
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "server_auth",
+    "client_auth",
+  ]
+}
+
+resource "aws_secretsmanager_secret" "mesh" {
+  name        = "meandr/pki/${var.env}/mesh"
+  description = "Proxy mesh TLS material (ca_crt, mesh_crt, mesh_key). Server AND client auth — read by proxy tasks only, never BE."
+
+  dynamic "replica" {
+    for_each = var.replica_regions
+    content {
+      region = replica.value
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "mesh" {
+  secret_id = aws_secretsmanager_secret.mesh.id
+  secret_string = jsonencode({
+    ca_crt   = tls_self_signed_cert.ca.cert_pem
+    mesh_crt = tls_locally_signed_cert.mesh.cert_pem
+    mesh_key = tls_private_key.mesh.private_key_pem
+  })
 }

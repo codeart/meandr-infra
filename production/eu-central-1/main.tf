@@ -161,6 +161,10 @@ data "aws_secretsmanager_secret" "valkey_client" {
   name = "meandr/valkey/${local.env}/client"
 }
 
+data "aws_secretsmanager_secret" "mesh" {
+  name = "meandr/pki/${local.env}/mesh"
+}
+
 # --- Valkey ------------------------------------------------------------
 #
 # No `api` fleet: that one is BE-local, and BE lives in the primary.
@@ -303,6 +307,9 @@ module "mcp" {
   event_sentinel_master = "events"
 
   valkey_client_secret_arn = data.aws_secretsmanager_secret.valkey_client.arn
+
+  mesh_secret_arn = data.aws_secretsmanager_secret.mesh.arn
+  mesh_peer_cidrs = [local.peer.cidr_block]
 
   redis_auth_enabled    = true
   redis_auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn

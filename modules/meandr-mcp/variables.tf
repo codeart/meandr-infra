@@ -466,3 +466,21 @@ variable "self_ips_parameter_arn" {
   type        = string
   default     = ""
 }
+
+variable "mesh_secret_arn" {
+  description = "SM secret holding the proxy mesh TLS material (ca_crt, mesh_crt, mesh_key) from internal-pki. Injected as task-def secrets. Empty disables intercom wiring entirely."
+  type        = string
+  default     = ""
+}
+
+variable "mesh_port" {
+  description = "Port proxy tasks accept intercom connections on. Separate from the public listener so a mesh rule can never widen customer-facing exposure."
+  type        = number
+  default     = 9443
+}
+
+variable "mesh_peer_cidrs" {
+  description = "VPC CIDRs of the OTHER regions whose proxy tasks may reach this one on mesh_port. Literal ranges because SG references do not cross regions. Empty in a single-region environment."
+  type        = list(string)
+  default     = []
+}

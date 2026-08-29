@@ -489,6 +489,9 @@ module "mcp" {
   # and refuse a connection with no client certificate.
   valkey_client_secret_arn = module.internal_pki.client_secret_arn
 
+  mesh_secret_arn = module.internal_pki.mesh_secret_arn
+  mesh_peer_cidrs = local.edge_cidrs
+
   redis_auth_enabled    = true
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 

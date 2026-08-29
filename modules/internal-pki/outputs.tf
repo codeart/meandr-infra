@@ -17,3 +17,13 @@ output "client_secret_arn" {
   description = "Client TLS material for proxy and BE: ca_crt, client_crt, client_key. Required now that nodes run tls-auth-clients yes."
   value       = aws_secretsmanager_secret.client.arn
 }
+
+output "mesh_secret_arn" {
+  description = "Proxy mesh TLS material: ca_crt, mesh_crt, mesh_key. Server + client auth, for proxy-to-proxy intercom. Contains a private key — proxy tasks only."
+  value       = aws_secretsmanager_secret.mesh.arn
+}
+
+output "mesh_server_name" {
+  description = "The single name every proxy pins as TLS ServerName when dialing a peer. Not resolvable and not meant to be — peers are dialed by the address they publish in their heartbeat."
+  value       = local.mesh_name
+}
