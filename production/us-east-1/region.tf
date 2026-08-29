@@ -102,16 +102,13 @@ locals {
   # there is no edge-owned replica resource, only a `replica` block on the
   # secret in its home region. Copies must move together without an apply,
   # because these values are what the cross-region link authenticates with.
-  #
-  # Empty: single-region today. An edge adds itself here and declares its
-  # own peering, KMS replicas and table replica in its own state.
-  edge_regions = []
+  edge_regions = ["eu-central-1"]
 
   # Security-group ingress for the Valkey fleets. Literal CIDRs because SG
   # REFERENCES DO NOT CROSS REGIONS (valkey_fleets.md §6). Safe to widen:
   # client_cidrs never reaches user_data, so an entry adds rules and
   # replaces no node.
-  edge_cidrs = []
+  edge_cidrs = ["10.10.0.0/16"]
 
   # Every OTHER region: name -> node-name prefix. Drives the CONFIG Sentinel
   # list (one set spanning regions, so a proxy here can discover through a
@@ -119,7 +116,7 @@ locals {
   #
   # A map, not two lists: keys() and values() share one order, which is what
   # keeps `regions` and `event_sentinel_groups` positionally aligned.
-  peers = {}
+  peers = { "eu-central-1" = "euc1" }
 
   peer_node_codes = values(local.peers)
 

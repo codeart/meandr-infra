@@ -4,13 +4,13 @@
 # backend.tf's key. Everything else should be identical.
 
 locals {
-  env        = "staging"
-  region     = "us-east-1"
-  account_id = "259534890849"
+  env        = "production"
+  region     = "eu-central-1"
+  account_id = "393686273464"
 
   # Named because recipes run SSM from the OPERATOR's machine, where there
   # is no provider to inherit credentials from.
-  aws_profile = "meandr-staging"
+  aws_profile = "meandr-production"
 
   # An EDGE. No archive bucket, no Glue database, no meandr-api, and no
   # `api` Valkey fleet — all of those are one-per-environment and live in
@@ -19,10 +19,10 @@ locals {
 
   # Public apex this region's proxy serves. Drives the cert path the proxy
   # reads at handshake time, so it cannot disagree with DNS.
-  proxy_apex = "meandr.live"
+  proxy_apex = "meandr.io"
 
   # Written by account-staging/ into every region. Same path everywhere.
-  self_ips_param = "/meandr/staging/self-ips"
+  self_ips_param = "/meandr/production/self-ips"
 
   # Upgrade order is replicas first, master last: a replica newer than its
   # master is safe, the reverse is not. A version with no vendored tarball
@@ -36,11 +36,11 @@ locals {
   # Hoisted out of main.tf so both edges share one. CIDR is a property of
   # the REGION (environments are separate accounts and never share a
   # network); the rest are properties of the ENVIRONMENT.
-  vpc_cidr          = "10.20.0.0/16"
-  oauth_issuer_host = "staging-mcp.meandr.com"
-  proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
+  vpc_cidr          = "10.10.0.0/16"
+  oauth_issuer_host = "mcp.meandr.com"
+  proxy             = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 
-  log_retention_days = 7
+  log_retention_days = 30
 
   # --- Accelerator -----------------------------------------------------
   #
@@ -48,8 +48,8 @@ locals {
   # accelerator has one, and the listener id is AWS-generated. Remote state
   # would work and is deliberately not used: it would give every region a
   # read dependency on the account stack rather than a provider alias.
-  #   terraform -chdir=../../account-staging output ga_listener_arn
-  ga_listener_arn = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
+  #   terraform -chdir=../../account-production output ga_listener_arn
+  ga_listener_arn = "arn:aws:globalaccelerator::393686273464:accelerator/ccbf8f26-3a26-4193-97c9-95d5f47017cf/listener/5f307d6b"
 
   # --- What this region knows about the others -------------------------
   #
@@ -60,17 +60,17 @@ locals {
   # Hardcoded rather than read from remote state, so this stack's only
   # cross-stack dependency stays the provider alias — the same call made
   # for acme_dns_role_arn. Retrieve with:
-  #   terraform -chdir=../eu-central-1 output vpc_id
+  #   terraform -chdir=../us-east-1 output vpc_id
   peer = {
-    vpc_id              = "vpc-0cbe1504d75b750d2"
-    cidr_block          = "10.10.0.0/16"
-    private_route_table = "rtb-0e0e83bd1a54564d5"
-    region              = "eu-central-1"
+    vpc_id              = "vpc-0464292fbee35fb21"
+    cidr_block          = "10.20.0.0/16"
+    private_route_table = "rtb-0d3a477edde8bdaa3"
+    region              = "us-east-1"
 
     # The environment's ONE private hosted zone, created in the primary.
     # This region ASSOCIATES with it and must never create its own of the
     # same name — see modules/vpc/variables.tf existing_zone_id.
-    internal_dns_zone_id = "Z05780018F0P6ONCICNQ"
+    internal_dns_zone_id = "Z0498539TDE0PRB2TS05"
   }
 
   # An edge replicates no secrets outward and admits no other region's
@@ -83,7 +83,7 @@ locals {
   # Sentinel list — one set spanning regions, so a proxy here can discover
   # through a Sentinel there when its own are gone. Not for `events`, whose
   # fleets are per-region with their own masters.
-  peer_node_codes = ["euc1"]
+  peer_node_codes = ["use1"]
 
   tags = {
     "meandr:env"        = local.env

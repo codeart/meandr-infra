@@ -33,7 +33,7 @@ locals {
   # Every region running a proxy. Each also needs a provider alias and a
   # self_ips block below, so this file is where the list has to live;
   # publishing it keeps CI from enumerating regions a second time.
-  regions = ["us-east-1"]
+  regions = ["us-east-1", "eu-central-1"]
 
   # Operational alarms, not billing — the budget topic keeps aws-billing.
   alert_emails = ["aws-prd@meandr.com"]
@@ -57,12 +57,23 @@ locals {
 # One alias and one block per region. SSM parameters are regional with no
 # replication, and a resource's provider must be a STATIC reference — so
 # this cannot be a loop over local.regions.
-#
-# No alias here: the only region is this stack's own, so the default
-# provider serves it. A second region adds an alias and a block, as
-# account-staging has for us-east-1.
+
+provider "aws" {
+  alias   = "euc1"
+  region  = "eu-central-1"
+  profile = "meandr-production"
+}
 
 resource "aws_ssm_parameter" "self_ips_use1" {
+  name  = local.self_ips_param
+  type  = "StringList"
+  value = join(",", module.global_accelerator.static_ips)
+  tags  = local.account_tags
+}
+
+resource "aws_ssm_parameter" "self_ips_euc1" {
+  provider = aws.euc1
+
   name  = local.self_ips_param
   type  = "StringList"
   value = join(",", module.global_accelerator.static_ips)

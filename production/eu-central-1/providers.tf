@@ -24,6 +24,6 @@ provider "aws" {
 # the ROLE, not the region, so every edge shares one main.tf.
 provider "aws" {
   alias   = "primary_region"
-  region  = "eu-central-1"
+  region  = "us-east-1"
   profile = local.aws_profile
 }
