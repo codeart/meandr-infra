@@ -549,10 +549,12 @@ resource "aws_iam_policy" "cred_store" {
         Resource = var.creds_table_arn
       },
       {
+        # No Encrypt: it caps plaintext at 4 KiB, which an OAuth token
+        # exceeds. GenerateDataKey is the only sanctioned write path.
         Sid    = "KMSCredEncryption"
         Effect = "Allow"
         Action = [
-          "kms:Encrypt",
+          "kms:GenerateDataKey",
           "kms:Decrypt",
           "kms:DescribeKey",
         ]

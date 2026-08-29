@@ -156,10 +156,12 @@ resource "aws_iam_policy" "dev_cred_store" {
         Resource = module.creds_table.table_arn
       },
       {
+        # No Encrypt, same as the payload CMK below: the 4 KiB direct-KMS
+        # limit is a footgun and GenerateDataKey is the only sanctioned path.
         Sid    = "KMSCredEncryption"
         Effect = "Allow"
         Action = [
-          "kms:Encrypt",
+          "kms:GenerateDataKey",
           "kms:Decrypt",
           "kms:DescribeKey",
         ]
