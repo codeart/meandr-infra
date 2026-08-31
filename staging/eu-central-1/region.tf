@@ -89,6 +89,23 @@ locals {
   migrate           = { cpu = 512, memory = 1024 }
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
+  # --- Postgres tuning -------------------------------------------------
+  #
+  # The RDS defaults do not fit 1 GiB: autovacuum_work_mem takes its 64 MiB
+  # FLOOR rather than the 32 MiB the formula computes, three workers of it,
+  # and max_connections resolves to 112 the instance cannot hold. Postgres
+  # OOMed on 2026-08-31 with 150 MiB of swap in use and ~95 MiB freeable.
+  #
+  # max_connections is a CEILING BELOW the pool sum, deliberately: puma 15 +
+  # jobs 30 + ingest 30 is 75 at desired_count and 210 fully scaled. Refusing
+  # the 51st connection is a Rails exception; the alternative is the OOM
+  # killer choosing, which costs four minutes of crash recovery.
+  db_parameters = {
+    autovacuum_max_workers = "1"
+    autovacuum_work_mem    = "32768" # KB
+    max_connections        = "50"
+  }
+
   # --- What this region knows about the others -------------------------
   #
   # Three lists, all environment configuration rather than dependencies:

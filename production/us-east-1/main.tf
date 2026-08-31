@@ -358,6 +358,8 @@ module "api" {
 
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 
+  db_parameters = local.db_parameters
+
   cred_store_enabled        = true
   creds_table_name          = module.creds_table.table_name
   creds_table_arn           = module.creds_table.table_arn

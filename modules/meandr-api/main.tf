@@ -201,6 +201,8 @@ module "rds" {
   allocated_storage_gb     = var.db_allocated_storage_gb
   max_allocated_storage_gb = var.db_max_allocated_storage_gb
 
+  db_parameters = var.db_parameters
+
   multi_az              = var.db_multi_az
   backup_retention_days = var.db_backup_retention_days
   deletion_protection   = var.db_deletion_protection

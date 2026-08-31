@@ -444,3 +444,9 @@ variable "self_ips_parameter_arn" {
   type        = string
   default     = ""
 }
+
+variable "db_parameters" {
+  description = "Postgres parameter overrides, name => value. Empty uses the RDS defaults, whose memory formulas carry floors sized for larger instances. Static parameters need a reboot to take effect."
+  type        = map(string)
+  default     = {}
+}

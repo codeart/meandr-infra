@@ -92,3 +92,16 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "db_parameters" {
+  description = <<-EOT
+    Postgres parameters to override the RDS defaults, name => value.
+
+    Empty means the engine defaults, which are formulas over instance memory
+    with floors written for larger machines — see the comment on the
+    parameter group. Anything in `local.static_parameters` is applied as
+    pending-reboot and does NOT take effect until the instance restarts.
+  EOT
+  type        = map(string)
+  default     = {}
+}

@@ -108,6 +108,49 @@ resource "aws_security_group_rule" "egress_all" {
   description = "Allow all outbound"
 }
 
+locals {
+  # Changing any of these requires a reboot. Postgres reads them once at
+  # startup; RDS queues them as pending-reboot rather than erroring.
+  static_parameters = ["max_connections", "shared_buffers", "max_worker_processes"]
+}
+
+# --- Parameters ----------------------------------------------------------
+#
+# The RDS defaults are formulas over DBInstanceClassMemory with FLOORS that
+# were written for larger machines, and on a 1 GiB instance the floors win:
+# autovacuum_work_mem resolves to its 64 MiB minimum rather than the 32 MiB
+# the formula wants, times a 3-worker minimum, so autovacuum alone can hold
+# ~19% of RAM. Add 25% for shared_buffers and the instance is committed
+# before a client connects.
+#
+# max_connections matters for a second reason. Its default resolves to a
+# number the machine cannot honour, so demand is bounded by the OOM killer
+# instead of by Postgres. A refused connection is a Rails exception; an OOM
+# is a crash-recovery outage. Bounding it here makes the failure legible.
+resource "aws_db_parameter_group" "main" {
+  name_prefix = "${var.name}-"
+  family      = "postgres${split(".", var.engine_version)[0]}"
+  description = "Tuned for ${var.instance_class}. ASCII only: RDS rejects non-printable and non-ASCII characters here, mid-apply."
+
+  dynamic "parameter" {
+    for_each = var.db_parameters
+    content {
+      name  = parameter.key
+      value = parameter.value
+
+      # Static parameters need a reboot; declaring them "immediate" makes
+      # the apply fail rather than queue.
+      apply_method = contains(local.static_parameters, parameter.key) ? "pending-reboot" : "immediate"
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = var.tags
+}
+
 # --- Instance ------------------------------------------------------------
 
 resource "aws_db_instance" "main" {
@@ -116,6 +159,8 @@ resource "aws_db_instance" "main" {
   engine         = "postgres"
   engine_version = var.engine_version
   instance_class = var.instance_class
+
+  parameter_group_name = aws_db_parameter_group.main.name
 
   allocated_storage     = var.allocated_storage_gb
   max_allocated_storage = var.max_allocated_storage_gb > 0 ? var.max_allocated_storage_gb : null

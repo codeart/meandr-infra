@@ -94,6 +94,13 @@ locals {
   migrate           = { cpu = 512, memory = 1024 }
   proxy             = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 
+  # --- Postgres tuning -------------------------------------------------
+  #
+  # Empty on purpose: db.t4g.small has 2 GiB, so the autovacuum floor is 9%
+  # of RAM rather than staging's 19%, and Multi-AZ gives a standby. Revisit
+  # with real load rather than by copying staging.
+  db_parameters = {}
+
   # --- What this region knows about the others -------------------------
   #
   # Three lists, all environment configuration rather than dependencies:
