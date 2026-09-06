@@ -138,6 +138,7 @@ module "cost_anomaly" {
   name          = "meandr-master"
   threshold_usd = 30
   sns_topic_arn = module.daily_budget.sns_topic_arn
+  alert_emails  = local.notification_emails
 
   tags = local.tags
 }

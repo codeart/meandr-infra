@@ -18,6 +18,23 @@ variable "sns_topic_arn" {
   type        = string
 }
 
+variable "alert_emails" {
+  description = "Addresses to receive the human-readable anomaly digest, which AWS renders as a table with a per-service breakdown. Empty (the default) means SNS only, and an SNS subscriber receives the raw JSON payload instead. These are a SECOND subscription rather than extra subscribers on the first: AWS pairs frequency with subscriber type, so IMMEDIATE takes SNS and DAILY/WEEKLY take EMAIL, and one subscription cannot do both."
+  type        = list(string)
+  default     = []
+}
+
+variable "email_frequency" {
+  description = "How often the email digest is sent: DAILY or WEEKLY. Not IMMEDIATE — AWS accepts that only with an SNS subscriber. Unused when alert_emails is empty."
+  type        = string
+  default     = "DAILY"
+
+  validation {
+    condition     = contains(["DAILY", "WEEKLY"], var.email_frequency)
+    error_message = "email_frequency must be DAILY or WEEKLY; IMMEDIATE is SNS-only."
+  }
+}
+
 variable "tags" {
   description = "Tags applied to the anomaly monitor + subscription."
   type        = map(string)

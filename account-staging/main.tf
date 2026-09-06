@@ -9,6 +9,10 @@ locals {
   self_ips_param = "/meandr/${local.env}/self-ips"
   regions_param  = "/meandr/${local.env}/regions"
 
+  # One list for every cost notification in this account, so the budget
+  # and the anomaly digest cannot drift apart.
+  notification_emails = ["aws-billing@meandr.com"]
+
   # The accelerator id is the CloudWatch dimension value, and it is the
   # listener arn's first path segment.
   ga_accelerator_id = split("/", module.global_accelerator.listener_arn)[1]
@@ -145,7 +149,7 @@ module "daily_budget" {
   amount_usd          = local.budget_usd
   time_unit           = "DAILY"
   threshold_percents  = local.budget_thresholds
-  notification_emails = ["aws-billing@meandr.com"]
+  notification_emails = local.notification_emails
 
   tags = local.account_tags
 }
@@ -158,6 +162,7 @@ module "cost_anomaly" {
   name          = "meandr-${local.env}"
   threshold_usd = local.anomaly_usd
   sns_topic_arn = module.daily_budget.sns_topic_arn
+  alert_emails  = local.notification_emails
 
   tags = local.account_tags
 }

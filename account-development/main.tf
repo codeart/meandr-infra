@@ -6,6 +6,10 @@ provider "aws" {
 locals {
   account_id = "238020582774" # Development
 
+  # One list for every cost notification in this account, so the budget
+  # and the anomaly digest cannot drift apart.
+  notification_emails = ["aws-billing@meandr.com"]
+
   tags = {
     "meandr:env"        = "development"
     "meandr:managed-by" = "terraform"
@@ -167,7 +171,7 @@ module "daily_budget" {
   amount_usd          = 15
   time_unit           = "DAILY"
   threshold_percents  = [95]
-  notification_emails = ["aws-billing@meandr.com"]
+  notification_emails = local.notification_emails
 
   tags = local.tags
 }
@@ -183,6 +187,7 @@ module "cost_anomaly" {
   name          = "meandr-development"
   threshold_usd = 5
   sns_topic_arn = module.daily_budget.sns_topic_arn
+  alert_emails  = local.notification_emails
 
   tags = local.tags
 }
