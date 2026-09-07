@@ -461,6 +461,11 @@ module "mcp" {
 
   image_tag = local.image_tag
 
+  # Staging runs at debug. Per-request and stream-lifecycle lines are
+  # level-gated rather than env-gated, so this is the switch that makes
+  # them visible.
+  log_level = "debug"
+
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
   public_subnet_ids      = local.app_public_subnet_ids
