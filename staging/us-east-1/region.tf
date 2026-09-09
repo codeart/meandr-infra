@@ -48,7 +48,18 @@ locals {
   # Hoisted out of main.tf so both edges share one. CIDR is a property of
   # the REGION (environments are separate accounts and never share a
   # network); the rest are properties of the ENVIRONMENT.
-  vpc_cidr          = "10.20.0.0/16"
+  vpc_cidr = "10.20.0.0/16"
+
+  # One NAT in AZ-a, serving all three zones through the single private
+  # route table — the same shape as eu-central-1, and hoisted here so both
+  # AZ-shaped decisions sit beside the CIDR rather than in main.tf.
+  nat_instance_azs = ["${local.region}a"]
+
+  # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
+  # means no gateway; refilling it builds one with a NEW address, so this
+  # is the step that made the cutover permanent rather than reversible.
+  nat_pinned_azs = []
+
   oauth_issuer_host = "staging-mcp.meandr.com"
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 

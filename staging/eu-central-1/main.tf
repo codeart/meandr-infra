@@ -23,7 +23,14 @@ module "vpc" {
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  nat_pinned_azs = local.nat_pinned_azs
+  # Our own NAT carries this region's egress. The gateway stays, unrouted,
+  # until it is deliberately retired by emptying nat_pinned_azs — so a
+  # rollback is one variable and keeps the same address. See
+  # docs/runbooks/nat_cutover.md.
+  nat_mode          = "instance"
+  nat_instance_azs  = local.nat_instance_azs
+  nat_instance_type = "t4g.nano"
+  nat_pinned_azs    = local.nat_pinned_azs
 
   internal_dns_zone = "${local.env}.meandr.internal"
 
@@ -278,12 +285,44 @@ module "valkey" {
 
 
 
+# --- Session Manager ----------------------------------------------------
+#
+# Here, not in account-*, because the document is REGIONAL. An account
+# stack can only reach a second region through an explicit provider alias,
+# so every new region needs a hand edit there and fails silently without
+# one. A region stack cannot forget: the region is the directory.
+
+module "session_prefs" {
+  source = "../../modules/ssm-session-prefs"
+
+  tags = local.tags
+}
+
 module "valkey_recipes" {
-  source = "../../modules/valkey-recipes"
+  source = "../../modules/ssm-recipes"
 
   # Every node in the region. A fleet missing here keeps the recipes it has
   # and silently receives no new ones.
+  #
+  # Both from module.valkey: the set and the nodes it reaches are one
+  # decision, and splitting them is how a fleet gets another's recipes.
   instance_ids = module.valkey.instance_ids
+  recipes_dir  = module.valkey.recipes_dir
+  label        = "valkey"
+
+  aws_profile = local.aws_profile
+  aws_region  = local.region
+}
+
+# The NAT boxes are SSM-managed nodes like any other. Wired with an empty
+# set: everything they need at boot is in user-data, and this is here for
+# the day something has to change on a box that is already routing.
+module "nat_recipes" {
+  source = "../../modules/ssm-recipes"
+
+  instance_ids = module.vpc.nat_instance_ids
+  recipes_dir  = module.vpc.nat_recipes_dir
+  label        = "nat"
 
   aws_profile = local.aws_profile
   aws_region  = local.region

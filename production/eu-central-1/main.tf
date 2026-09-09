@@ -214,12 +214,30 @@ module "valkey" {
   tags = local.tags
 }
 
+# --- Session Manager ----------------------------------------------------
+#
+# Here, not in account-*, because the document is REGIONAL. An account
+# stack can only reach a second region through an explicit provider alias,
+# so every new region needs a hand edit there and fails silently without
+# one. A region stack cannot forget: the region is the directory.
+
+module "session_prefs" {
+  source = "../../modules/ssm-session-prefs"
+
+  tags = local.tags
+}
+
 module "valkey_recipes" {
-  source = "../../modules/valkey-recipes"
+  source = "../../modules/ssm-recipes"
 
   # Every node in the region. A fleet missing here keeps the recipes it has
   # and silently receives no new ones.
+  #
+  # Both from module.valkey: the set and the nodes it reaches are one
+  # decision, and splitting them is how a fleet gets another's recipes.
   instance_ids = module.valkey.instance_ids
+  recipes_dir  = module.valkey.recipes_dir
+  label        = "valkey"
 
   aws_profile = local.aws_profile
   aws_region  = local.region

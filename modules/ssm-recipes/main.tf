@@ -1,5 +1,10 @@
 # Recipes: ordered, once-per-node changes applied to RUNNING instances.
 #
+# The RUNNER only, and fleet-agnostic. Recipes belong to the fleet they
+# configure and live in that fleet's module — `valkey-region/recipes`,
+# `nat-instance/recipes` — because a set delivered to the wrong fleet is
+# the one mistake this mechanism cannot take back.
+#
 # The node's user-data is hash-pinned, so editing it replaces the
 # instance. That is correct for anything identity-level and intolerable
 # for a logrotate file. Recipes are the other half: numbered scripts
@@ -15,14 +20,12 @@
 # than assumed.
 
 locals {
-  dir = var.recipes_dir != "" ? var.recipes_dir : "${path.module}/recipes"
-
   # Sorted so filename order IS apply order — 001 before 002, forever.
-  files = sort(tolist(fileset(local.dir, "*.sh")))
+  files = sort(tolist(fileset(var.recipes_dir, "*.sh")))
 
   # Content-addressed: renaming a recipe or editing one byte re-triggers.
   # Hashing CONTENT rather than names means a fixed typo actually ships.
-  manifest = join("\n", [for f in local.files : "${f}:${filesha256("${local.dir}/${f}")}"])
+  manifest = join("\n", [for f in local.files : "${f}:${filesha256("${var.recipes_dir}/${f}")}"])
 }
 
 resource "null_resource" "recipes" {
@@ -42,7 +45,8 @@ resource "null_resource" "recipes" {
     command     = "${path.module}/files/apply-recipes.sh"
 
     environment = {
-      RECIPES_DIR   = local.dir
+      RECIPES_DIR   = var.recipes_dir
+      LABEL         = var.label
       RECIPE_FILES  = join(" ", local.files)
       INSTANCE_IDS  = join(" ", sort(var.instance_ids))
       AWS_PROFILE   = var.aws_profile

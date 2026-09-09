@@ -9,9 +9,70 @@ variable "azs" {
 }
 
 variable "enable_nat" {
-  description = "If true, create a NAT Gateway in the first public subnet so private subnets can reach the internet. Costs ~$32/month base + $0.045/GB processing. Set false for envs that have no running workloads (e.g. production before launch) — they cost $0/month for the VPC."
+  description = "If true, private subnets get a route to the internet — by gateway or by instance, per `nat_mode`. Set false for envs with no running workloads (e.g. production before launch); they cost $0/month for the VPC."
   type        = bool
   default     = true
+}
+
+variable "nat_mode" {
+  description = <<-EOT
+    How private subnets reach the internet. `gateway` is the managed
+    regional NAT gateway; `instance` is our own EC2 NAT.
+
+    The trade is a fixed ~$33-38/month per AZ address against ~$3.50 for a
+    t4g.nano, measured against peaks of 3.5 Mbps and 402 packets/sec. What
+    the gateway buys for the difference is absorbing instance faults
+    invisibly; an instance is a box that can hang, and a reboot alarm is a
+    slower answer than a managed service.
+
+    This chooses only what the DEFAULT ROUTE points at. Both can exist at
+    once — `nat_pinned_azs` and `nat_instance_azs` govern existence — which
+    is what makes the cutover reversible: flip the route, and the gateway is
+    still there, with its address, to flip back to.
+
+    Retiring the gateway is a SEPARATE, later step (empty `nat_pinned_azs`)
+    and it is the irreversible one: the EIP is released, and a rebuild gets
+    a different address that anything holding an allow-list has to be told
+    about.
+  EOT
+  type        = string
+  default     = "gateway"
+
+  validation {
+    condition     = contains(["gateway", "instance"], var.nat_mode)
+    error_message = "nat_mode must be \"gateway\" or \"instance\"."
+  }
+}
+
+variable "nat_instance_azs" {
+  description = <<-EOT
+    AZs that get a NAT instance when `nat_mode = "instance"`. Each needs a
+    public subnet in that AZ, so every entry must also appear in `azs`.
+
+    ONE entry serves the whole VPC: the single private route table points
+    at it, exactly as a one-AZ-pinned gateway does today. More than one
+    currently buys the extra instances and addresses but NOT per-AZ egress
+    — that needs the private route table split per AZ, and the S3 and
+    DynamoDB gateway endpoints re-pointed at every one of them.
+
+    Checked in `terraform_data.nat_instance_guard`, not by a validation
+    block: those cannot see another variable until Terraform 1.9, and this
+    repo pins 1.5.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "nat_instance_type" {
+  description = "Instance type for NAT instances. Graviton only; the AMI is arm64."
+  type        = string
+  default     = "t4g.nano"
+}
+
+variable "nat_alarm_topic_arns" {
+  description = "Where a NAT instance's conntrack alarm goes. Empty leaves it visible but silent, which is the right default for staging and the wrong one for production."
+  type        = list(string)
+  default     = []
 }
 
 variable "nat_pinned_azs" {
@@ -32,10 +93,15 @@ variable "nat_pinned_azs" {
     Staging pins one AZ; production pins two, so losing a zone leaves an
     address behind.
 
-    EMPTY does not mean "no NAT" — that is `enable_nat`. Empty means
-    AUTOMATIC mode: AWS picks the addresses and expands into any AZ where
-    it finds an ENI, which is the behaviour this variable exists to switch
-    off.
+    EMPTY means NO GATEWAY. It is also how a gateway is finally retired
+    after `nat_mode = "instance"` has been proven — until then the gateway
+    stays, unrouted, as somewhere the route can be moved back to in seconds
+    while keeping its address.
+
+    This list no longer selects AUTOMATIC mode, which AWS offers and we
+    never want: it adds an address in any AZ where it finds an ENI, so the
+    egress set and the bill change on their own and a customer's allow-list
+    silently stops being complete. Manual is the only mode expressible here.
   EOT
   type        = list(string)
   default     = []

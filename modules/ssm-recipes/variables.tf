@@ -15,12 +15,20 @@ variable "recipes_dir" {
   description = <<-EOT
     Directory of numbered recipe scripts, applied in filename order.
 
-    Defaults to the module's own `recipes/`. Override only to test a set
-    without committing it — the point of keeping them in the module is
-    that every environment converges on the same sequence.
+    REQUIRED, and it should come from the fleet module that owns the
+    recipes — `module.valkey.recipes_dir`, not a path typed here. The set
+    and the nodes it targets are then chosen together, in one place, and
+    every environment converges on the same sequence.
+
+    There is no default. A runner that guesses which recipes to send is a
+    runner that can send Valkey's to a NAT box.
   EOT
   type        = string
-  default     = ""
+}
+
+variable "label" {
+  description = "Fleet name, used as the SSM command comment. It is how someone reading a node's command history tells which set ran — a NAT box labelled `valkey` is worse than no label."
+  type        = string
 }
 
 variable "aws_profile" {

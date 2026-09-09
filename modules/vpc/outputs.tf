@@ -34,8 +34,32 @@ output "azs" {
 }
 
 output "nat_enabled" {
-  description = "Whether NAT Gateway is provisioned. Useful for downstream modules to know whether internet egress is available from private subnets."
+  description = "Whether egress from private subnets is provisioned at all. Downstream modules use it to know whether they can reach the internet."
   value       = var.enable_nat
+}
+
+# For a recipes runner: these are ordinary SSM-managed nodes, so they take
+# the same once-per-node changes the Valkey fleets do. Paired with
+# nat_recipes_dir, so the set and the nodes come from one place.
+output "nat_instance_ids" {
+  description = "NAT instances in this VPC, empty when no AZ is listed in nat_instance_azs."
+  value       = [for az in var.nat_instance_azs : module.nat_instance[az].instance_id]
+}
+
+output "nat_recipes_dir" {
+  description = "The NAT recipe set, for modules/ssm-recipes. Empty today — anything a NAT needs at boot belongs in user-data, and a recipe is for changing a RUNNING box without replacing it."
+  value       = "${path.module}/../nat-instance/recipes"
+}
+
+# The set a customer allow-lists. Both modes are enumerated here so the
+# answer does not depend on which one is in effect.
+output "nat_egress_ips" {
+  description = "Every address this VPC egresses from. Fixed by design — manual-mode pinning on the gateway, an EIP per instance otherwise."
+  value = var.nat_mode == "instance" ? [
+    for az in var.nat_instance_azs : module.nat_instance[az].public_ip
+    ] : [
+    for e in aws_eip.regional_nat : e.public_ip
+  ]
 }
 
 output "s3_endpoint_id" {

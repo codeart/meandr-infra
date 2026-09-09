@@ -107,12 +107,24 @@ resource "aws_route_table" "private" {
   })
 }
 
+# ONE resource, whose TARGET switches — never two resources racing for the
+# same destination. Two of them (one per nat_mode) have no dependency
+# between them, so Terraform runs the create and the destroy concurrently
+# and the create loses with RouteAlreadyExists, leaving the table with no
+# default route at all. Seen 2026-09-08, rolling back a cutover.
+#
+# The instance target is the ENI, not the instance: replacing the box
+# leaves the route and the egress address untouched.
 resource "aws_route" "private_nat" {
   count = var.enable_nat ? 1 : 0
 
   route_table_id         = aws_route_table.private.id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.regional[0].id
+
+  nat_gateway_id = var.nat_mode == "gateway" ? aws_nat_gateway.regional[0].id : null
+  network_interface_id = (var.nat_mode == "instance"
+    ? module.nat_instance[var.nat_instance_azs[0]].network_interface_id
+  : null)
 }
 
 resource "aws_route_table_association" "private" {
@@ -186,8 +198,12 @@ resource "aws_eip" "regional_nat" {
   depends_on = [aws_internet_gateway.main]
 }
 
+# Existence is `nat_pinned_azs`, NOT `nat_mode`. A gateway with nothing
+# routed to it is a fallback the route can be moved back to in seconds,
+# keeping its address; one destroyed on the mode flip is gone, and the
+# rebuild gets a different EIP.
 resource "aws_nat_gateway" "regional" {
-  count = var.enable_nat ? 1 : 0
+  count = var.enable_nat && length(var.nat_pinned_azs) > 0 ? 1 : 0
 
   availability_mode = "regional"
   vpc_id            = aws_vpc.main.id
@@ -206,6 +222,57 @@ resource "aws_nat_gateway" "regional" {
   })
 
   depends_on = [aws_internet_gateway.main]
+}
+
+# --- NAT instances (conditional) -----------------------------------------
+#
+# The other half of `nat_mode`. One instance per AZ in
+# `nat_instance_azs`, each in that AZ's PUBLIC subnet, holding its own
+# address.
+#
+# Today every private subnet routes through the first one, because there
+# is a single private route table. Per-AZ egress needs a table per AZ —
+# and the S3/DynamoDB gateway endpoints re-pointed at all of them, or the
+# AZs that lose the shared table lose their free path to S3 as a routing
+# black hole rather than an error.
+
+
+# Both invariants fail as something confusing without this: an empty list
+# silently leaves the private table with no default route, and an AZ with
+# no public subnet errors deep inside the module on a missing map key.
+resource "terraform_data" "nat_instance_guard" {
+  count = var.enable_nat && var.nat_mode == "instance" ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = length(var.nat_instance_azs) > 0
+      error_message = "nat_mode = \"instance\" needs at least one AZ in nat_instance_azs, or private subnets get no default route."
+    }
+
+    precondition {
+      condition     = length(setsubtract(var.nat_instance_azs, var.azs)) == 0
+      error_message = "Every nat_instance_azs entry must also appear in azs — a NAT instance needs that AZ's public subnet."
+    }
+  }
+}
+
+# Deliberately NOT gated on nat_mode: an instance can exist while the
+# gateway still carries traffic. That is what makes the cutover two
+# applies — build and verify, then flip the route — instead of one that
+# drops egress until a box finishes booting.
+module "nat_instance" {
+  source   = "../nat-instance"
+  for_each = var.enable_nat ? toset(var.nat_instance_azs) : toset([])
+
+  env       = var.env
+  az        = each.key
+  vpc_id    = aws_vpc.main.id
+  subnet_id = aws_subnet.public[each.key].id
+  vpc_cidr  = var.cidr_block
+
+  instance_type    = var.nat_instance_type
+  alarm_topic_arns = var.nat_alarm_topic_arns
+  tags             = var.tags
 }
 
 # --- Internal DNS --------------------------------------------------------

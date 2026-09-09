@@ -10,7 +10,7 @@
 # matters because ANY new instance re-triggers it for the whole fleet.
 set -euo pipefail
 
-: "${RECIPES_DIR:?}" "${AWS_PROFILE:?}" "${AWS_REGION:?}"
+: "${RECIPES_DIR:?}" "${AWS_PROFILE:?}" "${AWS_REGION:?}" "${LABEL:?}"
 RECIPE_FILES="${RECIPE_FILES:-}"
 INSTANCE_IDS="${INSTANCE_IDS:-}"
 WAIT_SECONDS="${WAIT_SECONDS:-300}"
@@ -66,10 +66,10 @@ payload() {
   cat <<'PROLOGUE'
 set -uo pipefail
 
-# Never run mid-boot. SSM registers about a minute in, while user-data is
-# still compiling Valkey for several more — and a node without its build
-# has no `valkey` user and no /var/log/valkey, so a recipe touching
-# either fails for a reason that has nothing to do with the recipe.
+# Never run mid-boot. SSM registers about a minute in, while user-data
+# may still be running for several more — a Valkey node is compiling, a
+# NAT box installing packages — and a recipe that lands on a half-built
+# node fails for a reason that has nothing to do with the recipe.
 #
 # Non-zero also covers the case worth catching: user-data that ERRORED.
 # Refusing here reports a broken node instead of layering a confusing
@@ -139,7 +139,7 @@ echo "recipes: $(echo "$RECIPE_FILES" | wc -w | tr -d ' ') defined, $(echo "$INS
 CID="$(aws ssm send-command \
   --profile "$AWS_PROFILE" --region "$AWS_REGION" \
   --document-name AWS-RunShellScript \
-  --comment "meandr valkey recipes" \
+  --comment "meandr $LABEL recipes" \
   --timeout-seconds "$WAIT_SECONDS" \
   --instance-ids $INSTANCE_IDS \
   --parameters "file://$PARAMS" \

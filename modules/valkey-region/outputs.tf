@@ -8,6 +8,13 @@ output "instance_ids" {
   value       = flatten([for f in module.fleet : f.instance_ids])
 }
 
+# Paired with instance_ids deliberately: a caller takes both from here, so
+# a recipe set and the nodes it reaches are chosen in one place.
+output "recipes_dir" {
+  description = "This fleet's recipe set, for modules/ssm-recipes."
+  value       = "${path.module}/recipes"
+}
+
 output "artifacts_bucket" {
   value = aws_s3_bucket.artifacts.id
 }

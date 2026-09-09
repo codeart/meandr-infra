@@ -45,11 +45,15 @@ locals {
   # in the same region use the same block.
   vpc_cidr = "10.10.0.0/16"
 
-  # One address, in AZ-a, serving all three zones. AZ-c holds only the
-  # Sentinel arbiters, which do not egress at steady state, and AZ-b's
-  # workloads are processed by AZ-a's address — so a second address would
-  # be paid for and idle. Production pins two.
-  nat_pinned_azs = ["${local.region}a"]
+  # One NAT in AZ-a, serving all three zones through the single private
+  # route table. Staging takes the instance-fault exposure that buys: the
+  # alternative is ~$38/month for a managed gateway moving 3.5 Mbps.
+  nat_instance_azs = ["${local.region}a"]
+
+  # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
+  # means no gateway; refilling it builds one with a NEW address, so this
+  # is the step that made the cutover permanent rather than reversible.
+  nat_pinned_azs = []
 
   # --- Accelerator -----------------------------------------------------
   #

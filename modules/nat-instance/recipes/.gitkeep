@@ -1,0 +1,10 @@
+# Recipes for NAT instances. Empty on purpose.
+#
+# Anything a NAT needs at boot belongs in user-data, where a change
+# replaces the box — which is correct for something that defines what the
+# box IS. A recipe is for changing a box that is already RUNNING and
+# routing, where replacing it would cost the region its egress.
+#
+# The runner is wired and handles an empty set, so adding a numbered
+# script here is the whole procedure. The directory has to exist for
+# fileset() to read it, which is why this file is here.
