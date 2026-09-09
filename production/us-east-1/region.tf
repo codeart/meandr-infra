@@ -45,17 +45,16 @@ locals {
   # us-east-1.
   vpc_cidr = "10.20.0.0/16"
 
-  # One NAT per AZ, c included: it holds only the Sentinel arbiters, but
-  # they do egress — SSM, CloudWatch, source builds at boot — and its own
-  # instance keeps that off a sibling's address and off the cross-AZ meter.
-  #
-  # Per-AZ egress needs the private route table split per AZ. Until that
-  # lands these exist and hold capacity, but only AZ-a's carries traffic.
+  # One NAT per listed AZ; a zone without its own egresses through the
+  # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
 
-  # Two gateway addresses, in the two zones that carry workloads — the
-  # posture the instances are here to replace. Existence is independent of
-  # nat_mode; emptying this releases the addresses for good.
+  # AZ-a keeps the shared table and never moves; b and c take their own.
+  # Ordered c first, then b — AZ-c holds arbiters and no data.
+  per_az_route_tables = ["${local.region}c"]
+
+  # The gateway. It exists whenever this list does, independent of what
+  # nat_mode routes at; emptying it releases the addresses for good.
   nat_pinned_azs = ["${local.region}a", "${local.region}b"]
 
   # --- Accelerator -----------------------------------------------------

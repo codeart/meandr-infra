@@ -50,23 +50,16 @@ locals {
   # network); the rest are properties of the ENVIRONMENT.
   vpc_cidr = "10.20.0.0/16"
 
-  # One NAT in AZ-a, serving all three zones. Staging takes the
-  # instance-fault exposure that buys: the alternative is ~$33-38/month for
-  # a managed gateway moving 3.5 Mbps.
+  # One NAT per listed AZ; a zone without its own egresses through the
+  # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a"]
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
-  # Ordered c first (arbiters, no data), then b (replicas), so the zone
-  # with something to lose moved with the mechanism already proven.
-  #
-  # In staging all three still egress through AZ-a's single NAT — this is
-  # the table split, not per-AZ egress. Production has a NAT per zone and
-  # `nat_for_az` points each table at its own.
+  # Ordered c first, then b — AZ-c holds arbiters and no data.
   per_az_route_tables = ["${local.region}b", "${local.region}c"]
 
-  # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
-  # means no gateway; refilling it builds one with a NEW address, so this
-  # is the step that made the cutover permanent rather than reversible.
+  # The gateway. It exists whenever this list does, independent of what
+  # nat_mode routes at; emptying it releases the addresses for good.
   nat_pinned_azs = []
 
   oauth_issuer_host = "staging-mcp.meandr.com"
@@ -99,18 +92,9 @@ locals {
     private_route_table = "rtb-0e0e83bd1a54564d5"
     region              = "eu-central-1"
 
-    # EVERY per-AZ table the peer has, not only the ones we think need it.
-    # A table without this route has no path to us at all — an ECS task in
-    # that zone cannot reach this region's proxy tasks over the mesh, which
-    # is the same half-broken state a missing SG rule produced on
-    # 2026-09-08. AZ-c holds only arbiters today and that is not a reason
-    # to leave it out; what a zone holds changes.
-    #
-    #   terraform -chdir=../eu-central-1 output private_az_route_table_ids
-    private_az_route_tables = [
-      "rtb-04165fa86f322dfd9", # eu-central-1b
-      "rtb-05673c6b2bcffd917", # eu-central-1c
-    ]
+    # No per-AZ table list: the peering module finds them by their
+    # `meandr:scope = per-az-private` tag, so a zone the peer splits later
+    # gets its route on our next apply.
 
     # The environment's ONE private hosted zone, created in the primary.
     # This region ASSOCIATES with it and must never create its own of the

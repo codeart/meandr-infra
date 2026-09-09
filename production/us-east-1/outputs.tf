@@ -4,9 +4,14 @@ output "public_subnet_ids" { value = module.vpc.public_subnet_ids }
 output "private_subnet_ids" { value = module.vpc.private_subnet_ids }
 
 # The rest of an EDGE's `peer` block. Exposed because every new edge needs
-# exactly these two and nothing else surfaced them — the alternative was
+# exactly these and nothing else surfaced them — the alternative was
 # reading them out of the console.
+#
+# private_az_route_table_ids has to be RE-READ whenever an AZ joins the
+# split: a per-AZ table missing from the requester's list has no path to
+# the peer at all, and nothing reports that.
 output "private_route_table_id" { value = module.vpc.private_route_table_id }
+output "private_az_route_table_ids" { value = module.vpc.private_az_route_table_ids }
 output "internal_dns_zone_id" { value = module.vpc.internal_dns_zone_id }
 
 # The environment's internal root, for consumers with no Valkey bundle to

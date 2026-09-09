@@ -31,6 +31,9 @@ module "vpc" {
   nat_instance_type = "t4g.micro"
   nat_pinned_azs    = local.nat_pinned_azs
 
+  # One AZ at a time; see the note in region.tf for the order and why.
+  per_az_route_tables = local.per_az_route_tables
+
   internal_dns_zone = "${local.env}.meandr.internal"
 
   tags = local.tags

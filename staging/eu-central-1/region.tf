@@ -45,23 +45,16 @@ locals {
   # in the same region use the same block.
   vpc_cidr = "10.10.0.0/16"
 
-  # One NAT in AZ-a, serving all three zones. Staging takes the
-  # instance-fault exposure that buys: the alternative is ~$33-38/month for
-  # a managed gateway moving 3.5 Mbps.
+  # One NAT per listed AZ; a zone without its own egresses through the
+  # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a"]
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
-  # Ordered c first (arbiters, no data), then b (replicas), so the zone
-  # with something to lose moved with the mechanism already proven.
-  #
-  # In staging all three still egress through AZ-a's single NAT — this is
-  # the table split, not per-AZ egress. Production has a NAT per zone and
-  # `nat_for_az` points each table at its own.
+  # Ordered c first, then b — AZ-c holds arbiters and no data.
   per_az_route_tables = ["${local.region}b", "${local.region}c"]
 
-  # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
-  # means no gateway; refilling it builds one with a NEW address, so this
-  # is the step that made the cutover permanent rather than reversible.
+  # The gateway. It exists whenever this list does, independent of what
+  # nat_mode routes at; emptying it releases the addresses for good.
   nat_pinned_azs = []
 
   # --- Accelerator -----------------------------------------------------

@@ -18,10 +18,9 @@ locals {
     )
   }
 
-  # EVERY private table, shared and per-AZ. Anything attaching to "the
-  # private route table" must use this: a gateway endpoint left on the
-  # shared one takes S3 away from the AZs that moved off it, as a routing
-  # black hole rather than an error.
+  # EVERY private table, shared and per-AZ. A gateway endpoint left on the
+  # shared one takes S3 away from the AZs that moved off it, as a black hole
+  # rather than an error.
   private_route_table_ids = concat(
     [aws_route_table.private.id],
     [for az in var.per_az_route_tables : aws_route_table.private_az[az].id],
@@ -125,14 +124,13 @@ resource "aws_route_table" "private" {
   })
 }
 
-# ONE resource, whose TARGET switches — never two resources racing for the
-# same destination. Two of them (one per nat_mode) have no dependency
-# between them, so Terraform runs the create and the destroy concurrently
-# and the create loses with RouteAlreadyExists, leaving the table with no
-# default route at all. Seen 2026-09-08, rolling back a cutover.
+# ONE resource whose TARGET switches, never two gated by nat_mode. Two
+# resources for one destination have no dependency between them, so
+# Terraform runs the create and the destroy concurrently and the table is
+# left with no default route.
 #
-# The instance target is the ENI, not the instance: replacing the box
-# leaves the route and the egress address untouched.
+# The instance target is the ENI: replacing the box moves neither the route
+# nor the egress address.
 resource "aws_route" "private_nat" {
   count = var.enable_nat ? 1 : 0
 
@@ -147,22 +145,21 @@ resource "aws_route" "private_nat" {
 
 # Per-AZ private tables, for the AZs that have opted out of the shared one.
 #
-# ADDITIVE by design: the shared table is untouched, so an AZ moves off it
-# one at a time and moves back by removing an entry. No state surgery, and
-# no apply that reshapes every zone at once.
-#
-# The cost of a move is a few seconds: a subnet holds exactly one
-# association, so there is no create-before-destroy, and it falls back to
-# the VPC main table until the new one lands. Move AZ-c first — it holds
-# Sentinel arbiters and no data, so the blip costs one vote out of three
-# and quorum never breaks.
+# ADDITIVE: the shared table is untouched, so an AZ moves off it one at a
+# time and moves back by removing an entry. The association swap is atomic,
+# so a moving subnet is never without a table.
 resource "aws_route_table" "private_az" {
   for_each = toset(var.per_az_route_tables)
 
   vpc_id = aws_vpc.main.id
 
+  # The scope tag is LOAD-BEARING, not decoration: the peer's region-peering
+  # module finds these tables by it, so a cross-region route appears for a
+  # new table on the peer's next apply rather than needing its id copied by
+  # hand. Rename it and those routes silently stop being created.
   tags = merge(var.tags, {
-    Name = "Private Routes ${each.key}"
+    Name           = "Private Routes ${each.key}"
+    "meandr:scope" = "per-az-private"
   })
 }
 
@@ -279,18 +276,11 @@ resource "aws_nat_gateway" "regional" {
 
 # --- NAT instances (conditional) -----------------------------------------
 #
-# The other half of `nat_mode`. One instance per AZ in
-# `nat_instance_azs`, each in that AZ's PUBLIC subnet, holding its own
-# address.
-#
-# Today every private subnet routes through the first one, because there
-# is a single private route table. Per-AZ egress needs a table per AZ —
-# and the S3/DynamoDB gateway endpoints re-pointed at all of them, or the
-# AZs that lose the shared table lose their free path to S3 as a routing
-# black hole rather than an error.
+# The other half of `nat_mode`. One instance per AZ in `nat_instance_azs`,
+# each in that AZ's PUBLIC subnet, holding its own address. Which table
+# uses which is `local.nat_for_az`.
 
-
-# Both invariants fail as something confusing without this: an empty list
+# Each of these fails as something confusing without the check: an empty list
 # silently leaves the private table with no default route, and an AZ with
 # no public subnet errors deep inside the module on a missing map key.
 resource "terraform_data" "nat_instance_guard" {

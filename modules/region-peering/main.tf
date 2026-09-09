@@ -77,21 +77,14 @@ resource "aws_route" "from_peer" {
 # The per-AZ tables, as SEPARATE resources rather than folding the shared
 # table into a for_each. A for_each key would be the table id, which no
 # `moved` block can name, so folding would destroy and recreate the live
-# route — dropping the cross-region path for the length of an apply, on
-# the link that carries config Valkey's replication.
+# route, dropping the cross-region path for the length of an apply.
 #
-# Pass EVERY per-AZ table, not the ones that look like they need it. A
-# table missing this route has no path to the peer at all: an ECS task in
-# that zone cannot reach the other region's proxy tasks over the mesh, and
-# it fails as a timeout with nothing logged.
+# EVERY per-AZ table, never a subset: a table without this route has no
+# path to the peer and nothing reports it.
 #
-# Reasoning from what a zone holds today is how this was got wrong once
-# already — an arbiter zone was left out on 2026-09-09, and the zone beside
-# it, which runs tasks, was left out with it.
-# Keyed by AZ, not by table id: this side's tables are created by the same
-# apply, so their ids are unknown at plan time and a for_each over them
-# cannot determine its keys. The peer's are hardcoded and therefore known,
-# which is why only this side needs the map.
+# Keyed by AZ, not by table id — these tables are created by the same
+# apply, so their ids are unknown and a for_each over them cannot
+# determine its keys.
 resource "aws_route" "to_peer_per_az" {
   for_each = var.az_route_table_ids
 
@@ -100,10 +93,27 @@ resource "aws_route" "to_peer_per_az" {
   vpc_peering_connection_id = aws_vpc_peering_connection.this.id
 }
 
+# Discovered by tag, not listed: a hardcoded list has to be re-copied every
+# time the peer splits an AZ, and a missing entry leaves that zone with no
+# path here and nothing to report it.
+#
+# Reads the peer's ACCOUNT, not its state file, so the two regions stay
+# independent.
+data "aws_route_tables" "peer_per_az" {
+  provider = aws.peer
+
+  vpc_id = var.peer_vpc_id
+
+  filter {
+    name   = "tag:meandr:scope"
+    values = ["per-az-private"]
+  }
+}
+
 resource "aws_route" "from_peer_per_az" {
   provider = aws.peer
 
-  for_each = toset(var.peer_az_route_table_ids)
+  for_each = toset(data.aws_route_tables.peer_per_az.ids)
 
   route_table_id            = each.value
   destination_cidr_block    = var.cidr_block

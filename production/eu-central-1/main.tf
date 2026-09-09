@@ -31,6 +31,9 @@ module "vpc" {
   nat_instance_type = "t4g.micro"
   nat_pinned_azs    = local.nat_pinned_azs
 
+  # One AZ at a time; see the note in region.tf for the order and why.
+  per_az_route_tables = local.per_az_route_tables
+
   # ASSOCIATE with the environment's existing zone; never create one. A
   # second zone of the same name resolves locally, so a replica told to
   # follow config-master would silently attach to the wrong master.
@@ -67,6 +70,10 @@ module "peering" {
   peer_region         = local.peer.region
   peer_cidr_block     = local.peer.cidr_block
   peer_route_table_id = local.peer.private_route_table
+
+  # This side's per-AZ tables. The peer's are discovered by tag inside the
+  # module, so there is no list to keep in step.
+  az_route_table_ids = module.vpc.private_az_route_table_ids
 
   tags = local.tags
 }

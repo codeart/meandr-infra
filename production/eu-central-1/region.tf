@@ -54,13 +54,16 @@ locals {
   # they do egress — SSM, CloudWatch, source builds at boot — and its own
   # instance keeps that off a sibling's address and off the cross-AZ meter.
   #
-  # Per-AZ egress needs the private route table split per AZ. Until that
-  # lands these exist and hold capacity, but only AZ-a's carries traffic.
+  # One NAT per listed AZ; a zone without its own egresses through the
+  # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
 
-  # The gateway. It exists whenever this list does, independently of which
-  # one nat_mode routes at — emptying it is how the gateway is finally
-  # retired, and that is the step that releases the address for good.
+  # AZ-a keeps the shared table and never moves; b and c take their own.
+  # Ordered c first, then b — AZ-c holds arbiters and no data.
+  per_az_route_tables = ["${local.region}b", "${local.region}c"]
+
+  # The gateway. It exists whenever this list does, independent of what
+  # nat_mode routes at; emptying it releases the addresses for good.
   nat_pinned_azs = ["${local.region}a"]
 
   oauth_issuer_host = "mcp.meandr.com"
@@ -92,6 +95,10 @@ locals {
     cidr_block          = "10.20.0.0/16"
     private_route_table = "rtb-0d3a477edde8bdaa3"
     region              = "us-east-1"
+
+    # No per-AZ table list: the peering module finds them by their
+    # `meandr:scope = per-az-private` tag, so a zone the peer splits later
+    # gets its route on our next apply.
 
     # The environment's ONE private hosted zone, created in the primary.
     # This region ASSOCIATES with it and must never create its own of the

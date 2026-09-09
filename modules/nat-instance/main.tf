@@ -5,13 +5,12 @@
 # and 402 packets/sec. Cutover and rollback: docs/runbooks/nat_cutover.md.
 #
 # The EIP is what persists. The interface belongs to the instance and is
-# replaced with it — Terraform moves the route to the new one — but the
-# address does not change, so an allow-list stays correct across a rebuild.
+# replaced with it, but the address is not, so an allow-list stays correct
+# across a rebuild.
 #
-# A standalone ENI would have held the route target still too, and was the
-# first design here. It cannot work: aws_instance re-asserts
-# source_dest_check = true on every apply and the provider refuses to let
-# you set it to false while the interface is separate.
+# A standalone ENI cannot hold the route target instead: aws_instance
+# re-asserts source_dest_check = true on every apply, and the provider
+# refuses to let you set it false while the interface is separate.
 
 data "aws_ssm_parameter" "al2023_arm" {
   count = var.ami_id == "" ? 1 : 0
@@ -156,11 +155,9 @@ resource "aws_instance" "main" {
   # What makes this a router rather than a host: with the check on, EC2
   # drops every packet not addressed to the instance, which is all of them.
   #
-  # It MUST be set here and the interface must belong to the instance. Set
-  # on a standalone aws_network_interface instead, aws_instance asserts its
-  # own default of `true` on every apply, always afterwards — a NAT that
-  # silently forwards nothing, and a perpetual true -> false diff.
-  # Confirmed in CloudTrail, 2026-09-08.
+  # Set HERE, and the interface must belong to the instance. On a standalone
+  # aws_network_interface, aws_instance asserts its own default of `true` on
+  # every apply, always afterwards.
   source_dest_check = false
 
   user_data_base64            = base64gzip(local.user_data)
@@ -188,15 +185,13 @@ resource "aws_instance" "main" {
     # takes to boot. Replacement is deliberate: bump ami_id, or taint.
     ignore_changes = [ami]
 
-    # The one setting that turns this box into a black hole. EC2 enforces
-    # source/dest checking ABOVE the OS, so with it on the instance looks
-    # perfect — ip_forward set, masquerade loaded, tcpdump silent because
-    # nothing is delivered — and every forwarded packet disappears with no
-    # log line anywhere. It cost an evening on 2026-09-08.
+    # EC2 enforces source/dest checking ABOVE the OS, so with it on the box
+    # looks perfect and every forwarded packet disappears with nothing
+    # logged. Asserted rather than assumed.
     #
-    # A postcondition on `self`, not a check block with a data source: the
-    # data source lives inside this module, and once the caller's routes
-    # depend on this module's output that is a dependency cycle.
+    # A postcondition on `self`, not a check block: a check block's data
+    # source lives in this module, and a caller's route depending on this
+    # module's output makes that a cycle.
     postcondition {
       condition     = self.source_dest_check == false
       error_message = "source/dest check is ON — this NAT silently forwards nothing."

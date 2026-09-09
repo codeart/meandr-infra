@@ -5,11 +5,9 @@
 # when it is absent rather than erroring.
 #
 # Regional, so it belongs to a region's stack even though it is otherwise
-# an account-level concern. It lived in account-bootstrap until 2026-09-08,
-# where one document was created per account's DEFAULT provider — which
-# left staging configured in eu-central-1 only and production in us-east-1
-# only, for a year, invisibly. A region stack cannot make that mistake:
-# adding a region means adding a directory, and the document comes with it.
+# an account-level concern. An account stack reaches a second region only
+# through an explicit provider alias, so adding a region there is a hand
+# edit that fails silently; here the region IS the directory.
 #
 # `bash -l` rather than the AWS default, so a session reads /etc/profile
 # and lands on a prompt carrying the hostname set at boot.

@@ -50,11 +50,6 @@ variable "az_route_table_ids" {
   default     = {}
 }
 
-variable "peer_az_route_table_ids" {
-  description = "The peer's per-AZ private tables. Copied from the peer's `private_az_route_table_ids` output, which is why the peer applies its split first."
-  type        = list(string)
-  default     = []
-}
 
 variable "tags" {
   type    = map(string)
