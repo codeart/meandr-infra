@@ -695,6 +695,33 @@ resource "aws_security_group_rule" "proxy_ingress_tls" {
   }
 }
 
+# Intercom, SAME region: a proxy task reaching a sibling that holds a
+# stdio tunnel. Not covered by the peer-CIDR rule below, and not implied by
+# sharing a security group — SG membership grants nothing between members.
+#
+# Without it a tunnel is reachable from every region EXCEPT its own, which
+# presents as an IO timeout rather than a refusal because the rule drops
+# instead of resetting.
+#
+# An SG reference, not the VPC CIDR: only proxy tasks have business on this
+# port, and intra-region references work where cross-region ones do not.
+resource "aws_security_group_rule" "proxy_ingress_mesh_local" {
+  count = var.mesh_secret_arn == "" ? 0 : 1
+
+  type              = "ingress"
+  security_group_id = aws_security_group.proxy.id
+
+  from_port                = var.mesh_port
+  to_port                  = var.mesh_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.proxy.id
+  description              = "Intercom within this region - mTLS, both ends verify against the internal CA"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # Intercom: proxy tasks reaching proxy tasks in another region.
 #
 # Literal CIDRs, not a security-group reference, because SG references do
