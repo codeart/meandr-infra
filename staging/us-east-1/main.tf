@@ -24,9 +24,9 @@ module "vpc" {
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  # Our own NAT carries this region's egress. The gateway stays, unrouted,
-  # until it is deliberately retired by emptying nat_pinned_azs — so a
-  # rollback is one variable and keeps the same address. See
+  # Our own NAT carries this region's egress, one per AZ where listed.
+  # Going back to "gateway" rebuilds one from nat_pinned_azs with a NEW
+  # address, so it is a planned change and not a rollback. See
   # docs/runbooks/nat_cutover.md.
   nat_mode          = "instance"
   nat_instance_azs  = local.nat_instance_azs

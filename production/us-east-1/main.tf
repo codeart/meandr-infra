@@ -23,10 +23,11 @@ module "vpc" {
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  # The gateway carries egress; the instances are built beside it, unproven.
-  # Both exist — nat_mode only chooses the route target — so flipping to
-  # "instance" is reversible in seconds. See docs/runbooks/nat_cutover.md.
-  nat_mode          = "gateway"
+  # Our own NAT carries this region's egress, one per AZ where listed.
+  # Going back to "gateway" rebuilds one from nat_pinned_azs with a NEW
+  # address, so it is a planned change and not a rollback. See
+  # docs/runbooks/nat_cutover.md.
+  nat_mode          = "instance"
   nat_instance_azs  = local.nat_instance_azs
   nat_instance_type = "t4g.micro"
   nat_pinned_azs    = local.nat_pinned_azs

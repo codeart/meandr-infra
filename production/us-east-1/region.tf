@@ -51,11 +51,11 @@ locals {
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
   # Ordered c first, then b — AZ-c holds arbiters and no data.
-  per_az_route_tables = ["${local.region}c"]
+  per_az_route_tables = ["${local.region}b", "${local.region}c"]
 
   # The gateway. It exists whenever this list does, independent of what
   # nat_mode routes at; emptying it releases the addresses for good.
-  nat_pinned_azs = ["${local.region}a", "${local.region}b"]
+  nat_pinned_azs = []
 
   # --- Accelerator -----------------------------------------------------
   #
