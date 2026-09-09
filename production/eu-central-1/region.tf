@@ -48,7 +48,21 @@ locals {
   # Hoisted out of main.tf so both edges share one. CIDR is a property of
   # the REGION (environments are separate accounts and never share a
   # network); the rest are properties of the ENVIRONMENT.
-  vpc_cidr          = "10.10.0.0/16"
+  vpc_cidr = "10.10.0.0/16"
+
+  # One NAT per AZ, c included: it holds only the Sentinel arbiters, but
+  # they do egress — SSM, CloudWatch, source builds at boot — and its own
+  # instance keeps that off a sibling's address and off the cross-AZ meter.
+  #
+  # Per-AZ egress needs the private route table split per AZ. Until that
+  # lands these exist and hold capacity, but only AZ-a's carries traffic.
+  nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
+
+  # The gateway. It exists whenever this list does, independently of which
+  # one nat_mode routes at — emptying it is how the gateway is finally
+  # retired, and that is the step that releases the address for good.
+  nat_pinned_azs = ["${local.region}a"]
+
   oauth_issuer_host = "mcp.meandr.com"
   proxy             = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 

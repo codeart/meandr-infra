@@ -8,6 +8,24 @@ locals {
   #   private : /20 chunks at .16, .32, .48 (one per AZ)
   public_cidrs  = [for i, _ in var.azs : cidrsubnet(var.cidr_block, 8, i)]
   private_cidrs = [for i, _ in var.azs : cidrsubnet(var.cidr_block, 4, 1 + i)]
+
+  # Which NAT an AZ egresses through: its own when it has one, otherwise
+  # the first. That fallback is how a single instance serves a whole VPC,
+  # and what lets an AZ take its own table before it has its own NAT.
+  nat_for_az = {
+    for az in var.azs : az => (
+      contains(var.nat_instance_azs, az) ? az : try(var.nat_instance_azs[0], "")
+    )
+  }
+
+  # EVERY private table, shared and per-AZ. Anything attaching to "the
+  # private route table" must use this: a gateway endpoint left on the
+  # shared one takes S3 away from the AZs that moved off it, as a routing
+  # black hole rather than an error.
+  private_route_table_ids = concat(
+    [aws_route_table.private.id],
+    [for az in var.per_az_route_tables : aws_route_table.private_az[az].id],
+  )
 }
 
 # --- VPC -----------------------------------------------------------------
@@ -127,11 +145,46 @@ resource "aws_route" "private_nat" {
   : null)
 }
 
+# Per-AZ private tables, for the AZs that have opted out of the shared one.
+#
+# ADDITIVE by design: the shared table is untouched, so an AZ moves off it
+# one at a time and moves back by removing an entry. No state surgery, and
+# no apply that reshapes every zone at once.
+#
+# The cost of a move is a few seconds: a subnet holds exactly one
+# association, so there is no create-before-destroy, and it falls back to
+# the VPC main table until the new one lands. Move AZ-c first — it holds
+# Sentinel arbiters and no data, so the blip costs one vote out of three
+# and quorum never breaks.
+resource "aws_route_table" "private_az" {
+  for_each = toset(var.per_az_route_tables)
+
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(var.tags, {
+    Name = "Private Routes ${each.key}"
+  })
+}
+
+resource "aws_route" "private_az_nat" {
+  for_each = var.enable_nat ? toset(var.per_az_route_tables) : toset([])
+
+  route_table_id         = aws_route_table.private_az[each.key].id
+  destination_cidr_block = "0.0.0.0/0"
+
+  nat_gateway_id = var.nat_mode == "gateway" ? aws_nat_gateway.regional[0].id : null
+  network_interface_id = (var.nat_mode == "instance"
+    ? module.nat_instance[local.nat_for_az[each.key]].network_interface_id
+  : null)
+}
+
 resource "aws_route_table_association" "private" {
   for_each = aws_subnet.private
 
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.private.id
+  subnet_id = each.value.id
+  route_table_id = (contains(var.per_az_route_tables, each.key)
+    ? aws_route_table.private_az[each.key].id
+  : aws_route_table.private.id)
 }
 
 # --- Gateway VPC endpoints (S3, DynamoDB) --------------------------------
@@ -152,7 +205,7 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private.id]
+  route_table_ids   = local.private_route_table_ids
 
   tags = merge(var.tags, {
     Name = "S3 Gateway Endpoint"
@@ -163,7 +216,7 @@ resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.region}.dynamodb"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.private.id]
+  route_table_ids   = local.private_route_table_ids
 
   tags = merge(var.tags, {
     Name = "DynamoDB Gateway Endpoint"
@@ -241,17 +294,22 @@ resource "aws_nat_gateway" "regional" {
 # silently leaves the private table with no default route, and an AZ with
 # no public subnet errors deep inside the module on a missing map key.
 resource "terraform_data" "nat_instance_guard" {
-  count = var.enable_nat && var.nat_mode == "instance" ? 1 : 0
+  count = var.enable_nat ? 1 : 0
 
   lifecycle {
     precondition {
-      condition     = length(var.nat_instance_azs) > 0
+      condition     = var.nat_mode != "instance" || length(var.nat_instance_azs) > 0
       error_message = "nat_mode = \"instance\" needs at least one AZ in nat_instance_azs, or private subnets get no default route."
     }
 
     precondition {
       condition     = length(setsubtract(var.nat_instance_azs, var.azs)) == 0
       error_message = "Every nat_instance_azs entry must also appear in azs — a NAT instance needs that AZ's public subnet."
+    }
+
+    precondition {
+      condition     = length(setsubtract(var.per_az_route_tables, var.azs)) == 0
+      error_message = "Every per_az_route_tables entry must also appear in azs — it needs that AZ's private subnet to associate."
     }
   }
 }

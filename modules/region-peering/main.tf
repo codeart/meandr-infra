@@ -73,3 +73,35 @@ resource "aws_route" "from_peer" {
   destination_cidr_block    = var.cidr_block
   vpc_peering_connection_id = aws_vpc_peering_connection_accepter.this.id
 }
+
+# The per-AZ tables, as SEPARATE resources rather than folding the shared
+# table into a for_each. A for_each key would be the table id, which no
+# `moved` block can name, so folding would destroy and recreate the live
+# route — dropping the cross-region path for the length of an apply, on
+# the link that carries config Valkey's replication.
+#
+# Pass EVERY per-AZ table, not the ones that look like they need it. A
+# table missing this route has no path to the peer at all: an ECS task in
+# that zone cannot reach the other region's proxy tasks over the mesh, and
+# it fails as a timeout with nothing logged.
+#
+# Reasoning from what a zone holds today is how this was got wrong once
+# already — an arbiter zone was left out on 2026-09-09, and the zone beside
+# it, which runs tasks, was left out with it.
+resource "aws_route" "to_peer_per_az" {
+  for_each = toset(var.az_route_table_ids)
+
+  route_table_id            = each.value
+  destination_cidr_block    = var.peer_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.this.id
+}
+
+resource "aws_route" "from_peer_per_az" {
+  provider = aws.peer
+
+  for_each = toset(var.peer_az_route_table_ids)
+
+  route_table_id            = each.value
+  destination_cidr_block    = var.cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection_accepter.this.id
+}

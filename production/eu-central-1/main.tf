@@ -23,9 +23,13 @@ module "vpc" {
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
-  # One address serves every AZ, so coverage is free and only redundancy
-  # costs. Verified 2026-08-26.
-  nat_pinned_azs = ["${local.region}a"]
+  # The gateway carries egress; the instances are built beside it, unproven.
+  # Both exist — nat_mode only chooses the route target — so flipping to
+  # "instance" is reversible in seconds. See docs/runbooks/nat_cutover.md.
+  nat_mode          = "gateway"
+  nat_instance_azs  = local.nat_instance_azs
+  nat_instance_type = "t4g.micro"
+  nat_pinned_azs    = local.nat_pinned_azs
 
   # ASSOCIATE with the environment's existing zone; never create one. A
   # second zone of the same name resolves locally, so a replica told to

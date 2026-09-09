@@ -69,6 +69,11 @@ module "peering" {
   peer_cidr_block     = local.peer.cidr_block
   peer_route_table_id = local.peer.private_route_table
 
+  # Both sides' per-AZ tables. A table without a peering route has no path
+  # to the other region — see the note in region.tf.
+  az_route_table_ids      = values(module.vpc.private_az_route_table_ids)
+  peer_az_route_table_ids = local.peer.private_az_route_tables
+
   tags = local.tags
 }
 

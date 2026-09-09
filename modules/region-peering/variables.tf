@@ -35,6 +35,18 @@ variable "peer_route_table_id" {
   type        = string
 }
 
+variable "az_route_table_ids" {
+  description = "This side's PER-AZ private tables, if any. Separate from route_table_id so the shared table's live route is never recreated — see the note above the resources."
+  type        = list(string)
+  default     = []
+}
+
+variable "peer_az_route_table_ids" {
+  description = "The peer's per-AZ private tables. Copied from the peer's `private_az_route_table_ids` output, which is why the peer applies its split first."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

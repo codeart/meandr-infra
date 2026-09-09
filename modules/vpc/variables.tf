@@ -69,6 +69,32 @@ variable "nat_instance_type" {
   default     = "t4g.nano"
 }
 
+variable "per_az_route_tables" {
+  description = <<-EOT
+    AZs that get their own private route table instead of sharing one.
+
+    Empty is the shared table serving every AZ — which is correct while one
+    NAT serves the VPC, and is where every region starts. Listing an AZ is
+    what gives it its own egress path, through its own NAT if it has one.
+
+    ADDITIVE and one AZ at a time, deliberately. The shared table is never
+    touched, so adding an entry moves exactly one subnet and removing it
+    moves that subnet back. There is no apply that reshapes every zone at
+    once, and no state surgery in either direction.
+
+    Moving a subnet costs a few seconds: it holds exactly one association,
+    so the old one is destroyed before the new one exists and it falls back
+    to the VPC main table in between. Order by what that costs — AZ-c first,
+    where the Sentinel arbiters hold no data and losing one vote of three
+    keeps quorum; then AZ-b; AZ-a keeps the shared table and never moves.
+
+    Checked in `terraform_data.nat_instance_guard`, not by a validation
+    block: those cannot see another variable until Terraform 1.9.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
 variable "nat_alarm_topic_arns" {
   description = "Where a NAT instance's conntrack alarm goes. Empty leaves it visible but silent, which is the right default for staging and the wrong one for production."
   type        = list(string)

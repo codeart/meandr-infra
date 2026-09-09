@@ -80,6 +80,18 @@ output "public_route_table_id" {
 }
 
 output "private_route_table_id" {
-  description = "Private route table — where a cross-region peering route belongs, since the Valkey fleets and ECS tasks sit in private subnets."
+  description = "The SHARED private route table. Serves every AZ not listed in per_az_route_tables — so it may serve none. A peering route needs private_route_table_ids, not this."
   value       = aws_route_table.private.id
+}
+
+# What a peering route must reach: every private table, or the AZs that
+# moved off the shared one lose the cross-region path silently.
+output "private_route_table_ids" {
+  description = "Every private route table, shared and per-AZ. This is what a cross-region peering route belongs in — all of them."
+  value       = local.private_route_table_ids
+}
+
+output "private_az_route_table_ids" {
+  description = "Per-AZ private tables only, keyed by AZ. Empty until an AZ is listed in per_az_route_tables."
+  value       = { for az in var.per_az_route_tables : az => aws_route_table.private_az[az].id }
 }

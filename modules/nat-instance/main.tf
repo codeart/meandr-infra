@@ -187,6 +187,20 @@ resource "aws_instance" "main" {
     # instance, taking a region's egress with it for the two minutes it
     # takes to boot. Replacement is deliberate: bump ami_id, or taint.
     ignore_changes = [ami]
+
+    # The one setting that turns this box into a black hole. EC2 enforces
+    # source/dest checking ABOVE the OS, so with it on the instance looks
+    # perfect — ip_forward set, masquerade loaded, tcpdump silent because
+    # nothing is delivered — and every forwarded packet disappears with no
+    # log line anywhere. It cost an evening on 2026-09-08.
+    #
+    # A postcondition on `self`, not a check block with a data source: the
+    # data source lives inside this module, and once the caller's routes
+    # depend on this module's output that is a dependency cycle.
+    postcondition {
+      condition     = self.source_dest_check == false
+      error_message = "source/dest check is ON — this NAT silently forwards nothing."
+    }
   }
 }
 
@@ -230,21 +244,3 @@ resource "aws_cloudwatch_metric_alarm" "conntrack" {
 
 data "aws_region" "current" {}
 
-# The one setting that turns this box into a black hole, asserted on every
-# plan and apply.
-#
-# EC2 enforces source/dest checking ABOVE the OS, so when it is on the
-# instance looks perfect — ip_forward set, masquerade rule loaded, tcpdump
-# silent because nothing is delivered — and every forwarded packet
-# disappears with no log line anywhere. It cost an evening on 2026-09-08.
-# A check block is the cheapest thing that makes it speak.
-check "forwards_packets" {
-  data "aws_instance" "current" {
-    instance_id = aws_instance.main.id
-  }
-
-  assert {
-    condition     = data.aws_instance.current.source_dest_check == false
-    error_message = "${local.name}: source/dest check is ON — this NAT silently forwards nothing."
-  }
-}

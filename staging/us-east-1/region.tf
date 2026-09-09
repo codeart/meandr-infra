@@ -90,6 +90,19 @@ locals {
     private_route_table = "rtb-0e0e83bd1a54564d5"
     region              = "eu-central-1"
 
+    # EVERY per-AZ table the peer has, not only the ones we think need it.
+    # A table without this route has no path to us at all — an ECS task in
+    # that zone cannot reach this region's proxy tasks over the mesh, which
+    # is the same half-broken state a missing SG rule produced on
+    # 2026-09-08. AZ-c holds only arbiters today and that is not a reason
+    # to leave it out; what a zone holds changes.
+    #
+    #   terraform -chdir=../eu-central-1 output private_az_route_table_ids
+    private_az_route_tables = [
+      "rtb-04165fa86f322dfd9", # eu-central-1b
+      "rtb-05673c6b2bcffd917", # eu-central-1c
+    ]
+
     # The environment's ONE private hosted zone, created in the primary.
     # This region ASSOCIATES with it and must never create its own of the
     # same name — see modules/vpc/variables.tf existing_zone_id.

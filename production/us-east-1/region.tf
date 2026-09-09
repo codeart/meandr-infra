@@ -45,9 +45,17 @@ locals {
   # us-east-1.
   vpc_cidr = "10.20.0.0/16"
 
-  # Two addresses, in the two zones that carry workloads. Staging pins one
-  # because a single idle address is the cheaper risk there; production
-  # pays for the second so losing AZ-a does not take egress with it.
+  # One NAT per AZ, c included: it holds only the Sentinel arbiters, but
+  # they do egress — SSM, CloudWatch, source builds at boot — and its own
+  # instance keeps that off a sibling's address and off the cross-AZ meter.
+  #
+  # Per-AZ egress needs the private route table split per AZ. Until that
+  # lands these exist and hold capacity, but only AZ-a's carries traffic.
+  nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
+
+  # Two gateway addresses, in the two zones that carry workloads — the
+  # posture the instances are here to replace. Existence is independent of
+  # nat_mode; emptying this releases the addresses for good.
   nat_pinned_azs = ["${local.region}a", "${local.region}b"]
 
   # --- Accelerator -----------------------------------------------------
