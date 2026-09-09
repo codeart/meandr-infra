@@ -36,9 +36,18 @@ variable "peer_route_table_id" {
 }
 
 variable "az_route_table_ids" {
-  description = "This side's PER-AZ private tables, if any. Separate from route_table_id so the shared table's live route is never recreated — see the note above the resources."
-  type        = list(string)
-  default     = []
+  description = <<-EOT
+    This side's PER-AZ private tables, KEYED BY AZ. Separate from
+    route_table_id so the shared table's live route is never recreated —
+    see the note above the resources.
+
+    A map, not a list, and the key has to be the AZ: these ids do not exist
+    until apply, and `for_each` over unknown values cannot determine its
+    keys. Keyed by AZ the keys are static and only the values are deferred,
+    which is the shape Terraform asks for.
+  EOT
+  type        = map(string)
+  default     = {}
 }
 
 variable "peer_az_route_table_ids" {

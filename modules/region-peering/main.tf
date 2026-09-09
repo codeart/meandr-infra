@@ -88,8 +88,12 @@ resource "aws_route" "from_peer" {
 # Reasoning from what a zone holds today is how this was got wrong once
 # already — an arbiter zone was left out on 2026-09-09, and the zone beside
 # it, which runs tasks, was left out with it.
+# Keyed by AZ, not by table id: this side's tables are created by the same
+# apply, so their ids are unknown at plan time and a for_each over them
+# cannot determine its keys. The peer's are hardcoded and therefore known,
+# which is why only this side needs the map.
 resource "aws_route" "to_peer_per_az" {
-  for_each = toset(var.az_route_table_ids)
+  for_each = var.az_route_table_ids
 
   route_table_id            = each.value
   destination_cidr_block    = var.peer_cidr_block

@@ -50,10 +50,19 @@ locals {
   # network); the rest are properties of the ENVIRONMENT.
   vpc_cidr = "10.20.0.0/16"
 
-  # One NAT in AZ-a, serving all three zones through the single private
-  # route table — the same shape as eu-central-1, and hoisted here so both
-  # AZ-shaped decisions sit beside the CIDR rather than in main.tf.
+  # One NAT in AZ-a, serving all three zones. Staging takes the
+  # instance-fault exposure that buys: the alternative is ~$33-38/month for
+  # a managed gateway moving 3.5 Mbps.
   nat_instance_azs = ["${local.region}a"]
+
+  # AZ-a keeps the shared table and never moves; b and c take their own.
+  # Ordered c first (arbiters, no data), then b (replicas), so the zone
+  # with something to lose moved with the mechanism already proven.
+  #
+  # In staging all three still egress through AZ-a's single NAT — this is
+  # the table split, not per-AZ egress. Production has a NAT per zone and
+  # `nat_for_az` points each table at its own.
+  per_az_route_tables = ["${local.region}c"]
 
   # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
   # means no gateway; refilling it builds one with a NEW address, so this

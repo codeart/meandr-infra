@@ -19,7 +19,8 @@ module "vpc" {
   env = local.env
 
   cidr_block = local.vpc_cidr
-  # APPEND only — subnet ids are consumed positionally.
+  # APPEND only. Subnet ids are output in this order and callers index them
+  # positionally, so inserting an AZ would move existing nodes.
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 
@@ -31,6 +32,9 @@ module "vpc" {
   nat_instance_azs  = local.nat_instance_azs
   nat_instance_type = "t4g.nano"
   nat_pinned_azs    = local.nat_pinned_azs
+
+  # One AZ at a time; see the note in region.tf for the order and why.
+  per_az_route_tables = local.per_az_route_tables
 
   # ASSOCIATE with the environment's existing zone; never create one. A
   # second zone of the same name resolves locally, so a replica told to
@@ -71,7 +75,7 @@ module "peering" {
 
   # Both sides' per-AZ tables. A table without a peering route has no path
   # to the other region — see the note in region.tf.
-  az_route_table_ids      = values(module.vpc.private_az_route_table_ids)
+  az_route_table_ids      = module.vpc.private_az_route_table_ids
   peer_az_route_table_ids = local.peer.private_az_route_tables
 
   tags = local.tags

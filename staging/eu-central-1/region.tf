@@ -46,13 +46,13 @@ locals {
   vpc_cidr = "10.10.0.0/16"
 
   # One NAT in AZ-a, serving all three zones. Staging takes the
-  # instance-fault exposure that buys: the alternative is ~$38/month for a
-  # managed gateway moving 3.5 Mbps.
+  # instance-fault exposure that buys: the alternative is ~$33-38/month for
+  # a managed gateway moving 3.5 Mbps.
   nat_instance_azs = ["${local.region}a"]
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
-  # Ordered c first (arbiters, no data), then b (replicas), so the risky
-  # one went second with the mechanism already proven.
+  # Ordered c first (arbiters, no data), then b (replicas), so the zone
+  # with something to lose moved with the mechanism already proven.
   #
   # In staging all three still egress through AZ-a's single NAT — this is
   # the table split, not per-AZ egress. Production has a NAT per zone and
