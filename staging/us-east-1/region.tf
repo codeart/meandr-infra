@@ -62,7 +62,7 @@ locals {
   # In staging all three still egress through AZ-a's single NAT — this is
   # the table split, not per-AZ egress. Production has a NAT per zone and
   # `nat_for_az` points each table at its own.
-  per_az_route_tables = ["${local.region}c"]
+  per_az_route_tables = ["${local.region}b", "${local.region}c"]
 
   # RETIRED 2026-09-08, once the instance was proven forwarding. Empty
   # means no gateway; refilling it builds one with a NEW address, so this
