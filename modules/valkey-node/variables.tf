@@ -206,6 +206,12 @@ variable "tls_enabled" {
   default     = true
 }
 
+variable "capacity_reservation_id" {
+  description = "A TARGETED reservation to bind this instance to. Empty (every fleet node) matches valkey-region's open reservation instead. A standalone node outside a region stack must hold and pass its own, or it launches unreserved."
+  type        = string
+  default     = ""
+}
+
 variable "standalone" {
   description = <<-EOT
     A lone node with no replica and no Sentinel — one box that IS the

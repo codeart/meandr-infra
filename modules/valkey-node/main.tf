@@ -227,6 +227,18 @@ resource "aws_instance" "main" {
   vpc_security_group_ids = [aws_security_group.main.id]
   iam_instance_profile   = aws_iam_instance_profile.main.name
 
+  # A fleet node lands in valkey-region's OPEN reservation by matching;
+  # a node built outside a region stack has none, so it binds a targeted
+  # one the caller holds for it.
+  dynamic "capacity_reservation_specification" {
+    for_each = var.capacity_reservation_id != "" ? [1] : []
+    content {
+      capacity_reservation_target {
+        capacity_reservation_id = var.capacity_reservation_id
+      }
+    }
+  }
+
   # gzip+base64, because EC2 caps user-data at 16 KiB and this script is
   # past it in plain text — it is comment-heavy by design and carries two
   # base64-embedded helpers. cloud-init detects the gzip magic and
