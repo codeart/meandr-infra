@@ -3,6 +3,36 @@ variable "env" {
   type        = string
 }
 
+variable "name" {
+  description = "Resource name. Empty derives `nat-<az>`. The IAM role and instance profile are ACCOUNT-global, so a second NAT in the same account and zone (an isolated VPC) must name itself."
+  type        = string
+  default     = ""
+}
+
+variable "forwards" {
+  description = <<-EOT
+    Inbound ports to DNAT from this instance's public address to a private
+    host: `[{ port = 443, target_ip = "10.60.16.10" }]`. Empty (the default)
+    is a pure egress NAT with nothing reachable from the internet.
+
+    One declaration does both halves — the SG ingress AND the nft rule — so
+    an open port always leads somewhere and a forward is always reachable.
+    Forwarded traffic is NOT masqueraded: the target sees the real client
+    address, and return traffic comes back through this box because it is
+    already the private subnet's default route.
+
+    target_ip must be STABLE (pin the target's private_ip): it renders into
+    user-data, and user-data drift replaces this instance.
+  EOT
+  type = list(object({
+    port        = number
+    target_ip   = string
+    source_cidr = optional(string, "0.0.0.0/0")
+    description = optional(string, "")
+  }))
+  default = []
+}
+
 variable "az" {
   description = "AZ this instance lives in. Its ENI, EIP and subnet are all fixed to this zone, so changing it replaces the address."
   type        = string

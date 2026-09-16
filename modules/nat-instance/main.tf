@@ -21,7 +21,7 @@ data "aws_ssm_parameter" "al2023_arm" {
 
 locals {
   ami  = var.ami_id != "" ? var.ami_id : data.aws_ssm_parameter.al2023_arm[0].value
-  name = "nat-${var.az}"
+  name = var.name != "" ? var.name : "nat-${var.az}"
 
   metric_namespace = "meandr/nat"
 }
@@ -43,6 +43,19 @@ resource "aws_vpc_security_group_ingress_rule" "vpc" {
   cidr_ipv4         = var.vpc_cidr
   ip_protocol       = "-1"
   description       = "Egress traffic from this VPC"
+}
+
+# The forwarded ports, and only those: each one is a hole in the boundary
+# above, so it exists only where a forward names a target for it.
+resource "aws_vpc_security_group_ingress_rule" "forward" {
+  for_each = { for f in var.forwards : tostring(f.port) => f }
+
+  security_group_id = aws_security_group.main.id
+  cidr_ipv4         = each.value.source_cidr
+  ip_protocol       = "tcp"
+  from_port         = each.value.port
+  to_port           = each.value.port
+  description       = each.value.description != "" ? each.value.description : "Forwarded to ${each.value.target_ip}:${each.value.port}"
 }
 
 resource "aws_vpc_security_group_egress_rule" "all" {

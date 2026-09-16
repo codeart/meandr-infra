@@ -187,8 +187,37 @@ variable "tls_secret_arn" {
     across the fleet rather than one per node: every node holds the same
     AUTH and the same data, so per-node keys would add rotation work
     without narrowing any blast radius.
+
+    Required unless `tls_enabled = false`.
   EOT
   type        = string
+  default     = ""
+}
+
+variable "tls_enabled" {
+  description = <<-EOT
+    Serve mTLS on 6379 (the default, and every fleet node). `false` serves
+    PLAINTEXT on 6379 guarded by AUTH alone — only for a node whose sole
+    client sits in the same isolated VPC and cannot present a client
+    certificate (Discourse). Never for a fleet node: replication and
+    Sentinel here assume mTLS.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "standalone" {
+  description = <<-EOT
+    A lone node with no replica and no Sentinel — one box that IS the
+    store. Drops the split-brain guard (`min-replicas-to-write`), which on
+    a node with no peer to diverge from would only refuse every write.
+
+    A declaration, not a number, on purpose: a fleet node must never be
+    able to relax the guard by tuning a knob, and a lone node cannot
+    split-brain, so the only honest values are "in a fleet" and "alone".
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "instance_type" {

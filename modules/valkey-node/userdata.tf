@@ -247,24 +247,7 @@ locals {
     install -d -o valkey -g valkey -m 0750 \
       /var/lib/valkey /var/log/valkey /etc/valkey /etc/valkey/tls
 
-    # TLS material for the whole fleet in this environment: ca.crt for
-    # verification, node.crt/node.key for the listener. One keypair shared
-    # across nodes rather than one per node — every node is equally trusted
-    # (same AUTH, same data), so per-node keys would add rotation work
-    # without narrowing a blast radius. Revisit if that stops being true.
-    aws secretsmanager get-secret-value \
-      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
-      | jq -r '.ca_crt'   > /etc/valkey/tls/ca.crt
-    aws secretsmanager get-secret-value \
-      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
-      | jq -r '.node_crt' > /etc/valkey/tls/node.crt
-    aws secretsmanager get-secret-value \
-      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
-      | jq -r '.node_key' > /etc/valkey/tls/node.key
-    chown -R valkey:valkey /etc/valkey/tls
-    chmod 0400 /etc/valkey/tls/node.key
-    chmod 0444 /etc/valkey/tls/ca.crt /etc/valkey/tls/node.crt
-
+    ${local.tls_fetch}
     # maxmemory from the instance's ACTUAL memory rather than a lookup
     # table keyed on instance type — the table goes stale the moment
     # somebody resizes, and the failure is an OOM kill rather than an
@@ -344,20 +327,7 @@ locals {
     [ -z "$SENTINEL_ADDR" ] && SENTINEL_ADDR="${local.hostname}"
 
     cat >/etc/valkey/valkey.conf <<CONF
-    # TLS ONLY. Plaintext is disabled outright, not merely discouraged —
-    # clients connect with rediss:// and a listener on 6379 would be a
-    # standing invitation to a misconfigured one.
-    port 0
-    tls-port 6379
-    tls-cert-file /etc/valkey/tls/node.crt
-    tls-key-file /etc/valkey/tls/node.key
-    tls-ca-cert-file /etc/valkey/tls/ca.crt
-    tls-replication yes
-    # Every connection must present a certificate from our CA, in both
-    # directions. The CA issues only to this fleet, so holding the cert is
-    # the identity.
-    tls-auth-clients yes
-
+    ${local.listener_conf}
     dir /var/lib/valkey
     logfile /var/log/valkey/valkey.log
 
@@ -615,9 +585,59 @@ locals {
     "# loudly instead.",
   ]) : "# Cache: evicting the coldest key is the intended behaviour here."
 
-  split_brain_guard = <<-CONF
+  # A standalone node has no peer to diverge from, and the guard would only
+  # refuse every write it ever gets — see variable "standalone".
+  split_brain_guard = var.standalone ? "" : <<-CONF
     min-replicas-to-write 1
     min-replicas-max-lag 10
+  CONF
+
+  # The two TLS blocks render VERBATIM when TLS is on, so a fleet node's
+  # user-data is byte-identical to before tls_enabled existed — any drift
+  # here replaces every live Valkey (user_data_replace_on_change).
+  tls_fetch = !var.tls_enabled ? "" : <<-BASH
+    # TLS material for the whole fleet in this environment: ca.crt for
+    # verification, node.crt/node.key for the listener. One keypair shared
+    # across nodes rather than one per node — every node is equally trusted
+    # (same AUTH, same data), so per-node keys would add rotation work
+    # without narrowing a blast radius. Revisit if that stops being true.
+    aws secretsmanager get-secret-value \
+      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
+      | jq -r '.ca_crt'   > /etc/valkey/tls/ca.crt
+    aws secretsmanager get-secret-value \
+      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
+      | jq -r '.node_crt' > /etc/valkey/tls/node.crt
+    aws secretsmanager get-secret-value \
+      --secret-id '${var.tls_secret_arn}' --query SecretString --output text \
+      | jq -r '.node_key' > /etc/valkey/tls/node.key
+    chown -R valkey:valkey /etc/valkey/tls
+    chmod 0400 /etc/valkey/tls/node.key
+    chmod 0444 /etc/valkey/tls/ca.crt /etc/valkey/tls/node.crt
+  BASH
+
+  listener_conf = var.tls_enabled ? local.listener_tls : local.listener_plain
+
+  listener_tls = <<-CONF
+    # TLS ONLY. Plaintext is disabled outright, not merely discouraged —
+    # clients connect with rediss:// and a listener on 6379 would be a
+    # standing invitation to a misconfigured one.
+    port 0
+    tls-port 6379
+    tls-cert-file /etc/valkey/tls/node.crt
+    tls-key-file /etc/valkey/tls/node.key
+    tls-ca-cert-file /etc/valkey/tls/ca.crt
+    tls-replication yes
+    # Every connection must present a certificate from our CA, in both
+    # directions. The CA issues only to this fleet, so holding the cert is
+    # the identity.
+    tls-auth-clients yes
+  CONF
+
+  listener_plain = <<-CONF
+    # PLAINTEXT, guarded by AUTH and the security group alone. Only for a
+    # standalone node whose one client shares this isolated VPC and cannot
+    # present a client certificate.
+    port 6379
   CONF
 
   # Sentinel runs on EVERY node in EVERY region, including regions that

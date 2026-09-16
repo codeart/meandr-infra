@@ -87,9 +87,9 @@ locals {
     mkdir -p /etc/nftables
     cat >/etc/nftables/meandr-nat.nft <<NFT
     table ip meandr_nat {
-      chain postrouting {
+    ${local.nft_prerouting}  chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        oifname "$IFACE" masquerade
+    ${local.nft_no_masq}    oifname "$IFACE" masquerade
       }
     }
     NFT
@@ -152,4 +152,21 @@ locals {
     systemctl daemon-reload
     systemctl enable --now nat-metrics.timer
   BASH
+
+  # Both render EMPTY without forwards, so an egress-only NAT's user-data
+  # is byte-identical to before this existed: user_data_replace_on_change
+  # would otherwise rebuild every live NAT on the next apply.
+  #
+  # Forwarded flows skip masquerade on purpose. This box has ONE interface,
+  # so a DNAT'd packet leaves the way it came and would otherwise be
+  # rewritten to our address, hiding every client behind the NAT's IP —
+  # rate limiting and IP bans on the target would see one visitor. Without
+  # SNAT the target sees the real client; the reply still routes back
+  # through here (we are its default route) and conntrack undoes the DNAT.
+  nft_prerouting = length(var.forwards) == 0 ? "" : join("", concat(
+    ["  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n"],
+    [for f in var.forwards : "    iifname \"$IFACE\" tcp dport ${f.port} dnat to ${f.target_ip}\n"],
+    ["  }\n"],
+  ))
+  nft_no_masq = length(var.forwards) == 0 ? "" : "    ip daddr ${var.vpc_cidr} return\n"
 }

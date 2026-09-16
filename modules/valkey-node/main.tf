@@ -110,7 +110,7 @@ resource "aws_iam_role_policy" "secrets" {
     Statement = [{
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = [var.auth_secret_arn, var.tls_secret_arn]
+      Resource = compact([var.auth_secret_arn, var.tls_enabled ? var.tls_secret_arn : ""])
     }]
   })
 }
@@ -264,6 +264,21 @@ resource "aws_instance" "main" {
     # data and, if it was the master, forcing a failover nobody asked for.
     # Replacement is deliberate: bump valkey_version, or taint.
     ignore_changes = [ami]
+
+    precondition {
+      condition     = !var.tls_enabled || var.tls_secret_arn != ""
+      error_message = "tls_secret_arn is required unless tls_enabled = false."
+    }
+    # Plaintext and no-guard are two faces of the same declaration: a node
+    # in a fleet must keep both, a node alone may drop both.
+    precondition {
+      condition     = var.tls_enabled || var.standalone
+      error_message = "tls_enabled = false is only allowed on a standalone node."
+    }
+    precondition {
+      condition     = !var.standalone || (!var.run_sentinel && !var.sentinel_only && var.role == "master")
+      error_message = "a standalone node is a lone master: no Sentinel, not a replica."
+    }
   }
 }
 
