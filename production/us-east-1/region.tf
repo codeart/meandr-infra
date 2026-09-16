@@ -136,6 +136,19 @@ locals {
 
   peer_node_codes = values(local.peers)
 
+  # --- Discourse -------------------------------------------------------
+  #
+  # One forum per environment, in the primary region only. Its own island
+  # VPC beside this one. NOT in 10/8: every 10.x is a meandr REGION
+  # (infra_inventory.md §10), and a range that reads as one would be taken
+  # for one. Not 172.31 either — that is the account's default VPC.
+  # See infra/discourse.md.
+  discourse_hostname   = "community.meandr.com"
+  discourse_zone       = "meandr.com"
+  discourse_vpc_cidr   = "172.20.0.0/16"
+  discourse_from_email = "community@mail.meandr.com"
+  discourse_admins     = ["alex@meandr.com"]
+
   tags = {
     "meandr:env"        = local.env
     "meandr:managed-by" = "terraform"

@@ -82,7 +82,7 @@ locals {
     # The upstream interface by discovery, not by name: ens5 is the usual
     # answer on nitro but it is not a guarantee, and a wrong name here
     # fails as a silent black hole.
-    IFACE=$(ip -o -4 route show default | awk '{print $5; exit}')
+    IFACE=$(ip -o -4 route show default | awk '{print $5; exit}')${local.nft_self_addr}
 
     mkdir -p /etc/nftables
     cat >/etc/nftables/meandr-nat.nft <<NFT
@@ -98,7 +98,7 @@ locals {
       echo 'include "/etc/nftables/meandr-nat.nft"' >>/etc/sysconfig/nftables.conf
 
     systemctl enable --now nftables
-
+    ${local.forward_resolver}
     # --- Metrics --------------------------------------------------------
     #
     # Conntrack occupancy ONLY. Throughput and packet rate already arrive
@@ -163,10 +163,93 @@ locals {
   # rate limiting and IP bans on the target would see one visitor. Without
   # SNAT the target sees the real client; the reply still routes back
   # through here (we are its default route) and conntrack undoes the DNAT.
+  #
+  # A forward matches ONLY packets addressed to this box (the EIP arrives
+  # as the ENI's own address). One interface carries both directions, so
+  # matching on port alone would also catch the private subnets' OUTBOUND
+  # 443 — every Secrets Manager, SSM and dnf call — and rewrite it to the
+  # target. Measured 2026-09-16: two private boxes that never registered.
+  nft_self_addr = length(var.forwards) == 0 ? "" : "\nSELF=$(ip -o -4 addr show dev \"$IFACE\" | awk '{print $4; exit}' | cut -d/ -f1)"
+
+  # Host-mode leaves the chain EMPTY at boot and lets the resolver fill it:
+  # the target usually does not exist yet the first time this box comes up,
+  # and a rule built from an unresolvable name would be a rule to nowhere.
+  forward_host = length(var.forwards) == 0 ? "" : var.forwards[0].target_host
+
   nft_prerouting = length(var.forwards) == 0 ? "" : join("", concat(
     ["  chain prerouting {\n    type nat hook prerouting priority dstnat; policy accept;\n"],
-    [for f in var.forwards : "    iifname \"$IFACE\" tcp dport ${f.port} dnat to ${f.target_ip}\n"],
+    local.forward_host != "" ? [] :
+    [for f in var.forwards : "    iifname \"$IFACE\" ip daddr $SELF tcp dport ${f.port} dnat to ${f.target_ip}\n"],
     ["  }\n"],
   ))
   nft_no_masq = length(var.forwards) == 0 ? "" : "    ip daddr ${var.vpc_cidr} return\n"
+
+  # The resolver. Installed only in host mode, so a static forward and an
+  # egress-only NAT both render exactly as before.
+  #
+  # getent, not dig: it goes through glibc's resolver (no bind-utils to
+  # install) and glibc does not cache, so the timer's period IS the
+  # detection latency. An empty or non-IPv4 answer KEEPS the current rules —
+  # a DNS blip must never rewrite the forward to nowhere.
+  forward_resolver = local.forward_host == "" ? "" : <<-RESOLVER
+
+    install -d -m 0755 /var/lib/meandr
+    cat >/usr/local/bin/nat-forward-resolve <<'SCRIPT'
+    #!/bin/sh
+    # Re-point the DNAT chain when the target record moves. nftables resolves
+    # a name once at load time and never again, so the swap has to happen
+    # here. One `nft -f` transaction, so no packet ever sees a half-updated
+    # chain.
+    set -eu
+    HOST='${local.forward_host}'
+    STATE=/var/lib/meandr/forward-target
+
+    IFACE=$(ip -o -4 route show default | awk '{print $5; exit}')
+    SELF=$(ip -o -4 addr show dev "$IFACE" | awk '{print $4; exit}' | cut -d/ -f1)
+    NEW=$(getent ahostsv4 "$HOST" 2>/dev/null | awk '{print $1; exit}' || true)
+
+    case "$NEW" in
+      ''|*[!0-9.]*) exit 0 ;;
+    esac
+
+    OLD=$(cat "$STATE" 2>/dev/null || true)
+    [ "$NEW" = "$OLD" ] && exit 0
+
+    nft -f - <<NFT
+    flush chain ip meandr_nat prerouting
+    table ip meandr_nat {
+      chain prerouting {
+        type nat hook prerouting priority dstnat; policy accept;
+    ${join("", [for f in var.forwards : "    iifname \"$IFACE\" ip daddr $SELF tcp dport ${f.port} dnat to $NEW\n"])}  }
+    }
+    NFT
+
+    printf '%s\n' "$NEW" >"$STATE"
+    logger -t nat-forward "target $HOST moved: $${OLD:-none} -> $NEW"
+    SCRIPT
+    chmod 0755 /usr/local/bin/nat-forward-resolve
+
+    cat >/etc/systemd/system/nat-forward-resolve.service <<'UNIT'
+    [Unit]
+    Description=Re-point the NAT DNAT chain at the forward target's current address
+    After=nftables.service
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/bin/nat-forward-resolve
+    UNIT
+
+    cat >/etc/systemd/system/nat-forward-resolve.timer <<'UNIT'
+    [Unit]
+    Description=Re-check the forward target every 30s
+    [Timer]
+    OnBootSec=10s
+    OnUnitActiveSec=30s
+    AccuracySec=1s
+    [Install]
+    WantedBy=timers.target
+    UNIT
+
+    systemctl daemon-reload
+    systemctl enable --now nat-forward-resolve.timer
+  RESOLVER
 }

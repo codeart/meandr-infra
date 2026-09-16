@@ -652,3 +652,43 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   tags          = local.tags
 }
 
+# --- Discourse ------------------------------------------------------------
+#
+# The community forum, on its own island VPC in the primary region. Shares
+# this stack's account, region and Valkey artifacts bucket, and nothing
+# else — no peering, no shared subnet. Its only public address is its own
+# NAT's EIP. First-deploy ordering matters: infra/discourse.md.
+
+module "discourse" {
+  source = "../../modules/discourse"
+  count  = local.primary ? 1 : 0
+
+  providers = { aws.dns = aws.shared }
+
+  env    = local.env
+  region = local.region
+  az     = "${local.region}a"
+
+  hostname         = local.discourse_hostname
+  public_zone_name = local.discourse_zone
+
+  vpc_cidr = local.discourse_vpc_cidr
+
+  # The same vendored tarball this stack uploads for the fleets; the
+  # forum's node verifies against it and uploads nothing.
+  #
+  # By NAME, not module.valkey's output: this stack is applied with
+  # -target on the forum, which leaves the fleet module's outputs unknown
+  # and would make the node's user-data unknown at plan time — and
+  # user_data_replace_on_change cannot decide on an unknown.
+  valkey_version       = local.valkey_version
+  valkey_source_path   = local.valkey_source_path
+  valkey_source_bucket = "meandr-artifacts-${local.env}-${local.region}"
+
+  notification_email = local.discourse_from_email
+  admin_emails       = local.discourse_admins
+  letsencrypt_email  = local.discourse_admins[0]
+
+  aws_profile = local.aws_profile
+  tags        = merge(local.tags, { "meandr:component" = "discourse" })
+}

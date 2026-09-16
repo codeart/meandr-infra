@@ -206,6 +206,12 @@ variable "tls_enabled" {
   default     = true
 }
 
+variable "name" {
+  description = "AWS resource name (instance, SG, IAM role). Empty derives the fleet convention `valkey-<fleet>-<node>`. A node that belongs to another stack names itself after that stack so it sorts with it in the console; DNS is unaffected and stays under `*.valkey.<zone>`."
+  type        = string
+  default     = ""
+}
+
 variable "capacity_reservation_id" {
   description = "A TARGETED reservation to bind this instance to. Empty (every fleet node) matches valkey-region's open reservation instead. A standalone node outside a region stack must hold and pass its own, or it launches unreserved."
   type        = string

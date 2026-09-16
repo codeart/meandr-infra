@@ -449,3 +449,8 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   ok_actions    = [local.ga_alerts_topic_arn]
   tags          = local.tags
 }
+
+# --- Discourse ------------------------------------------------------------
+#
+# Absent here on purpose: the forum is one per environment and lives in the
+# primary region (us-east-1). See infra/discourse.md.

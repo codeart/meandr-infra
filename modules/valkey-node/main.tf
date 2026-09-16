@@ -29,7 +29,7 @@ locals {
   # AWS resource names take dashes: valkey-config-a. DNS nests under a
   # per-family subdomain: config-a.valkey.<zone> — which is what lets one
   # `*.valkey.<zone>` SAN cover every fleet this environment ever grows.
-  node_name = "valkey-${var.fleet}-${var.node}"
+  node_name = var.name != "" ? var.name : "valkey-${var.fleet}-${var.node}"
   dns_root  = "valkey.${var.dns_zone_name}"
   hostname  = "${var.fleet}-${var.node}.${local.dns_root}"
 
