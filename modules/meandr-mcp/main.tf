@@ -299,9 +299,12 @@ resource "aws_vpc_security_group_egress_rule" "nlb_all" {
   description       = "To proxy tasks"
 }
 
-resource "aws_lb_target_group" "proxy" {
-  name        = "meandr-mcp-proxy"
-  port        = var.proxy_port
+# No plain-port target group: ECS refuses to deploy a service registered
+# into a TG that no listener references, so it went with the :80 listener
+# (learned from a rolled-back deploy, 2026-09-19).
+resource "aws_lb_target_group" "proxy_tls" {
+  name        = "meandr-mcp-proxy-tls"
+  port        = var.proxy_tls_port
   protocol    = "TCP"
   target_type = "ip" # Fargate awsvpc mode
   vpc_id      = var.vpc_id
@@ -309,38 +312,6 @@ resource "aws_lb_target_group" "proxy" {
   # Defaults to false for ip targets, and NLB is L4 with no XFF fallback —
   # so without this the proxy sees load-balancer addresses and clientguard
   # rate-limits every tenant against the same few sources.
-  preserve_client_ip = true
-
-  health_check {
-    enabled             = true
-    protocol            = "TCP"
-    interval            = 30
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
-  }
-
-  # Matches the proxy's MEANDR_HTTP_DRAIN_TIMEOUT default — NLB stops
-  # routing new connections to this target by the time the proxy's
-  # graceful-shutdown drain window closes. Bigger than the AWS default
-  # of 300s isn't useful here because Fargate's hard stopTimeout cap
-  # is 120s; the proxy will be SIGKILLed before a longer dereg would
-  # come into play.
-  deregistration_delay = 90
-
-  tags = merge(local.base_tags, { Name = "MCP proxy TG" })
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_lb_target_group" "proxy_tls" {
-  name        = "meandr-mcp-proxy-tls"
-  port        = var.proxy_tls_port
-  protocol    = "TCP"
-  target_type = "ip"
-  vpc_id      = var.vpc_id
-
   preserve_client_ip = true
 
   # TCP probe on the TLS port — verifies the socket accepts connections.
@@ -355,7 +326,9 @@ resource "aws_lb_target_group" "proxy_tls" {
     unhealthy_threshold = 3
   }
 
-  # See the plain-HTTP target group above for the dereg-delay rationale.
+  # Matches MEANDR_HTTP_DRAIN_TIMEOUT: NLB stops routing new connections
+  # by the time the drain window closes. Longer buys nothing — Fargate
+  # SIGKILLs at stopTimeout (120s) first.
   deregistration_delay = 90
 
   tags = merge(local.base_tags, { Name = "MCP proxy TLS TG" })
@@ -367,9 +340,7 @@ resource "aws_lb_target_group" "proxy_tls" {
 
 # No :80 listener. It forwarded the full mux — bearer auth included —
 # over plaintext, and its stated reason ("until the cert pipeline lands")
-# expired when ACME went live. The plain target group above SURVIVES:
-# ECS registers into it and its health check gates deployments; with no
-# listener and no SG ingress, nothing public can reach it.
+# expired when ACME went live (audit 2026-09-18 A2).
 resource "aws_lb_listener" "http_443" {
   load_balancer_arn = aws_lb.main.arn
   port              = 443
@@ -764,7 +735,7 @@ module "proxy" {
   task_role_arn      = aws_iam_role.task.arn
 
   image          = local.image
-  container_port = var.proxy_port
+  container_port = var.proxy_tls_port
 
   # No init container. The proxy never opens a Postgres connection, so
   # the RDS trust store buys it nothing — and the runtime image is
@@ -781,13 +752,10 @@ module "proxy" {
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.proxy.id]
 
-  target_group_arn = aws_lb_target_group.proxy.arn
-  extra_load_balancers = [
-    {
-      target_group_arn = aws_lb_target_group.proxy_tls.arn
-      container_port   = var.proxy_tls_port
-    },
-  ]
+  # TLS TG only. ECS refuses to deploy a service registered into a TG no
+  # listener references, so with :80 gone the plain TG cannot stay on
+  # the service — its health role moves to the TLS TG + container check.
+  target_group_arn = aws_lb_target_group.proxy_tls.arn
 
   # Container-level health check distinct from the NLB target-group
   # health check (which gates LB routing). Without this the ECS task
