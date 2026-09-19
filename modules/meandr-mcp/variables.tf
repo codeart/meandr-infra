@@ -183,9 +183,8 @@ variable "image_repository" {
 }
 
 variable "image_tag" {
-  description = "Mutable image tag. `develop` for staging, `main` for production. CI pushes new SHAs under this tag."
+  description = "Mutable image tag. `develop` for staging, `main` for production. CI pushes new SHAs under this tag. NO DEFAULT, deliberately: a default is the staging image, so a caller that forgets it serves production customers the staging branch rather than failing at plan (production/eu-central-1 did exactly that until 2026-09-19)."
   type        = string
-  default     = "develop"
 }
 
 # --- Redis AUTH (shared token across config-stream + event-stream) -----

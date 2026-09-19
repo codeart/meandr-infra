@@ -306,7 +306,7 @@ module "mcp" {
   env        = local.env
   account_id = local.account_id
 
-  image_tag = "develop"
+  image_tag = local.image_tag
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block

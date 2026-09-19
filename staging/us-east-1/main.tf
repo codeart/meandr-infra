@@ -321,7 +321,7 @@ module "mcp" {
   env        = local.env
   account_id = local.account_id
 
-  image_tag = "develop"
+  image_tag = local.image_tag
 
   # Staging runs at debug. Per-request and stream-lifecycle lines are
   # level-gated rather than env-gated, so this is the switch that makes

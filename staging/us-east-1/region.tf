@@ -62,6 +62,7 @@ locals {
   # nat_mode routes at; emptying it releases the addresses for good.
   nat_pinned_azs = []
 
+  image_tag         = "develop"
   oauth_issuer_host = "staging-mcp.meandr.com"
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
