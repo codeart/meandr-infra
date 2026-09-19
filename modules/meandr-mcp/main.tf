@@ -145,6 +145,11 @@ locals {
 
     MEANDR_SESSION_TTL = var.session_ttl
 
+    # The name on the fleet's shared mesh certificate (internal-pki mints
+    # it as mesh.<zone>). Travels with the three PEM secrets: the proxy
+    # refuses to boot in stg/prd when the mesh TLS set is incomplete.
+    MEANDR_MESH_SERVER_NAME = var.mesh_secret_arn == "" ? "" : "mesh.${var.internal_dns_zone_name}"
+
     # OAuth discovery. Empty = dark: no WWW-Authenticate hint on 401s
     # and the RFC 9728 well-known route 404s.
     MEANDR_OAUTH_ISSUER = local.oauth_issuer
