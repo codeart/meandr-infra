@@ -104,6 +104,11 @@ module "db" {
   private_subnet_ids = module.vpc.private_subnet_ids
   secret_name        = "meandr/discourse/${var.env}/db"
 
+  # The rds-postgres defaults are staging's (tear down freely). This DB
+  # holds the community's posts and has no staging copy.
+  deletion_protection = true
+  skip_final_snapshot = false
+
   # A 1 GiB instance. Same tuning staging runs its db.t4g.micro with.
   db_parameters = {
     autovacuum_max_workers = "1"

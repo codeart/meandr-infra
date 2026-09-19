@@ -29,7 +29,53 @@ locals {
     ]
   ])
 
-  all_subs = concat(local.ref_subs, local.env_subs)
+  # A sub list in an IAM condition is OR — listing ref AND env subs let a
+  # bare-branch job assume the deploy role past the environment's reviewer
+  # gate (audit 2026-09-18 F2). Env-gated accounts trust env subs ONLY;
+  # ref subs get the read-only role below.
+  deploy_subs = length(local.env_subs) > 0 ? local.env_subs : local.ref_subs
+}
+
+# --- Role: read-only (ref-sub jobs) ---------------------------------------
+
+# For jobs that run before any environment gate (the regions resolver):
+# ref-trusted, and can read exactly the region parameter, nothing else.
+resource "aws_iam_role" "gh_actions_readonly" {
+  name = "gh-actions-readonly"
+  tags = merge(var.tags, { Name = "GitHub Actions Read-only" })
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Federated = aws_iam_openid_connect_provider.github.arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = local.ref_subs
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "gh_actions_readonly" {
+  name = "read-deploy-parameters"
+  role = aws_iam_role.gh_actions_readonly.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadRegionParameter"
+      Effect   = "Allow"
+      Action   = ["ssm:GetParameter"]
+      Resource = "arn:aws:ssm:*:${var.account_id}:parameter/meandr/*/regions"
+    }]
+  })
 }
 
 # --- Role: ECS deploy -----------------------------------------------------
@@ -54,7 +100,7 @@ resource "aws_iam_role" "gh_actions_deploy" {
             "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           }
           StringLike = {
-            "token.actions.githubusercontent.com:sub" = local.all_subs
+            "token.actions.githubusercontent.com:sub" = local.deploy_subs
           }
         }
       }

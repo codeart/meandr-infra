@@ -38,8 +38,9 @@ locals {
   # Operational alarms, not billing — the budget topic keeps aws-billing.
   alert_emails = ["aws-prd@meandr.com"]
 
-  # Production trusts main only, and the `production` GH Environment, whose
-  # required reviewers make a deploy need both a green main AND a human.
+  # The deploy role trusts the `production` GH Environment ONLY (reviewer
+  # gate enforced in IAM); refs/main gets just the read-only role for the
+  # pre-gate regions resolver. See account-bootstrap/oidc.tf.
   allowed_refs            = ["refs/heads/main"]
   allowed_gh_environments = ["production"]
 
