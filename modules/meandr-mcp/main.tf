@@ -279,15 +279,9 @@ resource "aws_security_group" "nlb" {
   tags = merge(local.base_tags, { Name = "MCP NLB" })
 }
 
-resource "aws_vpc_security_group_ingress_rule" "nlb_http" {
-  security_group_id = aws_security_group.nlb.id
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 80
-  to_port           = 80
-  ip_protocol       = "tcp"
-  description       = "Public HTTP"
-}
-
+# No :80 ingress, deliberately: the plain port stays for the target
+# group's health check only, reached from inside the VPC, never from the
+# internet. See the accelerator listener for the full rationale.
 resource "aws_vpc_security_group_ingress_rule" "nlb_tls" {
   security_group_id = aws_security_group.nlb.id
   cidr_ipv4         = "0.0.0.0/0"
@@ -371,19 +365,11 @@ resource "aws_lb_target_group" "proxy_tls" {
   }
 }
 
-resource "aws_lb_listener" "http_80" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = 80
-  protocol          = "TCP"
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.proxy.arn
-  }
-
-  tags = merge(local.base_tags, { Name = "MCP NLB TCP:80 listener" })
-}
-
+# No :80 listener. It forwarded the full mux — bearer auth included —
+# over plaintext, and its stated reason ("until the cert pipeline lands")
+# expired when ACME went live. The plain target group above SURVIVES:
+# ECS registers into it and its health check gates deployments; with no
+# listener and no SG ingress, nothing public can reach it.
 resource "aws_lb_listener" "http_443" {
   load_balancer_arn = aws_lb.main.arn
   port              = 443

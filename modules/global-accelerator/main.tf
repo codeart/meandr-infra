@@ -66,11 +66,11 @@ resource "aws_globalaccelerator_listener" "main" {
   client_affinity = "NONE"
   protocol        = "TCP"
 
-  port_range {
-    from_port = 80
-    to_port   = 80
-  }
-
+  # 443 ONLY — no port 80, deliberately. The proxy served its full mux,
+  # bearer auth included, over plaintext :80 (audit 2026-09-18 A2/CERT-1),
+  # and a redirect would not have fixed it: the token has already crossed
+  # the internet before any 308 arrives. A misconfigured http:// client
+  # must fail at connect, not leak quietly.
   port_range {
     from_port = 443
     to_port   = 443
