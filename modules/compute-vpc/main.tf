@@ -89,7 +89,7 @@ module "nat" {
 
   env       = var.env
   name      = "hosted"
-  az        = var.azs[0]
+  az        = local.az_names[var.azs[0]]
   vpc_id    = aws_vpc.main.id
   subnet_id = aws_subnet.public[var.azs[0]].id
   vpc_cidr  = aws_vpc.main.cidr_block
