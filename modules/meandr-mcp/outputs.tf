@@ -25,3 +25,9 @@ output "event_writer_endpoint" {
   description = "Master record of this region's event fleet, as given to the proxy. A bootstrap value: both sides discover the master through Sentinel."
   value       = var.event_writer_endpoint
 }
+
+# The Cloud Map namespace's private zone — the region stack associates it
+# with the compute VPC so hosted nodes can resolve proxy.svc.<zone>.
+output "discovery_zone_id" {
+  value = var.hosted_fleet_cidr == "" ? "" : aws_service_discovery_private_dns_namespace.svc[0].hosted_zone
+}

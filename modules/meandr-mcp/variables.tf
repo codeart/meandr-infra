@@ -483,3 +483,9 @@ variable "mesh_peer_cidrs" {
   type        = list(string)
   default     = []
 }
+
+variable "hosted_fleet_cidr" {
+  description = "The compute VPC's CIDR (hosted_nodes.md). Non-empty enables Cloud Map discovery + the fleet's direct-dial ingress rule."
+  type        = string
+  default     = ""
+}

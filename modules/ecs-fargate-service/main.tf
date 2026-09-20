@@ -286,6 +286,15 @@ resource "aws_ecs_service" "main" {
     }
   }
 
+  # Cloud Map: each task ENI IP as a health-gated A record — the LB-free
+  # discovery hosted nodes dial (hosted_nodes.md §2).
+  dynamic "service_registries" {
+    for_each = var.service_registry_arn != "" ? [1] : []
+    content {
+      registry_arn = var.service_registry_arn
+    }
+  }
+
   # When autoscaling is on, the desired_count gets managed externally — don't
   # fight it on every plan. Same for force-new-deployment behaviour where the
   # task_definition ARN doesn't change but the underlying image does.

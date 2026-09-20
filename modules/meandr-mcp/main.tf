@@ -726,6 +726,53 @@ resource "aws_security_group_rule" "proxy_egress_all" {
 
 # --- Proxy service ------------------------------------------------------
 
+# --- Hosted-fleet discovery (hosted_nodes.md §2) ------------------------
+#
+# LB-free: Cloud Map holds each task's IP as a health-gated A record;
+# hosted nodes resolve proxy.svc.<zone>, pick one, dial the TLS port over
+# the peering. Tunnel reconnect is the failover.
+
+resource "aws_service_discovery_private_dns_namespace" "svc" {
+  count = var.hosted_fleet_cidr == "" ? 0 : 1
+
+  name = "svc.${var.internal_dns_zone_name}"
+  vpc  = var.vpc_id
+  tags = merge(local.base_tags, { Name = "Service discovery" })
+}
+
+resource "aws_service_discovery_service" "proxy" {
+  count = var.hosted_fleet_cidr == "" ? 0 : 1
+
+  name = "proxy"
+
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.svc[0].id
+    routing_policy = "MULTIVALUE"
+
+    dns_records {
+      type = "A"
+      ttl  = 10
+    }
+  }
+
+  health_check_custom_config {}
+
+  tags = merge(local.base_tags, { Name = "Proxy discovery" })
+}
+
+resource "aws_security_group_rule" "proxy_ingress_fleet" {
+  count = var.hosted_fleet_cidr == "" ? 0 : 1
+
+  type              = "ingress"
+  security_group_id = aws_security_group.proxy.id
+
+  from_port   = var.proxy_tls_port
+  to_port     = var.proxy_tls_port
+  protocol    = "tcp"
+  cidr_blocks = [var.hosted_fleet_cidr]
+  description = "Hosted nodes dial the TLS port directly over peering"
+}
+
 module "proxy" {
   source = "../ecs-fargate-service"
 
@@ -756,6 +803,8 @@ module "proxy" {
   # listener references, so with :80 gone the plain TG cannot stay on
   # the service — its health role moves to the TLS TG + container check.
   target_group_arn = aws_lb_target_group.proxy_tls.arn
+
+  service_registry_arn = var.hosted_fleet_cidr == "" ? "" : aws_service_discovery_service.proxy[0].arn
 
   # Container-level health check distinct from the NLB target-group
   # health check (which gates LB routing). Without this the ECS task

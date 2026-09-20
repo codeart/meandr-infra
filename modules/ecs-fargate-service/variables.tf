@@ -240,3 +240,9 @@ variable "valkey_client_secret_arn" {
   type        = string
   default     = ""
 }
+
+variable "service_registry_arn" {
+  description = "Cloud Map service to register task IPs into. Empty = no discovery."
+  type        = string
+  default     = ""
+}

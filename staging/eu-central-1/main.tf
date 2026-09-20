@@ -323,7 +323,9 @@ module "valkey_recipes" {
 module "nat_recipes" {
   source = "../../modules/ssm-recipes"
 
-  instance_ids = module.vpc.nat_instance_ids
+  # Every NAT in the region, the hosted fleet's included — a box outside
+  # the recipes channel drifts exactly the way the ledger exists to stop.
+  instance_ids = concat(module.vpc.nat_instance_ids, [module.hosted.nat_instance_id])
   recipes_dir  = module.vpc.nat_recipes_dir
   label        = "nat"
 
@@ -503,6 +505,10 @@ module "mcp" {
 
   image_tag = local.image_tag
 
+  # Enables Cloud Map discovery + the fleet's direct-dial ingress
+  # (hosted_nodes.md §2). Same CIDR module.hosted uses below.
+  hosted_fleet_cidr = "10.11.0.0/16"
+
   # Staging runs at debug. Per-request and stream-lifecycle lines are
   # level-gated rather than env-gated, so this is the switch that makes
   # them visible.
@@ -671,3 +677,28 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   tags          = local.tags
 }
 
+
+# --- Hosted fleet (hosted_nodes.md, network_allocation.md §2-3) ---------
+#
+# eu-central-1's first compute block. Staging shares the region's decade
+# with production by design — separate accounts that never peer.
+
+module "hosted" {
+  source = "../../modules/compute-vpc"
+
+  env    = local.env
+  region = local.region
+  block  = "10.11"
+
+  main_vpc_id          = module.vpc.vpc_id
+  main_vpc_cidr        = module.vpc.vpc_cidr_block
+  main_route_table_ids = module.vpc.private_route_table_ids
+
+  tags = local.tags
+}
+
+# Hosted nodes resolve proxy.svc.<zone> from inside the compute VPC.
+resource "aws_route53_zone_association" "hosted_discovery" {
+  zone_id = module.mcp.discovery_zone_id
+  vpc_id  = module.hosted.vpc_id
+}
