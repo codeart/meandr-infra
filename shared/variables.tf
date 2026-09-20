@@ -21,6 +21,12 @@ variable "image_pusher_repos" {
   default     = ["meandr-mcp", "meandr-api", "meandr-agent"]
 }
 
+variable "image_pusher_immutable_subs" {
+  description = "repo name → immutable OIDC sub prefix (repo:<org>@<id>/<repo>@<id>) for repos on GitHub's immutable-subject format; read from the repo's actions/oidc/customization/sub. Absent repos use the classic repo:<org>/<repo> prefix."
+  type        = map(string)
+  default     = {}
+}
+
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)

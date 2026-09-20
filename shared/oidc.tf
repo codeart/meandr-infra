@@ -29,14 +29,16 @@ resource "aws_iam_openid_connect_provider" "github" {
 # --- Trust policy subs -----------------------------------------------------
 
 locals {
-  # Allowed `sub` claims for image-pushing repos. Permit pushes from any branch
-  # plus PR builds (PR builds will skip the actual push step in CI, but they
-  # need to authenticate to AWS for the build-and-verify path).
+  # Allowed `sub` claims for image-pushing repos: main/develop pushes plus PR
+  # builds (which skip the push step but still authenticate for build-and-verify).
+  # Newer repos present immutable id-pinned subs — see the tfvars map.
   image_pusher_subs = flatten([
     for repo in var.image_pusher_repos : [
-      "repo:${var.github_org}/${repo}:ref:refs/heads/main",
-      "repo:${var.github_org}/${repo}:ref:refs/heads/develop",
-      "repo:${var.github_org}/${repo}:pull_request",
+      for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] : [
+        "${prefix}:ref:refs/heads/main",
+        "${prefix}:ref:refs/heads/develop",
+        "${prefix}:pull_request",
+      ]
     ]
   ])
 }

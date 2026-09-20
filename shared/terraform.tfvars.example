@@ -12,3 +12,10 @@ github_org = "codeart"
 
 # Optional: override ECR repos if you need a different set.
 # ecr_repos = ["meandr-mcp", "meandr-api"]
+
+# Repos created after GitHub's immutable-subject cutover sign tokens with
+# id-pinned subs (the ids survive renames by design); values come verbatim
+# from GET repos/<org>/<repo>/actions/oidc/customization/sub → sub_claim_prefix.
+image_pusher_immutable_subs = {
+  "meandr-agent" = "repo:codeart@5684282/meandr-agent@1378600639"
+}
