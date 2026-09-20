@@ -697,7 +697,7 @@ module "hosted" {
 
   # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch
   # manifest tag; the ingest route is BE's (hosted_agent_report.md).
-  agent_image            = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:latest"
+  agent_image            = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:develop"
   agent_report_url       = "https://staging-api.meandr.com/api/hosted/v1/reports"
   agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
 
