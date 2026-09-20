@@ -18,13 +18,13 @@ variable "github_org" {
 variable "image_pusher_repos" {
   description = "List of GitHub repo names (within github_org) that build + push container images via CI. Trusted to assume the ECR push role."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api"]
+  default     = ["meandr-mcp", "meandr-api", "hosted-cli"]
 }
 
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api"]
+  default     = ["meandr-mcp", "meandr-api", "hosted-cli"]
 }
 
 variable "workload_account_ids" {
