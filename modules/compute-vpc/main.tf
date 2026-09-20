@@ -88,7 +88,7 @@ module "nat" {
   source = "../nat-instance"
 
   env       = var.env
-  name      = "hosted-nat-${local.az_names[var.azs[0]]}"
+  name      = "nat-hosted-${var.region_code}${var.azs[0]}"
   az        = local.az_names[var.azs[0]]
   vpc_id    = aws_vpc.main.id
   subnet_id = aws_subnet.public[var.azs[0]].id

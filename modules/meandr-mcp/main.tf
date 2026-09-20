@@ -755,7 +755,10 @@ resource "aws_service_discovery_service" "proxy" {
     }
   }
 
-  health_check_custom_config {}
+  # NO health_check_custom_config, deliberately: ECS deregisters a
+  # task's record on stop, which is the only health signal the tunnel's
+  # redial needs — and adding the block later REPLACES the service,
+  # which cannot delete while ECS holds registered task IPs in it.
 
   tags = merge(local.base_tags, { Name = "Proxy discovery" })
 }

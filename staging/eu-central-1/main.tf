@@ -686,9 +686,10 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
 module "hosted" {
   source = "../../modules/compute-vpc"
 
-  env    = local.env
-  region = local.region
-  block  = "10.11"
+  env         = local.env
+  region      = local.region
+  region_code = local.region_code
+  block       = "10.11"
 
   main_vpc_id          = module.vpc.vpc_id
   main_vpc_cidr        = module.vpc.vpc_cidr_block

@@ -25,6 +25,12 @@ variable "region" {
   type = string
 }
 
+# Short region code (euc1, use1) — the naming convention's region part:
+# <role>-<scope>-<code><az>, e.g. nat-hosted-euc1a (the valkey pattern).
+variable "region_code" {
+  type = string
+}
+
 # The main VPC this compute VPC peers with — its ONLY peering (§5).
 variable "main_vpc_id" {
   type = string
