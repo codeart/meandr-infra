@@ -15,8 +15,3 @@ output "instance_profile_arn" { value = aws_iam_instance_profile.node.arn }
 output "nat_public_ip" { value = module.nat.public_ip }
 output "nat_instance_id" { value = module.nat.instance_id }
 output "peering_connection_id" { value = aws_vpc_peering_connection.main.id }
-
-# BE validates inbound reports against the same token the agent sends.
-output "agent_token_parameter" {
-  value = var.agent_image == "" ? "" : aws_ssm_parameter.agent_token[0].name
-}

@@ -73,6 +73,15 @@ variable "agent_image" {
   default     = ""
 }
 
+# The env-wide agent token, one per environment: the PRIMARY region's
+# stack creates the SM secret (meandr/hosted/<env>/agent-token, the
+# redis_auth pattern) and replicates to compute regions; each region
+# passes its LOCAL copy's ARN here. BE validates against the primary.
+variable "agent_token_secret_arn" {
+  type    = string
+  default = ""
+}
+
 variable "agent_report_url" {
   description = "BE ingest endpoint the agent POSTs to (contracts/hosted_agent_report.md)."
   type        = string

@@ -697,10 +697,38 @@ module "hosted" {
 
   # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch
   # manifest tag; the ingest route is BE's (hosted_agent_report.md).
-  agent_image      = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:latest"
-  agent_report_url = "https://staging-api.meandr.com/api/hosted/v1/reports"
+  agent_image            = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:latest"
+  agent_report_url       = "https://staging-api.meandr.com/api/hosted/v1/reports"
+  agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
 
   tags = local.tags
+}
+
+# One agent token per ENVIRONMENT, the redis_auth shape: the primary
+# creates it, compute regions read their local replica, BE validates
+# against the primary. Fleet-authenticating — the payload's instance_id
+# names the box (contracts/hosted_agent_report.md).
+resource "random_password" "hosted_agent_token" {
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "hosted_agent_token" {
+  name        = "meandr/hosted/${local.env}/agent-token"
+  description = "Fleet token the instance agents bear on metric reports; BE compares."
+  tags        = local.tags
+
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "hosted_agent_token" {
+  secret_id     = aws_secretsmanager_secret.hosted_agent_token.id
+  secret_string = random_password.hosted_agent_token.result
 }
 
 # Hosted nodes resolve proxy.svc.<zone> from inside the compute VPC.

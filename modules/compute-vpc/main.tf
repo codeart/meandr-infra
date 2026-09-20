@@ -220,12 +220,17 @@ resource "aws_iam_role_policy" "task_execution_secrets" {
   role = aws_iam_role.task_execution.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = concat([{
       Sid      = "HostedNodeParameters"
       Effect   = "Allow"
       Action   = ["ssm:GetParameters"]
       Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/meandr/hosted/*"
-    }]
+      }], var.agent_token_secret_arn == "" ? [] : [{
+      Sid      = "AgentToken"
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = var.agent_token_secret_arn
+    }])
   })
 }
 
@@ -307,22 +312,6 @@ resource "aws_vpc_endpoint" "s3" {
 # what admits it to IMDS and introspection; the workloads' bridge
 # containers stay locked out.
 
-resource "random_password" "agent_token" {
-  count   = var.agent_image == "" ? 0 : 1
-  length  = 48
-  special = false
-}
-
-resource "aws_ssm_parameter" "agent_token" {
-  count = var.agent_image == "" ? 0 : 1
-
-  name  = "/meandr/hosted/${var.env}/agent-token"
-  type  = "SecureString"
-  value = random_password.agent_token[0].result
-
-  tags = local.base_tags
-}
-
 resource "aws_ecs_task_definition" "agent" {
   count = var.agent_image == "" ? 0 : 1
 
@@ -352,7 +341,7 @@ resource "aws_ecs_task_definition" "agent" {
     ]
     secrets = [{
       name      = "MEANDR_AGENT_TOKEN"
-      valueFrom = aws_ssm_parameter.agent_token[0].arn
+      valueFrom = var.agent_token_secret_arn
     }]
   }])
 
