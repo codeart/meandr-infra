@@ -88,7 +88,7 @@ module "nat" {
   source = "../nat-instance"
 
   env       = var.env
-  name      = "hosted"
+  name      = "hosted-nat-${local.az_names[var.azs[0]]}"
   az        = local.az_names[var.azs[0]]
   vpc_id    = aws_vpc.main.id
   subnet_id = aws_subnet.public[var.azs[0]].id
@@ -153,7 +153,7 @@ resource "aws_security_group" "node" {
 # --- ECS: the agent we did not write (hosted_nodes.md §6) ---------------
 
 resource "aws_ecs_cluster" "hosted" {
-  name = "hosted"
+  name = "meandr-hosted"
   tags = merge(local.base_tags, { Name = "Hosted fleet" })
 }
 
