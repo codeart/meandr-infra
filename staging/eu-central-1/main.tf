@@ -695,6 +695,11 @@ module "hosted" {
   main_vpc_cidr        = module.vpc.vpc_cidr_block
   main_route_table_ids = module.vpc.private_route_table_ids
 
+  # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch
+  # manifest tag; the ingest route is BE's (hosted_agent_report.md).
+  agent_image      = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:latest"
+  agent_report_url = "https://api.meandr.live/api/hosted/v1/reports"
+
   tags = local.tags
 }
 

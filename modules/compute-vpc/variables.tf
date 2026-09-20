@@ -66,3 +66,15 @@ variable "reserved_memory_mib" {
   type        = number
   default     = 128
 }
+
+variable "agent_image" {
+  description = "meandr-agent image URI (multi-arch manifest). Empty = no agent daemon yet."
+  type        = string
+  default     = ""
+}
+
+variable "agent_report_url" {
+  description = "BE ingest endpoint the agent POSTs to (contracts/hosted_agent_report.md)."
+  type        = string
+  default     = ""
+}

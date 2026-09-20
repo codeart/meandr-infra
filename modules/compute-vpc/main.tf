@@ -299,3 +299,74 @@ resource "aws_vpc_endpoint" "s3" {
 
   tags = merge(local.base_tags, { Name = "Hosted fleet S3" })
 }
+
+# --- The instance agent: a DAEMON service (hosted_nodes.md §7.5) --------
+#
+# One agent task on EVERY container instance, current and future — ECS
+# places it, restarts it, and needs no per-machine call. Host network is
+# what admits it to IMDS and introspection; the workloads' bridge
+# containers stay locked out.
+
+resource "random_password" "agent_token" {
+  count   = var.agent_image == "" ? 0 : 1
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "agent_token" {
+  count = var.agent_image == "" ? 0 : 1
+
+  name  = "/meandr/hosted/${var.env}/agent-token"
+  type  = "SecureString"
+  value = random_password.agent_token[0].result
+
+  tags = local.base_tags
+}
+
+resource "aws_ecs_task_definition" "agent" {
+  count = var.agent_image == "" ? 0 : 1
+
+  family                   = "meandr-agent"
+  requires_compatibilities = ["EC2"]
+  network_mode             = "host"
+  execution_role_arn       = aws_iam_role.task_execution.arn
+
+  volume {
+    name      = "docker-sock"
+    host_path = "/var/run/docker.sock"
+  }
+
+  container_definitions = jsonencode([{
+    name              = "agent"
+    image             = var.agent_image
+    essential         = true
+    memoryReservation = 32
+    memory            = 128
+    mountPoints = [{
+      sourceVolume  = "docker-sock"
+      containerPath = "/var/run/docker.sock"
+      readOnly      = true
+    }]
+    environment = [
+      { name = "MEANDR_REPORT_URL", value = var.agent_report_url },
+    ]
+    secrets = [{
+      name      = "MEANDR_AGENT_TOKEN"
+      valueFrom = aws_ssm_parameter.agent_token[0].arn
+    }]
+  }])
+
+  tags = local.base_tags
+}
+
+resource "aws_ecs_service" "agent" {
+  count = var.agent_image == "" ? 0 : 1
+
+  name                = "meandr-agent"
+  cluster             = aws_ecs_cluster.hosted.arn
+  task_definition     = aws_ecs_task_definition.agent[0].arn
+  scheduling_strategy = "DAEMON"
+  launch_type         = "EC2"
+
+  tags = merge(local.base_tags, { Name = "Instance agent" })
+}
