@@ -274,6 +274,13 @@ locals {
       echo "ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3h"
     } >> /etc/ecs/ecs.config
     dnf -y -q install htop mc || true
+    # System-wide fallback, read when a user has no ~/.config/htop/htoprc.
+    # NOT indent()ed — the nat-instance dedent trap: htop's parser
+    # refuses an indented key.
+    cat >/etc/htoprc <<'HTOPRC'
+    ${file("${path.module}/files/htoprc")}
+    HTOPRC
+    chmod 0644 /etc/htoprc
   EOF
   )
 }
