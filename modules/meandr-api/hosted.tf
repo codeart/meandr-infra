@@ -2,17 +2,21 @@
 # registers task defs, and runs one ECS service per ServerNode. Every
 # mutating grant is fenced to the fleet — tag-scoped terminate, cluster-
 # conditioned ECS — so a compromised BE cannot touch the main VPC's boxes.
+#
+# JOBS ROLE ONLY: launch/retire runs in Hosted::* jobs. Puma gets just
+# the token reads (below) — the internet-facing process can't buy or
+# kill anything.
 
 locals {
   hosted_regions      = [for f in var.hosted_fleets : f.region]
   hosted_cluster_arns = [for f in var.hosted_fleets : f.cluster_arn]
 }
 
-resource "aws_iam_role_policy" "task_hosted" {
+resource "aws_iam_role_policy" "jobs_hosted" {
   count = length(var.hosted_fleets) == 0 ? 0 : 1
 
   name = "hosted-orchestration"
-  role = aws_iam_role.task.id
+  role = aws_iam_role.task_acme.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -125,13 +129,25 @@ resource "aws_iam_role_policy" "task_hosted" {
         ]
         Resource = [for r in local.hosted_regions : "arn:aws:ssm:${r}:${var.account_id}:parameter/meandr/hosted/*"]
       },
-      # Both env tokens (agent + events) live in the API region only.
-      {
-        Sid      = "HostedTokens"
-        Effect   = "Allow"
-        Action   = "secretsmanager:GetSecretValue"
-        Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/hosted/${var.env}/*"
-      },
     ]
+  })
+}
+
+# Puma validates the agent/events bearers on /api/hosted/v1/* at request
+# time; both env tokens live in the API region only.
+resource "aws_iam_role_policy" "task_hosted_tokens" {
+  count = length(var.hosted_fleets) == 0 ? 0 : 1
+
+  name = "hosted-tokens"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "HostedTokens"
+      Effect   = "Allow"
+      Action   = "secretsmanager:GetSecretValue"
+      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/hosted/${var.env}/*"
+    }]
   })
 }
