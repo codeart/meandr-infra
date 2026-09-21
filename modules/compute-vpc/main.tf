@@ -254,6 +254,16 @@ locals {
   # on a live box by hand — dnf alone can swap a nano off the cluster.
   user_data = base64encode(<<-EOF
     #!/bin/bash
+    # Swap FIRST, before anything that allocates (the NAT lesson —
+    # dnf's Python peak OOMs a 512 MiB box). Sized to the rung the LT
+    # cannot know: 512 MiB on the 512 MiB rung, 1 GiB above it.
+    mem_kb=$$(awk '/MemTotal/{print $$2}' /proc/meminfo)
+    swap_mb=$$(( mem_kb < 700000 ? 512 : 1024 ))
+    dd if=/dev/zero of=/swapfile bs=1M count=$$swap_mb status=none
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
     cat > /etc/docker/daemon.json <<'JSON'
     {"log-driver":"json-file","log-opts":{"max-size":"20m","max-file":"3"}}
     JSON
