@@ -450,3 +450,14 @@ variable "db_parameters" {
   type        = map(string)
   default     = {}
 }
+
+variable "hosted_fleets" {
+  description = "Compute fleets this BE orchestrates, one entry per region (hosted.tf grants). Empty = no hosted policy."
+  type = list(object({
+    region                  = string
+    cluster_arn             = string
+    node_role_arn           = string
+    task_execution_role_arn = string
+  }))
+  default = []
+}

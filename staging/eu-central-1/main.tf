@@ -436,6 +436,15 @@ module "api" {
   # action key. Granted alongside the bucket key, not instead of it.
   action_key_enabled          = true
   envelope_encryption_key_arn = module.action_encryption_key.key_arn
+
+  # BE orchestrates this region's hosted fleet (hosted.tf grants:
+  # tag-fenced terminate, cluster-fenced ECS, both hosted tokens).
+  hosted_fleets = [{
+    region                  = local.region
+    cluster_arn             = module.hosted.cluster_arn
+    node_role_arn           = module.hosted.node_role_arn
+    task_execution_role_arn = module.hosted.task_execution_role_arn
+  }]
 }
 
 # --- meandr-mcp --------------------------------------------------------
