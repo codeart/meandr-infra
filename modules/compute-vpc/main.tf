@@ -291,6 +291,11 @@ resource "aws_launch_template" "node" {
   name     = "hosted-node-${each.key}"
   image_id = each.value.value
 
+  # An apply's new version becomes the DEFAULT — what a bare
+  # LaunchTemplateName launch resolves. Without this, applies bump
+  # `latest` while every launch keeps using v1.
+  update_default_version = true
+
   iam_instance_profile { arn = aws_iam_instance_profile.node.arn }
   vpc_security_group_ids = [aws_security_group.node.id]
 
