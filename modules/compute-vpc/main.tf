@@ -248,6 +248,10 @@ locals {
   # Cluster join + agent headroom; per-tenant attributes are applied by
   # BE via ecs:PutAttributes after registration, not baked here. The
   # daemon.json caps keep a chatty MCP from a disk-full outage (§8.2).
+  #
+  # Operator tools last: the ECS agent waits for user-data, so this runs
+  # before registration and never contends with a task's image pull. Never
+  # on a live box by hand — dnf alone can swap a nano off the cluster.
   user_data = base64encode(<<-EOF
     #!/bin/bash
     cat > /etc/docker/daemon.json <<'JSON'
@@ -259,6 +263,7 @@ locals {
       echo "ECS_RESERVED_MEMORY=${var.reserved_memory_mib}"
       echo "ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3h"
     } >> /etc/ecs/ecs.config
+    dnf -y -q install htop mc || true
   EOF
   )
 }
