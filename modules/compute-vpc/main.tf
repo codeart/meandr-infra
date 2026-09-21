@@ -95,7 +95,7 @@ module "nat" {
   vpc_cidr  = aws_vpc.main.cidr_block
 
   instance_type    = var.nat_instance_type
-  alarm_topic_arns = var.nat_alarm_topic_arns
+  alarm_topic_arns = var.alarm_topic_arns
   tags             = local.base_tags
 }
 

@@ -51,9 +51,10 @@ variable "nat_instance_type" {
   default = "t4g.nano"
 }
 
-variable "nat_alarm_topic_arns" {
-  type    = list(string)
-  default = []
+variable "alarm_topic_arns" {
+  description = "SNS topics for the module's alarms (NAT health, events DLQ)."
+  type        = list(string)
+  default     = []
 }
 
 variable "tags" {
@@ -86,4 +87,17 @@ variable "agent_report_url" {
   description = "BE ingest endpoint the agent POSTs to (contracts/hosted_agent_report.md)."
   type        = string
   default     = ""
+}
+
+variable "api_base_url" {
+  description = "BE API origin (https://…, no trailing slash); event destinations POST under /api/hosted/v1/events/ (contracts/hosted_platform_events.md)."
+  type        = string
+}
+
+# Env-wide like the agent token but a separate trust domain (AWS, not the
+# fleet); minted by the primary-region caller, value — not ARN — because
+# the EventBridge connection embeds it as a header.
+variable "events_token" {
+  type      = string
+  sensitive = true
 }

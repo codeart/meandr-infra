@@ -701,6 +701,10 @@ module "hosted" {
   agent_report_url       = "https://staging-api.meandr.com/api/hosted/v1/reports"
   agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
 
+  # Control-plane event log (contracts/hosted_platform_events.md).
+  api_base_url = "https://staging-api.meandr.com"
+  events_token = random_password.hosted_events_token.result
+
   tags = local.tags
 }
 
@@ -729,6 +733,26 @@ resource "aws_secretsmanager_secret" "hosted_agent_token" {
 resource "aws_secretsmanager_secret_version" "hosted_agent_token" {
   secret_id     = aws_secretsmanager_secret.hosted_agent_token.id
   secret_string = random_password.hosted_agent_token.result
+}
+
+# The events token is env-wide too but a separate trust domain — AWS's
+# EventBridge deliveries, not the fleet's agents. Only BE reads the
+# secret (from the primary), so no replicas; regional connections get
+# the value as module input.
+resource "random_password" "hosted_events_token" {
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "hosted_events_token" {
+  name        = "meandr/hosted/${local.env}/events-token"
+  description = "Bearer EventBridge presents on hosted control-plane event deliveries; BE compares."
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "hosted_events_token" {
+  secret_id     = aws_secretsmanager_secret.hosted_events_token.id
+  secret_string = random_password.hosted_events_token.result
 }
 
 # Hosted nodes resolve proxy.svc.<zone> from inside the compute VPC.
