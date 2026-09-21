@@ -99,9 +99,12 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         Resource = "*"
       },
       # Everything cluster-scoped is fenced to the fleet clusters — the
-      # main cluster running BE itself stays out of reach.
+      # main cluster running BE itself stays out of reach. Two statements
+      # because the fence differs: actions on things INSIDE a cluster
+      # carry the ecs:cluster key; actions ON the cluster itself don't —
+      # there the cluster ARN is the resource.
       {
-        Sid    = "FleetClusterOnly"
+        Sid    = "FleetClusterMembers"
         Effect = "Allow"
         Action = [
           "ecs:CreateService",
@@ -110,7 +113,6 @@ resource "aws_iam_role_policy" "jobs_hosted" {
           "ecs:DescribeServices",
           "ecs:ListTasks",
           "ecs:DescribeTasks",
-          "ecs:ListContainerInstances",
           "ecs:DescribeContainerInstances",
           "ecs:PutAttributes",
         ]
@@ -118,6 +120,15 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         Condition = {
           ArnEquals = { "ecs:cluster" = local.hosted_cluster_arns }
         }
+      },
+      {
+        Sid    = "FleetCluster"
+        Effect = "Allow"
+        Action = [
+          "ecs:ListContainerInstances",
+          "ecs:PutAttributes",
+        ]
+        Resource = local.hosted_cluster_arns
       },
       {
         Sid    = "NodeParameters"
