@@ -167,6 +167,18 @@ module "cost_anomaly" {
   tags = local.account_tags
 }
 
+# --- Hosted fleet identities (hosted_nodes.md §6) -----------------------
+#
+# IAM is account-global and every fleet region shares these, so they are
+# created here and looked up by name from each region's compute-vpc.
+
+module "compute_identities" {
+  source = "../modules/compute-identities"
+
+  env  = local.env
+  tags = local.account_tags
+}
+
 # --- Outputs ------------------------------------------------------------
 
 # Regions hardcode these arns, the same call made for acme_dns_role_arn:

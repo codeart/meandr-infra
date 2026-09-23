@@ -107,34 +107,10 @@ resource "aws_sqs_queue_policy" "events_dlq" {
   })
 }
 
-# Region-qualified: IAM names are account-global and production runs two
-# fleet regions in one account.
-resource "aws_iam_role" "events_invoke" {
-  name = "hosted-events-invoke-${var.region_code}"
-  tags = local.base_tags
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "events.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "events_invoke" {
-  name = "invoke"
-  role = aws_iam_role.events_invoke.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "events:InvokeApiDestination"
-      Resource = [for d in aws_cloudwatch_event_api_destination.events : d.arn]
-    }]
-  })
+# Account-global, from modules/compute-identities: one role delivers for
+# every region's api destinations.
+data "aws_iam_role" "events_invoke" {
+  name = "hosted-events-invoke"
 }
 
 resource "aws_cloudwatch_event_target" "events" {
@@ -146,7 +122,7 @@ resource "aws_cloudwatch_event_target" "events" {
 
   rule     = each.value
   arn      = aws_cloudwatch_event_api_destination.events[each.key].arn
-  role_arn = aws_iam_role.events_invoke.arn
+  role_arn = data.aws_iam_role.events_invoke.arn
 
   retry_policy {
     maximum_event_age_in_seconds = 86400

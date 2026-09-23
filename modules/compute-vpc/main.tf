@@ -157,81 +157,19 @@ resource "aws_ecs_cluster" "hosted" {
   tags = merge(local.base_tags, { Name = "Hosted fleet" })
 }
 
-# Instance role: ECS agent registration + SSM (log snapshots ride
-# RunCommand). Nothing more — a bridge container cannot reach IMDS
-# (hop limit 1), and the role stays minimal anyway.
-resource "aws_iam_role" "node" {
+# The identities are account-global, created by account-<env>/ through
+# modules/compute-identities. Looked up, never created, so every fleet
+# region shares one of each.
+data "aws_iam_role" "node" {
   name = "hosted-node"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-
-  tags = local.base_tags
 }
 
-resource "aws_iam_role_policy_attachment" "node_ecs" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
-}
-
-resource "aws_iam_role_policy_attachment" "node_ssm" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "node" {
+data "aws_iam_instance_profile" "node" {
   name = "hosted-node"
-  role = aws_iam_role.node.name
 }
 
-# One SHARED task-execution role: assumed by the ECS agent, never exposed
-# to the workload — with no task role assigned, the customer's container
-# holds no AWS credentials at all (hosted_nodes.md §6).
-resource "aws_iam_role" "task_execution" {
+data "aws_iam_role" "task_execution" {
   name = "hosted-task-execution"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ecs-tasks.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-
-  tags = local.base_tags
-}
-
-resource "aws_iam_role_policy_attachment" "task_execution" {
-  role       = aws_iam_role.task_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-data "aws_caller_identity" "current" {}
-
-resource "aws_iam_role_policy" "task_execution_secrets" {
-  name = "read-hosted-secrets"
-  role = aws_iam_role.task_execution.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = concat([{
-      Sid      = "HostedNodeParameters"
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameters"]
-      Resource = "arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/meandr/hosted/*"
-      }], var.agent_token_secret_arn == "" ? [] : [{
-      Sid      = "AgentToken"
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
-      Resource = var.agent_token_secret_arn
-    }])
-  })
 }
 
 # --- Launch templates: one per arch -------------------------------------
@@ -296,7 +234,7 @@ resource "aws_launch_template" "node" {
   # `latest` while every launch keeps using v1.
   update_default_version = true
 
-  iam_instance_profile { arn = aws_iam_instance_profile.node.arn }
+  iam_instance_profile { arn = data.aws_iam_instance_profile.node.arn }
   vpc_security_group_ids = [aws_security_group.node.id]
 
   user_data = local.user_data
@@ -345,7 +283,7 @@ resource "aws_ecs_task_definition" "agent" {
   family                   = "meandr-agent"
   requires_compatibilities = ["EC2"]
   network_mode             = "host"
-  execution_role_arn       = aws_iam_role.task_execution.arn
+  execution_role_arn       = data.aws_iam_role.task_execution.arn
 
   volume {
     name      = "docker-sock"
