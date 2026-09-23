@@ -294,8 +294,8 @@ resource "aws_ecs_task_definition" "agent" {
     name              = "agent"
     image             = var.agent_image
     essential         = true
-    memoryReservation = 32
-    memory            = 128
+    memoryReservation = 16
+    memory            = 32
     mountPoints = [{
       sourceVolume  = "docker-sock"
       containerPath = "/var/run/docker.sock"
