@@ -437,11 +437,13 @@ module "api" {
   action_key_enabled          = true
   envelope_encryption_key_arn = module.action_encryption_key.key_arn
 
-  # BE orchestrates this region's hosted fleet (hosted.tf grants:
-  # tag-fenced terminate, cluster-fenced ECS, both hosted tokens).
-  hosted_fleets = [{
-    region                  = local.region
-    cluster_arn             = module.hosted.cluster_arn
+  # BE orchestrates every region's hosted fleet (hosted.tf grants:
+  # tag-fenced terminate, cluster-fenced ECS, both hosted tokens). Each edge
+  # hosts one, and must be an edge_region anyway to get the agent token.
+  # The identities are account-global, so one set serves them all.
+  hosted_fleets = [for r in concat([local.region], local.edge_regions) : {
+    region                  = r
+    cluster_arn             = "arn:aws:ecs:${r}:${local.account_id}:cluster/${module.hosted.cluster_name}"
     node_role_arn           = module.hosted.node_role_arn
     task_execution_role_arn = module.hosted.task_execution_role_arn
   }]
@@ -516,7 +518,7 @@ module "mcp" {
 
   # Enables Cloud Map discovery + the fleet's direct-dial ingress
   # (hosted_nodes.md §2). Same CIDR module.hosted uses below.
-  hosted_fleet_cidr = "10.11.0.0/16"
+  hosted_fleet_cidr = "${local.hosted_block}.0.0/16"
 
   # Staging runs at debug. Per-request and stream-lifecycle lines are
   # level-gated rather than env-gated, so this is the switch that makes
@@ -689,7 +691,7 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
 
 # --- Hosted fleet (hosted_nodes.md, network_allocation.md §2-3) ---------
 #
-# eu-central-1's first compute block. Staging shares the region's decade
+# The region's first compute block. Staging shares the region's decade
 # with production by design — separate accounts that never peer.
 
 module "hosted" {
@@ -698,20 +700,21 @@ module "hosted" {
   env         = local.env
   region      = local.region
   region_code = local.region_code
-  block       = "10.11"
+  block       = local.hosted_block
 
   main_vpc_id          = module.vpc.vpc_id
   main_vpc_cidr        = module.vpc.vpc_cidr_block
   main_route_table_ids = module.vpc.private_route_table_ids
 
-  # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch
-  # manifest tag; the ingest route is BE's (hosted_agent_report.md).
-  agent_image            = "303529433558.dkr.ecr.eu-central-1.amazonaws.com/meandr-agent:develop"
-  agent_report_url       = "https://staging-api.meandr.com/api/hosted/v1/reports"
+  # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch manifest,
+  # pulled from THIS region's ECR replica; the ingest route is BE's
+  # (hosted_agent_report.md).
+  agent_image            = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
+  agent_report_url       = "https://${local.api_hostname}/api/hosted/v1/reports"
   agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
 
   # Control-plane event log (contracts/hosted_platform_events.md).
-  api_base_url = "https://staging-api.meandr.com"
+  api_base_url = "https://${local.api_hostname}"
   events_token = random_password.hosted_events_token.result
 
   tags = local.tags

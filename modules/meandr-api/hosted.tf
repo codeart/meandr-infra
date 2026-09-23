@@ -71,7 +71,7 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         Sid      = "LaunchTemplateCarriesTheInstanceProfile"
         Effect   = "Allow"
         Action   = "iam:PassRole"
-        Resource = [for f in var.hosted_fleets : f.node_role_arn]
+        Resource = distinct([for f in var.hosted_fleets : f.node_role_arn])
         Condition = {
           StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" }
         }
@@ -80,7 +80,7 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         Sid      = "TaskDefinitionNamesTheExecutionRole"
         Effect   = "Allow"
         Action   = "iam:PassRole"
-        Resource = [for f in var.hosted_fleets : f.task_execution_role_arn]
+        Resource = distinct([for f in var.hosted_fleets : f.task_execution_role_arn])
         Condition = {
           StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" }
         }

@@ -45,6 +45,10 @@ locals {
   # in the same region use the same block.
   vpc_cidr = "10.10.0.0/16"
 
+  # The region's FIRST compute block (network_allocation.md §2): the hosted
+  # fleet's VPC, and the CIDR the proxy admits it from.
+  hosted_block = "10.11"
+
   # One NAT per listed AZ; a zone without its own egresses through the
   # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a"]

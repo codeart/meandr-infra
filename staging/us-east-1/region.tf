@@ -50,6 +50,10 @@ locals {
   # network); the rest are properties of the ENVIRONMENT.
   vpc_cidr = "10.20.0.0/16"
 
+  # The region's FIRST compute block (network_allocation.md §2): the hosted
+  # fleet's VPC, and the CIDR the proxy admits it from.
+  hosted_block = "10.21"
+
   # One NAT per listed AZ; a zone without its own egresses through the
   # first. Against ~$33-38/month per managed gateway address.
   nat_instance_azs = ["${local.region}a"]
@@ -63,6 +67,7 @@ locals {
   nat_pinned_azs = []
 
   image_tag         = "develop"
+  api_hostname      = "staging-api.meandr.com"
   oauth_issuer_host = "staging-mcp.meandr.com"
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
