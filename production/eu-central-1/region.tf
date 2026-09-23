@@ -50,6 +50,10 @@ locals {
   # network); the rest are properties of the ENVIRONMENT.
   vpc_cidr = "10.10.0.0/16"
 
+  # The region's FIRST compute block (network_allocation.md §2): the hosted
+  # fleet's VPC, and the CIDR the proxy admits it from.
+  hosted_block = "10.11"
+
   # One NAT per AZ, c included: it holds only the Sentinel arbiters, but
   # they do egress — SSM, CloudWatch, source builds at boot — and its own
   # instance keeps that off a sibling's address and off the cross-AZ meter.
@@ -67,6 +71,7 @@ locals {
   nat_pinned_azs = []
 
   image_tag         = "main"
+  api_hostname      = "api.meandr.com"
   oauth_issuer_host = "mcp.meandr.com"
   proxy             = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 

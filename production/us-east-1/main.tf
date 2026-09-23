@@ -317,6 +317,22 @@ module "valkey_recipes" {
   aws_region  = local.region
 }
 
+# The NAT boxes are SSM-managed nodes like any other. Wired with an empty
+# set: everything they need at boot is in user-data, and this is here for
+# the day something has to change on a box that is already routing.
+module "nat_recipes" {
+  source = "../../modules/ssm-recipes"
+
+  # Every NAT in the region, the hosted fleet's included — a box outside
+  # the recipes channel drifts exactly the way the ledger exists to stop.
+  instance_ids = concat(module.vpc.nat_instance_ids, [module.hosted.nat_instance_id])
+  recipes_dir  = module.vpc.nat_recipes_dir
+  label        = "nat"
+
+  aws_profile = local.aws_profile
+  aws_region  = local.region
+}
+
 # --- meandr-api ---------------------------------------------------------
 
 module "api" {
@@ -420,6 +436,17 @@ module "api" {
   # action key. Granted alongside the bucket key, not instead of it.
   action_key_enabled          = true
   envelope_encryption_key_arn = module.action_encryption_key.key_arn
+
+  # BE orchestrates every region's hosted fleet (hosted.tf grants:
+  # tag-fenced terminate, cluster-fenced ECS, both hosted tokens). Each edge
+  # hosts one, and must be an edge_region anyway to get the agent token.
+  # The identities are account-global, so one set serves them all.
+  hosted_fleets = [for r in concat([local.region], local.edge_regions) : {
+    region                  = r
+    cluster_arn             = "arn:aws:ecs:${r}:${local.account_id}:cluster/${module.hosted.cluster_name}"
+    node_role_arn           = module.hosted.node_role_arn
+    task_execution_role_arn = module.hosted.task_execution_role_arn
+  }]
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -488,6 +515,10 @@ module "mcp" {
   account_id = local.account_id
 
   image_tag = local.image_tag
+
+  # Enables Cloud Map discovery + the fleet's direct-dial ingress
+  # (hosted_nodes.md §2). Same CIDR module.hosted uses below.
+  hosted_fleet_cidr = "${local.hosted_block}.0.0/16"
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
@@ -650,6 +681,90 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   alarm_actions = [local.ga_alerts_topic_arn]
   ok_actions    = [local.ga_alerts_topic_arn]
   tags          = local.tags
+}
+
+# --- Hosted fleet (hosted_nodes.md, network_allocation.md §2-3) ---------
+#
+# The region's first compute block. Staging shares the region's decade
+# with production by design — separate accounts that never peer.
+
+module "hosted" {
+  source = "../../modules/compute-vpc"
+
+  env         = local.env
+  region      = local.region
+  region_code = local.region_code
+  block       = local.hosted_block
+
+  main_vpc_id          = module.vpc.vpc_id
+  main_vpc_cidr        = module.vpc.vpc_cidr_block
+  main_route_table_ids = module.vpc.private_route_table_ids
+
+  # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch manifest,
+  # pulled from THIS region's ECR replica; the ingest route is BE's
+  # (hosted_agent_report.md).
+  agent_image            = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
+  agent_report_url       = "https://${local.api_hostname}/api/hosted/v1/reports"
+  agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
+
+  # Control-plane event log (contracts/hosted_platform_events.md).
+  api_base_url = "https://${local.api_hostname}"
+  events_token = random_password.hosted_events_token.result
+
+  tags = local.tags
+}
+
+# One agent token per ENVIRONMENT, the redis_auth shape: the primary
+# creates it, compute regions read their local replica, BE validates
+# against the primary. Fleet-authenticating — the payload's instance_id
+# names the box (contracts/hosted_agent_report.md).
+resource "random_password" "hosted_agent_token" {
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "hosted_agent_token" {
+  name        = "meandr/hosted/${local.env}/agent-token"
+  description = "Fleet token the instance agents bear on metric reports; BE compares."
+  tags        = local.tags
+
+  dynamic "replica" {
+    for_each = local.edge_regions
+    content {
+      region = replica.value
+    }
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "hosted_agent_token" {
+  secret_id     = aws_secretsmanager_secret.hosted_agent_token.id
+  secret_string = random_password.hosted_agent_token.result
+}
+
+# The events token is env-wide too but a separate trust domain — AWS's
+# EventBridge deliveries, not the fleet's agents. Only BE reads the
+# secret (from the primary), so no replicas; regional connections get
+# the value as module input.
+resource "random_password" "hosted_events_token" {
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "hosted_events_token" {
+  name        = "meandr/hosted/${local.env}/events-token"
+  description = "Bearer EventBridge presents on hosted control-plane event deliveries; BE compares."
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "hosted_events_token" {
+  secret_id     = aws_secretsmanager_secret.hosted_events_token.id
+  secret_string = random_password.hosted_events_token.result
+}
+
+# Hosted nodes resolve proxy.svc.<zone> from inside the compute VPC.
+resource "aws_route53_zone_association" "hosted_discovery" {
+  zone_id = module.mcp.discovery_zone_id
+  vpc_id  = module.hosted.vpc_id
 }
 
 # --- Discourse ------------------------------------------------------------
