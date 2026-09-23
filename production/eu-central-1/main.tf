@@ -19,7 +19,8 @@ module "vpc" {
   env = local.env
 
   cidr_block = local.vpc_cidr
-  # APPEND only — subnet ids are consumed positionally.
+  # APPEND only. Subnet ids are output in this order and callers index them
+  # positionally, so inserting an AZ would move existing nodes.
   azs        = ["${local.region}a", "${local.region}b", "${local.region}c"]
   enable_nat = true
 

@@ -476,7 +476,6 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   tags          = local.tags
 }
 
-
 # --- Hosted fleet (hosted_nodes.md, network_allocation.md §2-3) ---------
 #
 # The region's first compute block. Staging shares the region's decade
