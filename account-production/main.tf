@@ -30,6 +30,10 @@ module "account_bootstrap" {
   account_id = local.account_id
   github_org = var.github_org
 
+  # meandr-agent rolls out its own daemon (hosted fleet) after each push.
+  github_repos          = ["meandr-mcp", "meandr-api", "meandr-agent"]
+  github_immutable_subs = { "meandr-agent" = "repo:codeart@5684282/meandr-agent@1378600639" }
+
   allowed_refs            = local.allowed_refs
   allowed_gh_environments = local.allowed_gh_environments
 

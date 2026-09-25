@@ -14,6 +14,12 @@ variable "github_repos" {
   default     = ["meandr-mcp", "meandr-api"]
 }
 
+variable "github_immutable_subs" {
+  description = "Repo name -> sub_claim_prefix for repos created after GitHub's immutable-subject cutover (GET repos/<org>/<repo>/actions/oidc/customization/sub). Others use repo:<org>/<repo>."
+  type        = map(string)
+  default     = {}
+}
+
 variable "allowed_refs" {
   description = "List of git ref patterns (within each trusted repo) allowed to assume the deploy role. Examples: 'refs/heads/main', 'refs/heads/develop'."
   type        = list(string)

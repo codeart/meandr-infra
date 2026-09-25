@@ -15,17 +15,20 @@ resource "aws_iam_openid_connect_provider" "github" {
 # --- Trust policy subs ----------------------------------------------------
 
 locals {
+  # Newer repos sign id-pinned subs; the classic form never matches them.
+  sub_prefix = { for repo in var.github_repos : repo => lookup(var.github_immutable_subs, repo, "repo:${var.github_org}/${repo}") }
+
   # Ref-based trust (branch / tag patterns).
   ref_subs = flatten([
     for repo in var.github_repos : [
-      for ref in var.allowed_refs : "repo:${var.github_org}/${repo}:ref:${ref}"
+      for ref in var.allowed_refs : "${local.sub_prefix[repo]}:ref:${ref}"
     ]
   ])
 
   # Environment-based trust (GH Actions Environments — used for prod approval gates).
   env_subs = flatten([
     for repo in var.github_repos : [
-      for env_name in var.allowed_gh_environments : "repo:${var.github_org}/${repo}:environment:${env_name}"
+      for env_name in var.allowed_gh_environments : "${local.sub_prefix[repo]}:environment:${env_name}"
     ]
   ])
 
