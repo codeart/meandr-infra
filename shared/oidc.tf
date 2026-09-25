@@ -101,6 +101,15 @@ data "aws_iam_policy_document" "ecr_push" {
     ]
     resources = [for r in var.ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
   }
+  # Replication copies pushes, never deletions, so promote drops the
+  # replica's `unstable-*` tag itself; left there, the lifecycle rule
+  # expires the whole image a week later, `<branch>` tag and all.
+  statement {
+    sid       = "DemoteInReplica"
+    effect    = "Allow"
+    actions   = ["ecr:DescribeImages", "ecr:BatchDeleteImage"]
+    resources = [for r in var.ecr_repos : "arn:aws:ecr:${var.replication_destination_region}:${local.shared_account_id}:repository/${r}"]
+  }
 }
 
 resource "aws_iam_policy" "ecr_push" {
