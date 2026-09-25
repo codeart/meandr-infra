@@ -92,7 +92,7 @@ locals {
   valkey_instance_type = "t4g.nano"
   valkey_arbiter_type  = "t4g.nano"
 
-  db_instance_class = "db.t4g.micro"
+  db_instance_class = "db.t4g.small"
   puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
@@ -101,19 +101,14 @@ locals {
 
   # --- Postgres tuning -------------------------------------------------
   #
-  # The RDS defaults do not fit 1 GiB: autovacuum_work_mem takes its 64 MiB
-  # FLOOR rather than the 32 MiB the formula computes, three workers of it,
-  # and max_connections resolves to 112 the instance cannot hold. Postgres
-  # OOMed on 2026-08-31 with 150 MiB of swap in use and ~95 MiB freeable.
-  #
-  # max_connections is a CEILING BELOW the pool sum, deliberately: puma 15 +
-  # jobs 30 + ingest 30 is 75 at desired_count and 210 fully scaled. Refusing
-  # the 51st connection is a Rails exception; the alternative is the OOM
-  # killer choosing, which costs four minutes of crash recovery.
+  # max_connections is a CEILING sized to memory, not to the pool sum (75 at
+  # desired_count): a refused connection is a Rails exception, an OOM is
+  # crash recovery (2026-08-31). ~12 MiB each on the micro; 100 fits 2 GiB
+  # and covers steady state (~41) plus a deploy's second set of pools.
   db_parameters = {
     autovacuum_max_workers = "1"
     autovacuum_work_mem    = "32768" # KB
-    max_connections        = "50"
+    max_connections        = "100"
   }
 
   # --- What this region knows about the others -------------------------
