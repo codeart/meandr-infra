@@ -27,51 +27,53 @@ resource "aws_ecr_repository" "service" {
 
 # --- Lifecycle policy — keep storage costs bounded -----------------------
 
+# Keep what runs plus the 5 newest builds; delete everything else. An image
+# matched by a rule cannot be expired by a LOWER-priority one, which is what
+# lets rules 1-2 shield main and develop from rule 4.
 locals {
   ecr_lifecycle_policy = jsonencode({
     rules = [
       {
         rulePriority = 1
-        description  = "Keep last 30 production-tagged images"
+        description  = "Keep what production runs"
         selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = ["v", "release-"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 30
+          tagStatus      = "tagged"
+          tagPatternList = ["main"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 1
         }
         action = { type = "expire" }
       },
       {
         rulePriority = 2
-        description  = "Keep last 50 commit-SHA-tagged images (dev cycles)"
+        description  = "Keep what staging runs"
         selection = {
           tagStatus      = "tagged"
-          tagPatternList = ["sha-*"]
+          tagPatternList = ["develop"]
           countType      = "imageCountMoreThan"
-          countNumber    = 50
+          countNumber    = 1
         }
         action = { type = "expire" }
       },
       {
         rulePriority = 3
-        description  = "Drop untagged images after 7 days"
+        description  = "Drop untagged images after a day"
         selection = {
           tagStatus   = "untagged"
           countType   = "sinceImagePushed"
           countUnit   = "days"
-          countNumber = 7
+          countNumber = 1
         }
         action = { type = "expire" }
       },
       {
         rulePriority = 4
-        description  = "Expire stray unstable-* images after 7 days (CI promote step normally deletes them on success; this catches what slipped through)"
+        description  = "Keep only the 5 newest other builds"
         selection = {
           tagStatus      = "tagged"
-          tagPatternList = ["unstable-*"]
-          countType      = "sinceImagePushed"
-          countUnit      = "days"
-          countNumber    = 7
+          tagPatternList = ["*"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 5
         }
         action = { type = "expire" }
       },
