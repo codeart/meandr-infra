@@ -291,11 +291,12 @@ resource "aws_ecs_task_definition" "agent" {
   }
 
   container_definitions = jsonencode([{
-    name              = "agent"
-    image             = var.agent_image
-    essential         = true
-    memoryReservation = 16
-    memory            = 32
+    name      = "agent"
+    image     = var.agent_image
+    essential = true
+    # 8 MiB used, 8 of headroom — what the BE sets aside per machine
+    # (Hosted::Instance::AGENT_RESERVE_MB); the customer pays for the rest.
+    memory = 16
     mountPoints = [{
       sourceVolume  = "docker-sock"
       containerPath = "/var/run/docker.sock"
