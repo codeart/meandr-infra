@@ -104,6 +104,11 @@ for _ in $(seq 30); do
   [ "$(systemctl show -p ActiveState --value valkey-metrics.service)" = activating ] || break
   sleep 1
 done
+# A start now would join the old run and report its result as the new script's.
+if [ "$(systemctl show -p ActiveState --value valkey-metrics.service)" = activating ]; then
+  echo "old metrics run still going after 30 s; not swapping under it" >&2
+  exit 1
+fi
 
 cp -p "$BIN" "$PREV"
 install -m 0755 "$NEW" "$BIN.new"
