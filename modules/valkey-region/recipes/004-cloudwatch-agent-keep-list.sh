@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Agent keep-list: mem_used_percent, swap_used_percent, disk_used_percent (/)
-# at 60 s. CPU and network come free as AWS/EC2; procstat is gone with 003.
+# Agent keep-list: mem_used_percent, swap_used_percent, disk_used_percent (/) at
+# 60 s. CPU and network fall back to AWS/EC2 basic monitoring: 5 min, no iowait.
 # Same mechanics as 003: jq-edit a copy, fetch-config it, prove it took.
 set -euo pipefail
 
