@@ -1,2 +1,2 @@
 # Recipes for RUNNING NAT boxes, once per node over SSM (modules/ssm-recipes).
-# What a NAT needs at boot stays in user-data; this keeps the directory if the set empties.
+# Empty today: boot config belongs in user-data. Keeps the directory for fileset().

@@ -232,7 +232,6 @@ resource "aws_cloudwatch_metric_alarm" "instance_health" {
 
 # Conntrack exhaustion refuses NEW connections while established ones keep
 # working; over 80% is a capacity warning: raise nf_conntrack_max or the size.
-# A 5 min Maximum reads the same at recipe 001's 1 min cadence or the boot timer's.
 resource "aws_cloudwatch_metric_alarm" "conntrack" {
   alarm_name          = "${local.name}-conntrack"
   namespace           = local.metric_namespace

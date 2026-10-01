@@ -256,8 +256,9 @@ module "valkey_recipes" {
   aws_region  = local.region
 }
 
-# The NAT boxes are SSM-managed nodes like any other: boot config stays in
-# user-data, and recipes change a box that is already routing.
+# The NAT boxes are SSM-managed nodes like any other. Wired with an empty
+# set: everything they need at boot is in user-data, and this is here for
+# the day something has to change on a box that is already routing.
 module "nat_recipes" {
   source = "../../modules/ssm-recipes"
 
