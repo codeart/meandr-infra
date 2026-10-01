@@ -20,6 +20,13 @@ if [ "${#CONFS[@]}" -ne 1 ]; then
 fi
 CONF="${CONFS[0]}"
 
+keep_list() {
+  jq -e '(.metrics.metrics_collected | keys) == ["disk", "mem", "swap"]
+    and .agent.metrics_collection_interval == 60
+    and .metrics.namespace == "meandr/valkey"
+    and .metrics.append_dimensions.InstanceId == "${aws:InstanceId}"' "$1" >/dev/null 2>&1
+}
+
 # The whole collected set is replaced, so data nodes and arbiters converge
 # on the same config whatever 003 left behind.
 jq '
@@ -33,6 +40,11 @@ jq '
 ' "$CONF" >"$TMP"
 
 [ -s "$TMP" ] || { echo "jq produced no output; leaving config untouched" >&2; rm -f "$TMP"; exit 1; }
+if ! keep_list "$TMP"; then
+  echo "edited config lacks the keep-list, namespace or InstanceId; leaving config untouched" >&2
+  rm -f "$TMP"
+  exit 1
+fi
 
 if cmp -s "$CONF" "$TMP"; then
   echo "already on the keep-list"
@@ -44,8 +56,7 @@ fi
 rm -f "$TMP"
 
 NEW="$(find "$CONF_DIR" -name '*.json' -type f 2>/dev/null | head -1)"
-if ! jq -e '(.metrics.metrics_collected | keys) == ["disk", "mem", "swap"]
-  and .agent.metrics_collection_interval == 60' "$NEW" >/dev/null 2>&1; then
+if ! keep_list "$NEW"; then
   echo "agent config is not the keep-list after reload" >&2
   exit 1
 fi
