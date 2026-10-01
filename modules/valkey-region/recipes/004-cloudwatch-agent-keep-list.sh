@@ -6,6 +6,7 @@ set -euo pipefail
 
 CTL=/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
 CONF_DIR=/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.d
+TOML=/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.toml
 TMP=/var/tmp/cwagent-trimmed.json
 
 if [ ! -x "$CTL" ]; then
@@ -46,9 +47,15 @@ if ! keep_list "$TMP"; then
   exit 1
 fi
 
-if cmp -s "$CONF" "$TMP"; then
-  echo "already on the keep-list"
+# The agent runs the generated TOML, so a JSON newer than it was never translated
+# (a fetch-config that failed after writing it); that case reloads below.
+if cmp -s "$CONF" "$TMP" && [ ! "$CONF" -nt "$TOML" ]; then
   rm -f "$TMP"
+  if ! "$CTL" -a status | jq -e '.status == "running"' >/dev/null; then
+    echo "config is on the keep-list but the agent is not running" >&2
+    exit 1
+  fi
+  echo "already on the keep-list"
   exit 0
 fi
 
