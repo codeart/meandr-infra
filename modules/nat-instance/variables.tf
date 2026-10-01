@@ -113,6 +113,17 @@ variable "alarm_topic_arns" {
   default     = []
 }
 
+variable "metrics_interval" {
+  description = "Seconds between ConntrackPercent datapoints, and so the conntrack alarm's period: 60 once recipes/001 has run, 300 for a NAT outside the recipes channel (boot timer)."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = contains([60, 300], var.metrics_interval)
+    error_message = "metrics_interval is 60 (recipes channel) or 300 (boot timer only)."
+  }
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

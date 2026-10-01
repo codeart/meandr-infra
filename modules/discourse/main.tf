@@ -77,6 +77,8 @@ module "nat" {
     { port = 443, target_host = local.app_record, description = "HTTPS: the forum" },
   ]
 
+  # Outside the NAT recipes channel, so still on the boot timer's 5 min.
+  metrics_interval = 300
   alarm_topic_arns = var.alarm_topic_arns
   tags             = var.tags
 }

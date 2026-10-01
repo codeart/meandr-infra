@@ -47,7 +47,7 @@ output "nat_instance_ids" {
 }
 
 output "nat_recipes_dir" {
-  description = "The NAT recipe set, for modules/ssm-recipes. Empty today — anything a NAT needs at boot belongs in user-data, and a recipe is for changing a RUNNING box without replacing it."
+  description = "The NAT recipe set, for modules/ssm-recipes. Anything a NAT needs at boot belongs in user-data; a recipe is for changing a RUNNING box without replacing it."
   value       = "${path.module}/../nat-instance/recipes"
 }
 
