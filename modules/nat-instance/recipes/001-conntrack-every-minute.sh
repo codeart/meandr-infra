@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ConntrackPercent every minute on the wall clock, matching the conntrack alarm's
-# 60 s period. The boot timer's 5 min ran every 6 under the default 1 min accuracy.
+# ConntrackPercent every minute on the wall clock. The boot timer's 5 min ran every
+# 6 under the default 1 min accuracy, leaving one 5 min alarm period in six empty.
 set -euo pipefail
 
 TIMER=nat-metrics.timer

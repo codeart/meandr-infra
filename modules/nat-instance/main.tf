@@ -231,16 +231,16 @@ resource "aws_cloudwatch_metric_alarm" "instance_health" {
 }
 
 # Conntrack exhaustion refuses NEW connections while established ones keep
-# working. Over 80% for ten straight minutes, at either cadence, is a capacity
-# warning, not an incident: raise nf_conntrack_max or the instance size.
+# working; over 80% is a capacity warning: raise nf_conntrack_max or the size.
+# A 5 min Maximum reads the same at recipe 001's 1 min cadence or the boot timer's.
 resource "aws_cloudwatch_metric_alarm" "conntrack" {
   alarm_name          = "${local.name}-conntrack"
   namespace           = local.metric_namespace
   metric_name         = "ConntrackPercent"
   dimensions          = { InstanceId = aws_instance.main.id }
   statistic           = "Maximum"
-  period              = var.metrics_interval
-  evaluation_periods  = 600 / var.metrics_interval
+  period              = 300
+  evaluation_periods  = 2
   threshold           = 80
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
