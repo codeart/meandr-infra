@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Replaces valkey-metrics.sh and its timer on running nodes; files/valkey-metrics.sh
-# stays as the boot copy because user-data must render byte-identical. One batched
-# call a minute on the wall clock, dimension InstanceId only, AUTH from valkey.conf.
+# Replaces valkey-metrics.sh on running nodes; files/valkey-metrics.sh stays as the
+# boot copy because user-data must render byte-identical. One batched call per run on
+# the boot timer's cadence, dimension InstanceId only, AUTH from valkey.conf.
 set -euo pipefail
 
 BIN=/usr/local/bin/valkey-metrics.sh
 PREV=/var/tmp/valkey-metrics.sh.prev
 TIMER=valkey-metrics.timer
-DROPIN=/etc/systemd/system/valkey-metrics.timer.d/cadence.conf
 
 if [ ! -f "/etc/systemd/system/$TIMER" ]; then
   echo "no $TIMER on this node (arbiter); nothing to replace"
@@ -74,25 +73,8 @@ esac
 aws cloudwatch put-metric-data --namespace meandr/valkey --metric-data "$DATA"
 SCRIPT
 
-CADENCE='[Timer]
-OnUnitActiveSec=
-OnCalendar=minutely
-AccuracySec=1s'
-
-on_minute_grid() {
-  local mono cal acc
-  mono="$(systemctl show -p TimersMonotonic --value "$TIMER")"
-  cal="$(systemctl show -p TimersCalendar --value "$TIMER")"
-  acc="$(systemctl show -p AccuracyUSec --value "$TIMER")"
-  if [ -n "$mono" ] || [[ "$cal" != *'*:*:00'* ]] || [ "$acc" != 1s ] || ! systemctl is-active --quiet "$TIMER"; then
-    echo "timer not on the minute grid: monotonic='$mono' calendar='$cal' accuracy='$acc'" >&2
-    return 1
-  fi
-}
-
-if cmp -s "$NEW" "$BIN" && printf '%s\n' "$CADENCE" | cmp -s - "$DROPIN"; then
-  on_minute_grid
-  echo "metrics script already batched and minutely"
+if cmp -s "$NEW" "$BIN"; then
+  echo "metrics script already batched"
   exit 0
 fi
 
@@ -121,10 +103,7 @@ if ! systemctl start valkey-metrics.service; then
 fi
 rm -f "$PREV"
 
-mkdir -p "$(dirname "$DROPIN")"
-printf '%s\n' "$CADENCE" >"$DROPIN"
-systemctl daemon-reload
 systemctl start "$TIMER"
-on_minute_grid
+systemctl is-active --quiet "$TIMER"
 
-echo "metrics script batched (InstanceId only), timer minutely; first run published"
+echo "metrics script batched (InstanceId only); first run published"
