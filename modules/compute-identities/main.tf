@@ -65,19 +65,14 @@ resource "aws_iam_role_policy_attachment" "task_execution" {
 }
 
 # Any region: every fleet region's tasks run as this role. The agent token
-# is the primary's secret and its replicas, which share its name.
+# is the primary's secret and its replicas, which share its name. Nodes read
+# no parameters: their environment comes from the agent (hosted_nodes.md §7.6).
 resource "aws_iam_role_policy" "task_execution_secrets" {
   name = "read-hosted-secrets"
   role = aws_iam_role.task_execution.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        Sid      = "HostedNodeParameters"
-        Effect   = "Allow"
-        Action   = ["ssm:GetParameters"]
-        Resource = "arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/meandr/hosted/*"
-      },
       {
         Sid      = "AgentToken"
         Effect   = "Allow"

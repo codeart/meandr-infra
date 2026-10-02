@@ -130,16 +130,6 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         ]
         Resource = local.hosted_cluster_arns
       },
-      {
-        Sid    = "NodeParameters"
-        Effect = "Allow"
-        Action = [
-          "ssm:PutParameter",
-          "ssm:DeleteParameters",
-          "ssm:GetParametersByPath",
-        ]
-        Resource = [for r in local.hosted_regions : "arn:aws:ssm:${r}:${var.account_id}:parameter/meandr/hosted/*"]
-      },
     ]
   })
 }
