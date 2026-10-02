@@ -101,9 +101,9 @@ locals {
   db_instance_class = "db.t4g.small"
   puma              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 8, target_cpu_utilization = 70, concurrency : 2, threads : 6 }
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 6, target_cpu_utilization = 70 }
-  ingest            = { cpu = 512, memory = 1024, desired_count = 1 }
+  ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
-  proxy             = { cpu = 512, memory = 1024, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
+  proxy             = { cpu = 256, memory = 512, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 
   # --- Postgres tuning -------------------------------------------------
   #
