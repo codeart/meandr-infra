@@ -39,9 +39,9 @@ locals {
   alert_emails = ["aws-prd@meandr.com"]
 
   # The deploy role trusts the `production` GH Environment ONLY (reviewer
-  # gate enforced in IAM); refs/main gets just the read-only role for the
-  # pre-gate regions resolver. See account-bootstrap/oidc.tf.
-  allowed_refs            = ["refs/heads/main"]
+  # gate enforced in IAM); refs/main and release tags get just the read-only
+  # role for the pre-gate regions resolver. See account-bootstrap/oidc.tf.
+  allowed_refs            = ["refs/heads/main", "refs/tags/v*"]
   allowed_gh_environments = ["production"]
 
   # Tiered: 50% is the early heads-up, 100% the holy-shit signal, without

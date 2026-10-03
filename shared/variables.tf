@@ -21,6 +21,12 @@ variable "image_pusher_repos" {
   default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner"]
 }
 
+variable "image_release_tag_repos" {
+  description = "Image-pushing repos whose production build is a gitflow release tag (v*), not a main push; their tag pushes may assume the ECR push role."
+  type        = list(string)
+  default     = ["meandr-agent", "meandr-runner"]
+}
+
 variable "image_pusher_immutable_subs" {
   description = "repo name → immutable OIDC sub prefix (repo:<org>@<id>/<repo>@<id>) for repos on GitHub's immutable-subject format; read from the repo's actions/oidc/customization/sub. Absent repos use the classic repo:<org>/<repo> prefix."
   type        = map(string)

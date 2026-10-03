@@ -27,10 +27,9 @@ resource "aws_ecr_repository" "service" {
 
 # --- Lifecycle policy — keep storage costs bounded -----------------------
 
-# Keep what runs plus the 5 newest builds; delete everything else. An image
-# matched by a rule cannot be expired by a LOWER-priority one, which is what
-# lets rules 1-2 shield main and develop from rule 4. var.ecr_keep_all_builds
-# repos skip rule 4: a hosted node may run any build it ever deployed.
+# Keep what runs, every v* release and the 5 newest other builds. An image
+# matched by a rule cannot be expired by a LOWER-priority one, so rules 1-3
+# shield theirs from rule 5, which var.ecr_keep_all_builds repos skip.
 locals {
   ecr_lifecycle_rules = {
     base = [
@@ -58,6 +57,17 @@ locals {
       },
       {
         rulePriority = 3
+        description  = "Keep every release"
+        selection = {
+          tagStatus      = "tagged"
+          tagPatternList = ["v*"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 1000
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 4
         description  = "Drop untagged images after a day"
         selection = {
           tagStatus   = "untagged"
@@ -70,7 +80,7 @@ locals {
     ]
     recent = [
       {
-        rulePriority = 4
+        rulePriority = 5
         description  = "Keep only the 5 newest other builds"
         selection = {
           tagStatus      = "tagged"

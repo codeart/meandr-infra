@@ -29,16 +29,16 @@ resource "aws_iam_openid_connect_provider" "github" {
 # --- Trust policy subs -----------------------------------------------------
 
 locals {
-  # Allowed `sub` claims for image-pushing repos: main/develop pushes plus PR
-  # builds (which skip the push step but still authenticate for build-and-verify).
+  # Allowed `sub` claims for image-pushing repos: main/develop pushes, PR builds
+  # (which skip the push step) and v* tags for var.image_release_tag_repos.
   # Newer repos present immutable id-pinned subs — see the tfvars map.
   image_pusher_subs = flatten([
     for repo in var.image_pusher_repos : [
-      for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] : [
+      for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] : concat([
         "${prefix}:ref:refs/heads/main",
         "${prefix}:ref:refs/heads/develop",
         "${prefix}:pull_request",
-      ]
+      ], contains(var.image_release_tag_repos, repo) ? ["${prefix}:ref:refs/tags/v*"] : [])
     ]
   ])
 }
