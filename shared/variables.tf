@@ -33,6 +33,16 @@ variable "ecr_repos" {
   default     = ["meandr-mcp", "meandr-api", "meandr-agent"]
 }
 
+variable "ecr_pullers" {
+  description = "repo name → role names (IAM wildcards allowed) in the workload accounts that may pull it. Fargate pulls with the task's execution role; an EC2 container instance pulls with its instance role (hosted-node)."
+  type        = map(list(string))
+  default = {
+    "meandr-mcp"   = ["meandr-mcp-execution-*"]
+    "meandr-api"   = ["meandr-api-execution-*"]
+    "meandr-agent" = ["hosted-node", "hosted-task-execution"]
+  }
+}
+
 variable "workload_account_ids" {
   description = "Account IDs of workload accounts (Staging, Production, Dev) that need pull access to ECR. Their ECS task execution roles will get cross-account ECR permissions via the repository policy."
   type        = list(string)

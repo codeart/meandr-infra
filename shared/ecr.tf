@@ -90,12 +90,14 @@ resource "aws_ecr_lifecycle_policy" "service" {
 
 # --- Cross-account pull policy --------------------------------------------
 #
-# Workload accounts' ECS task execution roles pull images from here. They
-# don't have any other ECR access — only Get/BatchGetImage.
+# Each repo is pulled only by the roles var.ecr_pullers names for it, so a
+# hosted machine's instance role reaches the hosted images and never ours.
 
 data "aws_iam_policy_document" "ecr_cross_account_pull" {
+  for_each = toset(var.ecr_repos)
+
   statement {
-    sid    = "AllowWorkloadAccountsToPull"
+    sid    = "AllowNamedWorkloadRolesToPull"
     effect = "Allow"
 
     principals {
@@ -110,6 +112,16 @@ data "aws_iam_policy_document" "ecr_cross_account_pull" {
       "ecr:DescribeImages",
       "ecr:DescribeRepositories",
     ]
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:PrincipalArn"
+      values = flatten([
+        for acct in var.workload_account_ids : [
+          for role in var.ecr_pullers[each.key] : "arn:aws:iam::${acct}:role/${role}"
+        ]
+      ])
+    }
   }
 }
 
@@ -117,7 +129,7 @@ resource "aws_ecr_repository_policy" "service" {
   for_each = aws_ecr_repository.service
 
   repository = each.value.name
-  policy     = data.aws_iam_policy_document.ecr_cross_account_pull.json
+  policy     = data.aws_iam_policy_document.ecr_cross_account_pull[each.key].json
 }
 
 # --- Cross-region replication ---------------------------------------------
@@ -150,7 +162,7 @@ resource "aws_ecr_repository_policy" "replica" {
   for_each = toset(var.ecr_repos)
 
   repository = each.key
-  policy     = data.aws_iam_policy_document.ecr_cross_account_pull.json
+  policy     = data.aws_iam_policy_document.ecr_cross_account_pull[each.key].json
 }
 
 resource "aws_ecr_lifecycle_policy" "replica" {
