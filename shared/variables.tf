@@ -18,7 +18,7 @@ variable "github_org" {
 variable "image_pusher_repos" {
   description = "List of GitHub repo names (within github_org) that build + push container images via CI. Trusted to assume the ECR push role."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner"]
 }
 
 variable "image_pusher_immutable_subs" {
@@ -30,16 +30,23 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner"]
+}
+
+variable "ecr_keep_all_builds" {
+  description = "ECR repos whose tagged builds never expire: a hosted node pins the digest it deployed with, for as long as it lives."
+  type        = list(string)
+  default     = ["meandr-runner"]
 }
 
 variable "ecr_pullers" {
   description = "repo name → role names (IAM wildcards allowed) in the workload accounts that may pull it. Fargate pulls with the task's execution role; an EC2 container instance pulls with its instance role (hosted-node)."
   type        = map(list(string))
   default = {
-    "meandr-mcp"   = ["meandr-mcp-execution-*"]
-    "meandr-api"   = ["meandr-api-execution-*"]
-    "meandr-agent" = ["hosted-node", "hosted-task-execution"]
+    "meandr-mcp"    = ["meandr-mcp-execution-*"]
+    "meandr-api"    = ["meandr-api-execution-*"]
+    "meandr-agent"  = ["hosted-node", "hosted-task-execution"]
+    "meandr-runner" = ["hosted-node", "hosted-task-execution"]
   }
 }
 

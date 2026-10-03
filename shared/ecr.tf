@@ -29,10 +29,11 @@ resource "aws_ecr_repository" "service" {
 
 # Keep what runs plus the 5 newest builds; delete everything else. An image
 # matched by a rule cannot be expired by a LOWER-priority one, which is what
-# lets rules 1-2 shield main and develop from rule 4.
+# lets rules 1-2 shield main and develop from rule 4. var.ecr_keep_all_builds
+# repos skip rule 4: a hosted node may run any build it ever deployed.
 locals {
-  ecr_lifecycle_policy = jsonencode({
-    rules = [
+  ecr_lifecycle_rules = {
+    base = [
       {
         rulePriority = 1
         description  = "Keep what production runs"
@@ -66,6 +67,8 @@ locals {
         }
         action = { type = "expire" }
       },
+    ]
+    recent = [
       {
         rulePriority = 4
         description  = "Keep only the 5 newest other builds"
@@ -78,14 +81,21 @@ locals {
         action = { type = "expire" }
       },
     ]
-  })
+  }
+
+  ecr_lifecycle_policy = {
+    for repo in var.ecr_repos : repo => jsonencode({
+      rules = concat(local.ecr_lifecycle_rules.base,
+      contains(var.ecr_keep_all_builds, repo) ? [] : local.ecr_lifecycle_rules.recent)
+    })
+  }
 }
 
 resource "aws_ecr_lifecycle_policy" "service" {
   for_each = aws_ecr_repository.service
 
   repository = each.value.name
-  policy     = local.ecr_lifecycle_policy
+  policy     = local.ecr_lifecycle_policy[each.key]
 }
 
 # --- Cross-account pull policy --------------------------------------------
@@ -170,5 +180,5 @@ resource "aws_ecr_lifecycle_policy" "replica" {
   for_each = toset(var.ecr_repos)
 
   repository = each.key
-  policy     = local.ecr_lifecycle_policy
+  policy     = local.ecr_lifecycle_policy[each.key]
 }
