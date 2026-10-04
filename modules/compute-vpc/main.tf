@@ -185,7 +185,8 @@ data "aws_ssm_parameter" "ecs_ami" {
 locals {
   # Cluster join + agent headroom; per-tenant attributes are applied by
   # BE via ecs:PutAttributes after registration, not baked here. The
-  # daemon.json caps keep a chatty MCP from a disk-full outage (§8.2).
+  # daemon.json caps keep a chatty MCP from a disk-full outage (§8.2),
+  # the pids cap a fork bomb from the machine's process table (§6).
   #
   # Operator tools last: the ECS agent waits for user-data, so this runs
   # before registration and never contends with a task's image pull. Never
@@ -210,6 +211,7 @@ locals {
       echo "ECS_CLUSTER=${aws_ecs_cluster.hosted.name}"
       echo "ECS_RESERVED_MEMORY=${var.reserved_memory_mib}"
       echo "ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3h"
+      echo "ECS_TASK_PIDS_LIMIT=4096"
     } >> /etc/ecs/ecs.config
     dnf -y -q install htop mc || true
     # System-wide fallback, read when a user has no ~/.config/htop/htoprc.
