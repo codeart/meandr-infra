@@ -4,13 +4,17 @@
 
 locals {
   base_tags = merge(var.tags, { Component = "hosted-fleet" })
+
+  # compute-vpc's cluster, and the shared account's images a machine runs.
+  cluster            = "meandr-hosted"
+  image_repositories = ["meandr-agent", "meandr-runner"]
 }
 
 data "aws_caller_identity" "current" {}
 
-# Instance role: ECS agent registration + SSM (log snapshots ride
-# RunCommand). Nothing more — a bridge container cannot reach IMDS
-# (hop limit 1), and the role stays minimal anyway.
+# Instance role: reachable only by escaping a container, since bridge
+# containers cannot reach IMDS (hop limit 1). What it keeps, and why no
+# managed policy: hosted_nodes.md §6.
 resource "aws_iam_role" "node" {
   name = "hosted-node"
 
@@ -26,14 +30,74 @@ resource "aws_iam_role" "node" {
   tags = local.base_tags
 }
 
-resource "aws_iam_role_policy_attachment" "node_ecs" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
-}
+resource "aws_iam_role_policy" "node" {
+  name = "hosted-node"
+  role = aws_iam_role.node.id
 
-resource "aws_iam_role_policy_attachment" "node_ssm" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcsAgentDiscovery"
+        Effect   = "Allow"
+        Action   = "ecs:DiscoverPollEndpoint"
+        Resource = "*"
+      },
+      # No drain, no deregister: spot draining is off, BE terminates.
+      {
+        Sid    = "EcsAgentInFleetCluster"
+        Effect = "Allow"
+        Action = [
+          "ecs:RegisterContainerInstance",
+          "ecs:Poll",
+          "ecs:StartTelemetrySession",
+          "ecs:SubmitAttachmentStateChanges",
+          "ecs:SubmitContainerStateChange",
+          "ecs:SubmitTaskStateChange",
+        ]
+        Resource = [
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:cluster/${local.cluster}",
+          "arn:aws:ecs:*:${data.aws_caller_identity.current.account_id}:container-instance/${local.cluster}/*",
+        ]
+      },
+      {
+        Sid      = "EcrToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "PullFleetImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = [for repo in local.image_repositories : "arn:aws:ecr:*:${var.image_account_id}:repository/${repo}"]
+      },
+      # Operator Run Command and sessions; never parameter reads.
+      {
+        Sid    = "SsmAgent"
+        Effect = "Allow"
+        Action = [
+          "ssm:UpdateInstanceInformation",
+          "ssm:ListInstanceAssociations",
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel",
+          "ec2messages:AcknowledgeMessage",
+          "ec2messages:DeleteMessage",
+          "ec2messages:FailMessage",
+          "ec2messages:GetEndpoint",
+          "ec2messages:GetMessages",
+          "ec2messages:SendReply",
+        ]
+        Resource = "*"
+      },
+    ]
+  })
 }
 
 resource "aws_iam_instance_profile" "node" {
@@ -59,16 +123,11 @@ resource "aws_iam_role" "task_execution" {
   tags = local.base_tags
 }
 
-resource "aws_iam_role_policy_attachment" "task_execution" {
-  role       = aws_iam_role.task_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
 # Any region: every fleet region's tasks run as this role. The agent token
 # is the primary's secret and its replicas, which share its name. Nodes read
-# no parameters: their environment comes from the agent (hosted_nodes.md §7.6).
-resource "aws_iam_role_policy" "task_execution_secrets" {
-  name = "read-hosted-secrets"
+# no parameters and ship no logs (hosted_nodes.md §6, §7.6, §8.2).
+resource "aws_iam_role_policy" "task_execution" {
+  name = "hosted-task-execution"
   role = aws_iam_role.task_execution.id
   policy = jsonencode({
     Version = "2012-10-17"
@@ -78,6 +137,22 @@ resource "aws_iam_role_policy" "task_execution_secrets" {
         Effect   = "Allow"
         Action   = ["secretsmanager:GetSecretValue"]
         Resource = "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:meandr/hosted/${var.env}/agent-token-??????"
+      },
+      {
+        Sid      = "EcrToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      {
+        Sid    = "PullFleetImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = [for repo in local.image_repositories : "arn:aws:ecr:*:${var.image_account_id}:repository/${repo}"]
       },
     ]
   })

@@ -78,6 +78,9 @@ locals {
   db_multi_az         = true
   log_retention_days  = 30
 
+  # GuardDuty findings (hosted_nodes.md §6): account-production's list.
+  alert_emails = ["aws-prd@meandr.com"]
+
   # --- Public names ----------------------------------------------------
   image_tag         = "main"
   api_hostname      = "api.meandr.com"

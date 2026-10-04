@@ -73,6 +73,9 @@ locals {
 
   log_retention_days = 7
 
+  # GuardDuty findings (hosted_nodes.md §6): account-staging's list.
+  alert_emails = ["aws-stg@meandr.com"]
+
   # --- Accelerator -----------------------------------------------------
   #
   # A literal because there IS no listener data source — only the

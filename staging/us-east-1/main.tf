@@ -507,6 +507,16 @@ module "hosted" {
   tags = local.tags
 }
 
+# The fleet's abuse detection (hosted_nodes.md §6). GuardDuty is one
+# detector per account and region, so it watches the whole region.
+module "guardduty" {
+  source = "../../modules/guardduty"
+
+  env          = local.env
+  alert_emails = local.alert_emails
+  tags         = local.tags
+}
+
 # The primary mints the agent token and replicates it here; read the LOCAL
 # replica, so this region's agents boot while the primary is unreachable.
 data "aws_secretsmanager_secret" "hosted_agent_token" {

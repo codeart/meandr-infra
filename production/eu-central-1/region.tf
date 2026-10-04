@@ -77,6 +77,9 @@ locals {
 
   log_retention_days = 30
 
+  # GuardDuty findings (hosted_nodes.md §6): account-production's list.
+  alert_emails = ["aws-prd@meandr.com"]
+
   # --- Accelerator -----------------------------------------------------
   #
   # A literal because there IS no listener data source — only the

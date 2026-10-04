@@ -719,6 +719,16 @@ module "hosted" {
   tags = local.tags
 }
 
+# The fleet's abuse detection (hosted_nodes.md §6). GuardDuty is one
+# detector per account and region, so it watches the whole region.
+module "guardduty" {
+  source = "../../modules/guardduty"
+
+  env          = local.env
+  alert_emails = local.alert_emails
+  tags         = local.tags
+}
+
 # One agent token per ENVIRONMENT, the redis_auth shape: the primary
 # creates it, compute regions read their local replica, BE validates
 # against the primary. Fleet-authenticating — the payload's instance_id
