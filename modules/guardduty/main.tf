@@ -15,6 +15,15 @@ resource "aws_guardduty_detector_feature" "off" {
   detector_id = aws_guardduty_detector.this.id
   name        = each.key
   status      = "DISABLED"
+
+  # AWS reports these back under runtime monitoring; undeclared, every plan removes them.
+  dynamic "additional_configuration" {
+    for_each = each.key == "RUNTIME_MONITORING" ? ["EC2_AGENT_MANAGEMENT", "ECS_FARGATE_AGENT_MANAGEMENT", "EKS_ADDON_MANAGEMENT"] : []
+    content {
+      name   = additional_configuration.value
+      status = "DISABLED"
+    }
+  }
 }
 
 resource "aws_sns_topic" "security" {
