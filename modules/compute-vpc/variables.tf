@@ -74,15 +74,6 @@ variable "agent_image" {
   default     = ""
 }
 
-# The env-wide agent token, one per environment: the PRIMARY region's
-# stack creates the SM secret (meandr/hosted/<env>/agent-token, the
-# redis_auth pattern) and replicates to compute regions; each region
-# passes its LOCAL copy's ARN here. BE validates against the primary.
-variable "agent_token_secret_arn" {
-  type    = string
-  default = ""
-}
-
 variable "agent_report_url" {
   description = "BE ingest endpoint the agent POSTs to (contracts/hosted_agent_report.md)."
   type        = string
@@ -94,9 +85,8 @@ variable "api_base_url" {
   type        = string
 }
 
-# Env-wide like the agent token but a separate trust domain (AWS, not the
-# fleet); minted by the primary-region caller, value — not ARN — because
-# the EventBridge connection embeds it as a header.
+# Env-wide, minted by the primary-region caller; a value, not an ARN,
+# because the EventBridge connection embeds it as a header.
 variable "events_token" {
   type      = string
   sensitive = true

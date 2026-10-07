@@ -179,7 +179,6 @@ module "cost_anomaly" {
 module "compute_identities" {
   source = "../modules/compute-identities"
 
-  env  = local.env
   tags = local.account_tags
 }
 

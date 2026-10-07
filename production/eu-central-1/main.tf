@@ -491,9 +491,8 @@ module "hosted" {
   # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch manifest,
   # pulled from THIS region's ECR replica; the ingest route is BE's
   # (hosted_agent_report.md).
-  agent_image            = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
-  agent_report_url       = "https://${local.api_hostname}/api/hosted/v1/reports"
-  agent_token_secret_arn = data.aws_secretsmanager_secret.hosted_agent_token.arn
+  agent_image      = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
+  agent_report_url = "https://${local.api_hostname}/api/hosted/v1/reports"
 
   # Control-plane event log (contracts/hosted_platform_events.md).
   api_base_url = "https://${local.api_hostname}"
@@ -510,12 +509,6 @@ module "guardduty" {
   env          = local.env
   alert_emails = local.alert_emails
   tags         = local.tags
-}
-
-# The primary mints the agent token and replicates it here; read the LOCAL
-# replica, so this region's agents boot while the primary is unreachable.
-data "aws_secretsmanager_secret" "hosted_agent_token" {
-  name = "meandr/hosted/${local.env}/agent-token"
 }
 
 # The events token has no replicas: only BE reads it, from the primary. The

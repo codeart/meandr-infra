@@ -123,21 +123,14 @@ resource "aws_iam_role" "task_execution" {
   tags = local.base_tags
 }
 
-# Any region: every fleet region's tasks run as this role. The agent token
-# is the primary's secret and its replicas, which share its name. Nodes read
-# no parameters and ship no logs (hosted_nodes.md §6, §7.6, §8.2).
+# Pulls only: tasks read no secrets or parameters and ship no logs
+# (hosted_nodes.md §6, §7.6, §8.2).
 resource "aws_iam_role_policy" "task_execution" {
   name = "hosted-task-execution"
   role = aws_iam_role.task_execution.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        Sid      = "AgentToken"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
-        Resource = "arn:aws:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:meandr/hosted/${var.env}/agent-token-??????"
-      },
       {
         Sid      = "EcrToken"
         Effect   = "Allow"

@@ -703,9 +703,8 @@ module "hosted" {
   # The instance-agent daemon (hosted_nodes.md §7.5). Multi-arch manifest,
   # pulled from THIS region's ECR replica; the ingest route is BE's
   # (hosted_agent_report.md).
-  agent_image            = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
-  agent_report_url       = "https://${local.api_hostname}/api/hosted/v1/reports"
-  agent_token_secret_arn = aws_secretsmanager_secret.hosted_agent_token.arn
+  agent_image      = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-agent:${local.image_tag}"
+  agent_report_url = "https://${local.api_hostname}/api/hosted/v1/reports"
 
   # Control-plane event log (contracts/hosted_platform_events.md).
   api_base_url = "https://${local.api_hostname}"
@@ -724,37 +723,9 @@ module "guardduty" {
   tags         = local.tags
 }
 
-# One agent token per ENVIRONMENT, the redis_auth shape: the primary
-# creates it, compute regions read their local replica, BE validates
-# against the primary. Fleet-authenticating — the payload's instance_id
-# names the box (contracts/hosted_agent_report.md).
-resource "random_password" "hosted_agent_token" {
-  length  = 48
-  special = false
-}
-
-resource "aws_secretsmanager_secret" "hosted_agent_token" {
-  name        = "meandr/hosted/${local.env}/agent-token"
-  description = "Fleet token the instance agents bear on metric reports; BE compares."
-  tags        = local.tags
-
-  dynamic "replica" {
-    for_each = local.edge_regions
-    content {
-      region = replica.value
-    }
-  }
-}
-
-resource "aws_secretsmanager_secret_version" "hosted_agent_token" {
-  secret_id     = aws_secretsmanager_secret.hosted_agent_token.id
-  secret_string = random_password.hosted_agent_token.result
-}
-
-# The events token is env-wide too but a separate trust domain — AWS's
-# EventBridge deliveries, not the fleet's agents. Only BE reads the
-# secret (from the primary), so no replicas; regional connections get
-# the value as module input.
+# The events token is env-wide: AWS's EventBridge deliveries bear it. Only
+# BE reads the secret (from the primary), so no replicas; regional
+# connections get the value as module input.
 resource "random_password" "hosted_events_token" {
   length  = 48
   special = false

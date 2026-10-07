@@ -307,10 +307,6 @@ resource "aws_ecs_task_definition" "agent" {
     environment = [
       { name = "MEANDR_REPORT_URL", value = var.agent_report_url },
     ]
-    secrets = [{
-      name      = "MEANDR_AGENT_TOKEN"
-      valueFrom = var.agent_token_secret_arn
-    }]
   }])
 
   tags = local.base_tags
