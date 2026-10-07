@@ -555,7 +555,7 @@ resource "aws_route53_record" "public" {
   zone_id  = data.aws_route53_zone.public.zone_id
   name     = local.record_name
   type     = "A"
-  ttl      = 300
+  ttl      = 3600
   records  = [module.nat.public_ip]
 }
 
