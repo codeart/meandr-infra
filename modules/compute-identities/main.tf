@@ -8,6 +8,21 @@ locals {
   # compute-vpc's cluster, and the shared account's images a machine runs.
   cluster            = "meandr-hosted"
   image_repositories = ["meandr-agent", "meandr-runner"]
+
+  # hosted-builder's pull-through cache prefixes.
+  cache_prefixes = ["docker-hub", "ghcr"]
+
+  # Tenant images (hosted_nodes.md §7.7): pulled by digest, never listed.
+  pull_tenant_images = {
+    Sid    = "PullTenantImages"
+    Effect = "Allow"
+    Action = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    Resource = "arn:aws:ecr:*:${data.aws_caller_identity.current.account_id}:repository/hosted/*"
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -76,6 +91,7 @@ resource "aws_iam_role_policy" "node" {
         ]
         Resource = [for repo in local.image_repositories : "arn:aws:ecr:*:${var.image_account_id}:repository/${repo}"]
       },
+      local.pull_tenant_images,
       # Operator Run Command and sessions; never parameter reads.
       {
         Sid    = "SsmAgent"
@@ -146,6 +162,79 @@ resource "aws_iam_role_policy" "task_execution" {
           "ecr:GetDownloadUrlForLayer",
         ]
         Resource = [for repo in local.image_repositories : "arn:aws:ecr:*:${var.image_account_id}:repository/${repo}"]
+      },
+      local.pull_tenant_images,
+    ]
+  })
+}
+
+# CodeBuild's role for tenant image builds (hosted_nodes.md §7.7), shared
+# by every region's hosted-builder projects.
+resource "aws_iam_role" "builder" {
+  name = "hosted-builder"
+  tags = local.base_tags
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "codebuild.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:codebuild:*:${data.aws_caller_identity.current.account_id}:project/hosted-builder-*" }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "builder" {
+  name = "hosted-builder"
+  role = aws_iam_role.builder.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "BuildLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/hosted-builder:*"
+      },
+      {
+        Sid      = "EcrToken"
+        Effect   = "Allow"
+        Action   = "ecr:GetAuthorizationToken"
+        Resource = "*"
+      },
+      # BatchGetImage is the push's manifest check. Without
+      # GetDownloadUrlForLayer no layer reads back, so a FROM naming
+      # another tenant's image fails.
+      {
+        Sid    = "PushTenantImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:CompleteLayerUpload",
+          "ecr:InitiateLayerUpload",
+          "ecr:PutImage",
+          "ecr:UploadLayerPart",
+        ]
+        Resource = "arn:aws:ecr:*:${data.aws_caller_identity.current.account_id}:repository/hosted/*"
+      },
+      # An image's first pull through the cache creates its repository.
+      {
+        Sid    = "PullBaseImages"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:BatchGetImage",
+          "ecr:BatchImportUpstreamImage",
+          "ecr:CreateRepository",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = [for prefix in local.cache_prefixes : "arn:aws:ecr:*:${data.aws_caller_identity.current.account_id}:repository/${prefix}/*"]
       },
     ]
   })

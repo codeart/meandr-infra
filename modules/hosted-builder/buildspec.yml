@@ -1,0 +1,32 @@
+version: 0.2
+
+env:
+  shell: bash
+  exported-variables:
+    - IMAGE_DIGEST
+
+phases:
+  # Our setup; the customer sees only the build phase.
+  install:
+    commands:
+      # RUN steps reach neither the build's credentials, the instance
+      # metadata, nor anything listening in this container.
+      - iptables -t raw -I PREROUTING -d 169.254.170.2 -j DROP
+      - iptables -t raw -I PREROUTING -d 169.254.169.254 -j DROP
+      - iptables -I INPUT -i docker0 -j DROP
+      - aws ecr get-login-password | docker login --username AWS --password-stdin ${registry}
+      - printenv BUILDKITD_TOML > /tmp/buildkitd.toml
+      - docker buildx create --name tenant --driver docker-container --driver-opt image=${registry}/docker-hub/moby/buildkit:${buildkit_version} --buildkitd-config /tmp/buildkitd.toml --bootstrap --use
+  build:
+    commands:
+      - printenv DOCKERFILE_BASE64 | base64 -d > /tmp/Dockerfile
+      - docker buildx build --platform "linux/$ARCH" --progress plain --provenance=false --sbom=false - < /tmp/Dockerfile
+  # The same build again, all cached, pushed: a failure here is ours.
+  post_build:
+    commands:
+      - |
+        if [ "$CODEBUILD_BUILD_SUCCEEDING" = 1 ] && [ -n "$IMAGE_REPOSITORY" ]; then
+          docker buildx build --platform "linux/$ARCH" --progress plain --provenance=false --sbom=false \
+            --push --tag "${registry}/$IMAGE_REPOSITORY:$IMAGE_TAG" --metadata-file /tmp/metadata.json - < /tmp/Dockerfile &&
+          IMAGE_DIGEST=$(jq -er '."containerimage.digest"' /tmp/metadata.json)
+        fi

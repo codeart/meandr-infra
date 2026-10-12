@@ -516,6 +516,15 @@ module "guardduty" {
   tags         = local.tags
 }
 
+# Tenant image builds (hosted_nodes.md §7.7).
+module "hosted_builder" {
+  source = "../../modules/hosted-builder"
+
+  secrets_home         = false
+  upstream_credentials = true
+  tags                 = local.tags
+}
+
 # The events token has no replicas: only BE reads it, from the primary. The
 # value goes into this region's EventBridge connection as a header.
 data "aws_secretsmanager_secret_version" "hosted_events_token" {

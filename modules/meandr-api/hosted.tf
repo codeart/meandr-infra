@@ -130,6 +130,34 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         ]
         Resource = local.hosted_cluster_arns
       },
+      # Tenant images (contracts/hosted_image_build.md): repositories, the
+      # sweep, and a built image's config for the entryPoint composition.
+      {
+        Sid    = "TenantRepositories"
+        Effect = "Allow"
+        Action = [
+          "ecr:CreateRepository",
+          "ecr:DeleteRepository",
+          "ecr:DescribeRepositories",
+          "ecr:DescribeImages",
+          "ecr:BatchDeleteImage",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
+        ]
+        Resource = [for r in local.hosted_regions : "arn:aws:ecr:${r}:${var.account_id}:repository/hosted/*"]
+      },
+      {
+        Sid      = "ImageBuilds"
+        Effect   = "Allow"
+        Action   = ["codebuild:StartBuild", "codebuild:StopBuild", "codebuild:BatchGetBuilds"]
+        Resource = [for r in local.hosted_regions : "arn:aws:codebuild:${r}:${var.account_id}:project/hosted-builder-*"]
+      },
+      {
+        Sid      = "BuildOutput"
+        Effect   = "Allow"
+        Action   = "logs:GetLogEvents"
+        Resource = [for r in local.hosted_regions : "arn:aws:logs:${r}:${var.account_id}:log-group:/aws/codebuild/hosted-builder:*"]
+      },
     ]
   })
 }
