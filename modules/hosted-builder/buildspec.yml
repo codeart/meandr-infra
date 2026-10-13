@@ -20,7 +20,7 @@ phases:
   build:
     commands:
       - printenv DOCKERFILE_BASE64 | base64 -d > /tmp/Dockerfile
-      - docker buildx build --platform "linux/$ARCH" --progress plain --provenance=false --sbom=false - < /tmp/Dockerfile
+      - docker buildx build --platform "linux/$ARCH" --progress plain --provenance=false --sbom=false --output type=cacheonly - < /tmp/Dockerfile
   # The same build again, all cached, pushed: a failure here is ours.
   post_build:
     commands:
