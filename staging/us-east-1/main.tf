@@ -522,7 +522,11 @@ module "hosted_builder" {
 
   secrets_home         = false
   upstream_credentials = true
-  tags                 = local.tags
+
+  api_base_url = "https://${local.api_hostname}"
+  events_token = data.aws_secretsmanager_secret_version.hosted_events_token.secret_string
+
+  tags = local.tags
 }
 
 # The events token has no replicas: only BE reads it, from the primary. The

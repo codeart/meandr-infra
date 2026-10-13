@@ -15,6 +15,18 @@ variable "replica_regions" {
   default     = []
 }
 
+variable "api_base_url" {
+  description = "BE API origin (https://..., no trailing slash); build output is posted to /api/hosted/v1/events/codebuild_logs."
+  type        = string
+}
+
+# The env-wide events token (contracts/hosted_platform_events.md), sent as
+# Firehose's access key.
+variable "events_token" {
+  type      = string
+  sensitive = true
+}
+
 variable "buildkit_version" {
   description = "moby/buildkit tag the builds run, pulled through the cache."
   type        = string

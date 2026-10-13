@@ -240,6 +240,90 @@ resource "aws_iam_role_policy" "builder" {
   })
 }
 
+# Build output pushed to BE (contracts/hosted_image_build.md): CloudWatch
+# Logs feeds each region's Firehose stream, which posts to BE.
+resource "aws_iam_role" "builder_logs" {
+  name = "hosted-builder-logs"
+  tags = local.base_tags
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "logs.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringLike = { "aws:SourceArn" = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:*" }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "builder_logs" {
+  name = "hosted-builder-logs"
+  role = aws_iam_role.builder_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["firehose:PutRecord", "firehose:PutRecordBatch"]
+      Resource = "arn:aws:firehose:*:${data.aws_caller_identity.current.account_id}:deliverystream/hosted-builder-logs"
+    }]
+  })
+}
+
+resource "aws_iam_role" "builder_logs_delivery" {
+  name = "hosted-builder-logs-delivery"
+  tags = local.base_tags
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "firehose.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "sts:ExternalId" = data.aws_caller_identity.current.account_id }
+      }
+    }]
+  })
+}
+
+# Batches BE never accepted, and Firehose's own delivery errors.
+resource "aws_iam_role_policy" "builder_logs_delivery" {
+  name = "hosted-builder-logs-delivery"
+  role = aws_iam_role.builder_logs_delivery.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "FailedBatches"
+        Effect = "Allow"
+        Action = [
+          "s3:AbortMultipartUpload",
+          "s3:GetBucketLocation",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+          "s3:PutObject",
+        ]
+        Resource = [
+          "arn:aws:s3:::meandr-hosted-builder-logs-${data.aws_caller_identity.current.account_id}-*",
+          "arn:aws:s3:::meandr-hosted-builder-logs-${data.aws_caller_identity.current.account_id}-*/*",
+        ]
+      },
+      {
+        Sid      = "DeliveryErrors"
+        Effect   = "Allow"
+        Action   = "logs:PutLogEvents"
+        Resource = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/kinesisfirehose/hosted-builder-logs:*"
+      },
+    ]
+  })
+}
+
 # EventBridge's delivery role for the control-plane event log
 # (contracts/hosted_platform_events.md): every region's api destinations.
 resource "aws_iam_role" "events_invoke" {

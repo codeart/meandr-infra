@@ -37,6 +37,33 @@ resource "aws_cloudwatch_log_group" "builds" {
   tags              = local.base_tags
 }
 
+# BuildKit names our registry; the account id leaves the group masked.
+resource "aws_cloudwatch_log_data_protection_policy" "builds" {
+  log_group_name = aws_cloudwatch_log_group.builds.name
+
+  policy_document = jsonencode({
+    Name    = "hosted-builder"
+    Version = "2021-06-01"
+    Configuration = {
+      CustomDataIdentifier = [
+        { Name = "MeandrAccountId", Regex = data.aws_caller_identity.current.account_id },
+      ]
+    }
+    Statement = [
+      {
+        Sid            = "Audit"
+        DataIdentifier = ["MeandrAccountId"]
+        Operation      = { Audit = { FindingsDestination = {} } }
+      },
+      {
+        Sid            = "Mask"
+        DataIdentifier = ["MeandrAccountId"]
+        Operation      = { Deidentify = { MaskConfig = {} } }
+      },
+    ]
+  })
+}
+
 resource "aws_codebuild_project" "builder" {
   for_each = local.architectures
 
@@ -88,6 +115,99 @@ resource "aws_codebuild_project" "builder" {
       stream_name = each.key
     }
   }
+}
+
+# --- Build output to BE --------------------------------------------------
+
+# Account-global, from modules/compute-identities.
+data "aws_iam_role" "logs" {
+  name = "hosted-builder-logs"
+}
+
+data "aws_iam_role" "logs_delivery" {
+  name = "hosted-builder-logs-delivery"
+}
+
+# Batches BE never accepted. They hold the whole log, ours included.
+resource "aws_s3_bucket" "failed_logs" {
+  bucket = "meandr-hosted-builder-logs-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.region}"
+  tags   = local.base_tags
+}
+
+resource "aws_s3_bucket_public_access_block" "failed_logs" {
+  bucket = aws_s3_bucket.failed_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "failed_logs" {
+  bucket = aws_s3_bucket.failed_logs.id
+
+  rule {
+    id     = "expire"
+    status = "Enabled"
+    filter {}
+    expiration { days = 7 }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "delivery_errors" {
+  name              = "/aws/kinesisfirehose/hosted-builder-logs"
+  retention_in_days = 14
+  tags              = local.base_tags
+}
+
+resource "aws_cloudwatch_log_stream" "delivery_errors" {
+  name           = "DestinationDelivery"
+  log_group_name = aws_cloudwatch_log_group.delivery_errors.name
+}
+
+resource "aws_kinesis_firehose_delivery_stream" "logs" {
+  name        = "hosted-builder-logs"
+  destination = "http_endpoint"
+  tags        = local.base_tags
+
+  server_side_encryption {
+    enabled  = true
+    key_type = "AWS_OWNED_CMK"
+  }
+
+  http_endpoint_configuration {
+    name               = "meandr-api"
+    url                = "${var.api_base_url}/api/hosted/v1/events/codebuild_logs"
+    access_key         = var.events_token
+    role_arn           = data.aws_iam_role.logs_delivery.arn
+    buffering_size     = 1
+    buffering_interval = 0
+    retry_duration     = 7200
+    s3_backup_mode     = "FailedDataOnly"
+
+    request_configuration {
+      content_encoding = "NONE"
+    }
+
+    s3_configuration {
+      role_arn   = data.aws_iam_role.logs_delivery.arn
+      bucket_arn = aws_s3_bucket.failed_logs.arn
+    }
+
+    cloudwatch_logging_options {
+      enabled         = true
+      log_group_name  = aws_cloudwatch_log_group.delivery_errors.name
+      log_stream_name = aws_cloudwatch_log_stream.delivery_errors.name
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_subscription_filter" "logs" {
+  name            = "hosted-builder-logs"
+  log_group_name  = aws_cloudwatch_log_group.builds.name
+  filter_pattern  = ""
+  destination_arn = aws_kinesis_firehose_delivery_stream.logs.arn
+  role_arn        = data.aws_iam_role.logs.arn
 }
 
 # --- Pull-through cache --------------------------------------------------
