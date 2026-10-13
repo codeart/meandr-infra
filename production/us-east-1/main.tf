@@ -723,6 +723,20 @@ module "guardduty" {
   tags         = local.tags
 }
 
+# Tenant image builds (hosted_nodes.md §7.7).
+module "hosted_builder" {
+  source = "../../modules/hosted-builder"
+
+  secrets_home         = true
+  replica_regions      = local.edge_regions
+  upstream_credentials = true
+
+  api_base_url = "https://${local.api_hostname}"
+  events_token = random_password.hosted_events_token.result
+
+  tags = local.tags
+}
+
 # The events token is env-wide: AWS's EventBridge deliveries bear it. Only
 # BE reads the secret (from the primary), so no replicas; regional
 # connections get the value as module input.
