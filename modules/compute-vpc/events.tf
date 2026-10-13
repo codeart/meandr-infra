@@ -11,6 +11,7 @@ locals {
     ec2_instance_states     = "/api/hosted/v1/events/ec2_instance_states"
     ecs_container_instances = "/api/hosted/v1/events/ecs_container_instances"
     ecs_tasks               = "/api/hosted/v1/events/ecs_tasks"
+    codebuild_builds        = "/api/hosted/v1/events/codebuild_builds"
   }
 }
 
@@ -76,6 +77,18 @@ resource "aws_cloudwatch_event_rule" "ecs_tasks" {
   })
 }
 
+# modules/hosted-builder's projects in this region.
+resource "aws_cloudwatch_event_rule" "codebuild_builds" {
+  name = "hosted-codebuild-builds"
+  tags = local.base_tags
+
+  event_pattern = jsonencode({
+    source      = ["aws.codebuild"]
+    detail-type = ["CodeBuild Build State Change"]
+    detail      = { project-name = [{ prefix = "hosted-builder-" }] }
+  })
+}
+
 # A message here means an event BE permanently refused — the alarm is
 # the pager, the queue holds the evidence for 14 days.
 resource "aws_sqs_queue" "events_dlq" {
@@ -100,6 +113,7 @@ resource "aws_sqs_queue_policy" "events_dlq" {
             aws_cloudwatch_event_rule.ec2_instance_states.arn,
             aws_cloudwatch_event_rule.ecs_container_instances.arn,
             aws_cloudwatch_event_rule.ecs_tasks.arn,
+            aws_cloudwatch_event_rule.codebuild_builds.arn,
           ]
         }
       }
@@ -118,6 +132,7 @@ resource "aws_cloudwatch_event_target" "events" {
     ec2_instance_states     = aws_cloudwatch_event_rule.ec2_instance_states.name
     ecs_container_instances = aws_cloudwatch_event_rule.ecs_container_instances.name
     ecs_tasks               = aws_cloudwatch_event_rule.ecs_tasks.name
+    codebuild_builds        = aws_cloudwatch_event_rule.codebuild_builds.name
   }
 
   rule     = each.value
@@ -152,10 +167,10 @@ resource "aws_cloudwatch_metric_alarm" "events_dlq" {
   tags          = local.base_tags
 }
 
-# Replay source of last resort: 14 days of raw aws.ec2/aws.ecs, cheap.
+# Replay source of last resort: 14 days of raw aws.ec2/aws.ecs/aws.codebuild, cheap.
 resource "aws_cloudwatch_event_archive" "events" {
   name             = "hosted-events"
   event_source_arn = data.aws_cloudwatch_event_bus.default.arn
   retention_days   = 14
-  event_pattern    = jsonencode({ source = ["aws.ec2", "aws.ecs"] })
+  event_pattern    = jsonencode({ source = ["aws.ec2", "aws.ecs", "aws.codebuild"] })
 }
