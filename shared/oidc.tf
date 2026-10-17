@@ -41,6 +41,18 @@ locals {
       ], contains(var.image_release_tag_repos, repo) ? ["${prefix}:ref:refs/tags/v*"] : [])
     ]
   ])
+
+  # agents/* belong to the agents push role alone; the service role never reaches them.
+  agent_ecr_repos   = [for r in var.ecr_repos : r if startswith(r, "agents/")]
+  service_ecr_repos = [for r in var.ecr_repos : r if !startswith(r, "agents/")]
+
+  # Only builds that push: develop, and v* release tags.
+  agent_image_pusher_subs = flatten([
+    for repo in var.agent_image_pusher_repos : [
+      for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] :
+      ["${prefix}:ref:refs/heads/develop", "${prefix}:ref:refs/tags/v*"]
+    ]
+  ])
 }
 
 # --- Role: ECR push (used by meandr-mcp + meandr-api builds) ---------------
@@ -99,7 +111,7 @@ data "aws_iam_policy_document" "ecr_push" {
       # in ecr.tf also expires stray `unstable-*` images on a schedule.
       "ecr:BatchDeleteImage",
     ]
-    resources = [for r in var.ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
+    resources = [for r in local.service_ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
   }
   # Replication copies pushes, never deletions, so promote drops the
   # replica's `unstable-*` tag itself; left there, the lifecycle rule
@@ -108,7 +120,7 @@ data "aws_iam_policy_document" "ecr_push" {
     sid       = "DemoteInReplica"
     effect    = "Allow"
     actions   = ["ecr:DescribeImages", "ecr:BatchDeleteImage"]
-    resources = [for r in var.ecr_repos : "arn:aws:ecr:${var.replication_destination_region}:${local.shared_account_id}:repository/${r}"]
+    resources = [for r in local.service_ecr_repos : "arn:aws:ecr:${var.replication_destination_region}:${local.shared_account_id}:repository/${r}"]
   }
 }
 
@@ -124,4 +136,74 @@ resource "aws_iam_policy" "ecr_push" {
 resource "aws_iam_role_policy_attachment" "ecr_push" {
   role       = aws_iam_role.gh_actions_ecr_push.name
   policy_arn = aws_iam_policy.ecr_push.arn
+}
+
+# --- Role: ECR push for the hosted agents' images (meandr-harness) -----------
+#
+# Its builds run vendors' installers, so it can push agents/* and nothing else.
+
+resource "aws_iam_role" "gh_actions_ecr_push_agents" {
+  name = "gh-actions-ecr-push-agents"
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push Agents"
+  })
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = local.agent_image_pusher_subs
+          }
+        }
+      }
+    ]
+  })
+}
+
+data "aws_iam_policy_document" "ecr_push_agents" {
+  statement {
+    sid       = "AuthorizeToECR"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "PushAgentImages"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:CompleteLayerUpload",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+    ]
+    resources = [for r in local.agent_ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
+  }
+}
+
+resource "aws_iam_policy" "ecr_push_agents" {
+  name        = "gh-actions-ecr-push-agents"
+  description = "Push the hosted agents images, agents/* only"
+  policy      = data.aws_iam_policy_document.ecr_push_agents.json
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push Agents Policy"
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_push_agents" {
+  role       = aws_iam_role.gh_actions_ecr_push_agents.name
+  policy_arn = aws_iam_policy.ecr_push_agents.arn
 }

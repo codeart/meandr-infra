@@ -36,10 +36,11 @@ locals {
   # Display names for ECR repos (the Name tag, shown in the AWS console).
   # Repo names themselves stay as canonical service identifiers.
   ecr_display_names = {
-    "meandr-mcp"    = "MCP Proxy Image"
-    "meandr-api"    = "API Image"
-    "meandr-agent"  = "Hosted Agent Image"
-    "meandr-runner" = "Hosted Runner Image"
+    "meandr-mcp"         = "MCP Proxy Image"
+    "meandr-api"         = "API Image"
+    "meandr-agent"       = "Hosted Agent Image"
+    "meandr-runner"      = "Hosted Runner Image"
+    "agents/claude-code" = "Claude Code Agent Image"
   }
 }
 

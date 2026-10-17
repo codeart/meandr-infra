@@ -8,6 +8,11 @@ output "gh_actions_ecr_push_role_arn" {
   value       = aws_iam_role.gh_actions_ecr_push.arn
 }
 
+output "gh_actions_ecr_push_agents_role_arn" {
+  description = "Role ARN meandr-harness CI assumes to push agents/* images."
+  value       = aws_iam_role.gh_actions_ecr_push_agents.arn
+}
+
 output "ecr_repos" {
   description = "Map of service name to ECR repo URLs (eu-central-1 primary)."
   value       = { for r in aws_ecr_repository.service : r.name => r.repository_url }

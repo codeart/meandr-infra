@@ -27,6 +27,12 @@ variable "image_release_tag_repos" {
   default     = ["meandr-agent", "meandr-runner"]
 }
 
+variable "agent_image_pusher_repos" {
+  description = "GitHub repos (within github_org) that build the hosted agents' agents/* images. Trusted to assume only the agents push role, from develop pushes and v* release tags."
+  type        = list(string)
+  default     = ["meandr-harness"]
+}
+
 variable "image_pusher_immutable_subs" {
   description = "repo name → immutable OIDC sub prefix (repo:<org>@<id>/<repo>@<id>) for repos on GitHub's immutable-subject format; read from the repo's actions/oidc/customization/sub. Absent repos use the classic repo:<org>/<repo> prefix."
   type        = map(string)
@@ -36,23 +42,24 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code"]
 }
 
 variable "ecr_keep_all_builds" {
   description = "ECR repos whose tagged builds never expire: a hosted node pins the digest it deployed with, for as long as it lives."
   type        = list(string)
-  default     = ["meandr-runner"]
+  default     = ["meandr-runner", "agents/claude-code"]
 }
 
 variable "ecr_pullers" {
   description = "repo name → role names (IAM wildcards allowed) in the workload accounts that may pull it. Fargate pulls with the task's execution role; an EC2 container instance pulls with its instance role (hosted-node)."
   type        = map(list(string))
   default = {
-    "meandr-mcp"    = ["meandr-mcp-execution-*"]
-    "meandr-api"    = ["meandr-api-execution-*"]
-    "meandr-agent"  = ["hosted-node", "hosted-task-execution"]
-    "meandr-runner" = ["hosted-node", "hosted-task-execution"]
+    "meandr-mcp"         = ["meandr-mcp-execution-*"]
+    "meandr-api"         = ["meandr-api-execution-*"]
+    "meandr-agent"       = ["hosted-node", "hosted-task-execution"]
+    "meandr-runner"      = ["hosted-node", "hosted-task-execution"]
+    "agents/claude-code" = ["hosted-node", "hosted-task-execution"]
   }
 }
 
