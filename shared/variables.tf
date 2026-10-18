@@ -42,13 +42,13 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli"]
 }
 
 variable "ecr_keep_all_builds" {
   description = "ECR repos whose tagged builds never expire: a hosted node pins the digest it deployed with, for as long as it lives."
   type        = list(string)
-  default     = ["meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose"]
+  default     = ["meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli"]
 }
 
 variable "ecr_pullers" {
@@ -63,6 +63,10 @@ variable "ecr_pullers" {
     "agents/codex"       = ["hosted-node", "hosted-task-execution"]
     "agents/gemini-cli"  = ["hosted-node", "hosted-task-execution"]
     "agents/goose"       = ["hosted-node", "hosted-task-execution"]
+    "agents/opencode"    = ["hosted-node", "hosted-task-execution"]
+    "agents/copilot-cli" = ["hosted-node", "hosted-task-execution"]
+    "agents/grok-build"  = ["hosted-node", "hosted-task-execution"]
+    "agents/cursor-cli"  = ["hosted-node", "hosted-task-execution"]
   }
 }
 

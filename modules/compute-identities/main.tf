@@ -7,7 +7,7 @@ locals {
 
   # compute-vpc's cluster, and the shared account's images a machine runs.
   cluster            = "meandr-hosted"
-  image_repositories = ["meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose"]
+  image_repositories = ["meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli"]
 
   # hosted-builder's pull-through cache prefixes.
   cache_prefixes = ["docker-hub", "ghcr"]

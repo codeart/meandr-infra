@@ -44,6 +44,10 @@ locals {
     "agents/codex"       = "Codex Agent Image"
     "agents/gemini-cli"  = "Gemini CLI Agent Image"
     "agents/goose"       = "Goose Agent Image"
+    "agents/opencode"    = "OpenCode Agent Image"
+    "agents/copilot-cli" = "GitHub Copilot CLI Agent Image"
+    "agents/grok-build"  = "Grok Build Agent Image"
+    "agents/cursor-cli"  = "Cursor CLI Agent Image"
   }
 }
 
