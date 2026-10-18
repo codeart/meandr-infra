@@ -41,6 +41,9 @@ locals {
     "meandr-agent"       = "Hosted Agent Image"
     "meandr-runner"      = "Hosted Runner Image"
     "agents/claude-code" = "Claude Code Agent Image"
+    "agents/codex"       = "Codex Agent Image"
+    "agents/gemini-cli"  = "Gemini CLI Agent Image"
+    "agents/goose"       = "Goose Agent Image"
   }
 }
 

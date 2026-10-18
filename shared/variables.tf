@@ -42,13 +42,13 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose"]
 }
 
 variable "ecr_keep_all_builds" {
   description = "ECR repos whose tagged builds never expire: a hosted node pins the digest it deployed with, for as long as it lives."
   type        = list(string)
-  default     = ["meandr-runner", "agents/claude-code"]
+  default     = ["meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose"]
 }
 
 variable "ecr_pullers" {
@@ -60,6 +60,9 @@ variable "ecr_pullers" {
     "meandr-agent"       = ["hosted-node", "hosted-task-execution"]
     "meandr-runner"      = ["hosted-node", "hosted-task-execution"]
     "agents/claude-code" = ["hosted-node", "hosted-task-execution"]
+    "agents/codex"       = ["hosted-node", "hosted-task-execution"]
+    "agents/gemini-cli"  = ["hosted-node", "hosted-task-execution"]
+    "agents/goose"       = ["hosted-node", "hosted-task-execution"]
   }
 }
 
