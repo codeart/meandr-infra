@@ -27,7 +27,7 @@ locals {
   # reads at handshake time, so it cannot disagree with DNS.
   proxy_apex = "meandr.io"
 
-  # Written by account-production/ into every region. Same path everywhere.
+  # Written by account-<env>/ into every region. Same path everywhere.
   self_ips_param = "/meandr/production/self-ips"
 
   # Upgrade order is replicas first, master last: a replica newer than its
@@ -54,13 +54,11 @@ locals {
   # fleet's VPC, and the CIDR the proxy admits it from.
   hosted_block = "10.11"
 
-  # One NAT per AZ, c included: it holds only the Sentinel arbiters, but
-  # they do egress — SSM, CloudWatch, source builds at boot — and its own
-  # instance keeps that off a sibling's address and off the cross-AZ meter.
-  #
-  # One NAT per listed AZ; a zone without its own egresses through the
-  # first. Against ~$33-38/month per managed gateway address.
-  nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  # One NAT per listed AZ; an unlisted zone egresses through the first and pays
+  # the cross-AZ meter (AZ-c's arbiters egress too: SSM, CloudWatch, source
+  # builds). Against ~$33-38/month per managed gateway address.
+  nat_instance_azs  = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  nat_instance_type = "t4g.micro"
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
   # Ordered c first, then b — AZ-c holds arbiters and no data.
@@ -77,7 +75,10 @@ locals {
 
   log_retention_days = 30
 
-  # GuardDuty findings (hosted_nodes.md §6): account-production's list.
+  # The proxy's MEANDR_LOG_LEVEL.
+  log_level = "info"
+
+  # GuardDuty findings (hosted_nodes.md §6): account-<env>'s list.
   alert_emails = ["aws-prd@meandr.com"]
 
   # --- Accelerator -----------------------------------------------------
@@ -86,7 +87,7 @@ locals {
   # accelerator has one, and the listener id is AWS-generated. Remote state
   # would work and is deliberately not used: it would give every region a
   # read dependency on the account stack rather than a provider alias.
-  #   terraform -chdir=../../account-production output ga_listener_arn
+  #   terraform -chdir=../../account-<env> output ga_listener_arn
   ga_listener_arn = "arn:aws:globalaccelerator::393686273464:accelerator/ccbf8f26-3a26-4193-97c9-95d5f47017cf/listener/5f307d6b"
 
   # --- What this region knows about the others -------------------------
@@ -98,7 +99,7 @@ locals {
   # Hardcoded rather than read from remote state, so this stack's only
   # cross-stack dependency stays the provider alias — the same call made
   # for acme_dns_role_arn. Retrieve with:
-  #   terraform -chdir=../us-east-1 output vpc_id
+  #   terraform -chdir=../<primary region> output vpc_id
   peer = {
     vpc_id              = "vpc-0464292fbee35fb21"
     cidr_block          = "10.20.0.0/16"

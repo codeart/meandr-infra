@@ -29,7 +29,7 @@ module "vpc" {
   # docs/runbooks/nat_cutover.md.
   nat_mode          = "instance"
   nat_instance_azs  = local.nat_instance_azs
-  nat_instance_type = "t4g.micro"
+  nat_instance_type = local.nat_instance_type
   nat_pinned_azs    = local.nat_pinned_azs
 
   # One AZ at a time; see the note in region.tf for the order and why.
@@ -420,6 +420,7 @@ module "api" {
   jobs              = local.jobs
   ingest            = local.ingest
   migrate           = local.migrate
+  shutdown_timeout  = local.api_shutdown_timeout
 
   log_retention_days = local.log_retention_days
 
@@ -519,6 +520,10 @@ module "mcp" {
   # Enables Cloud Map discovery + the fleet's direct-dial ingress
   # (hosted_nodes.md §2). Same CIDR module.hosted uses below.
   hosted_fleet_cidr = "${local.hosted_block}.0.0/16"
+
+  # Per-request and stream-lifecycle lines are level-gated rather than
+  # env-gated, so this is the switch that makes them visible.
+  log_level = local.log_level
 
   vpc_id                 = module.vpc.vpc_id
   vpc_cidr_block         = module.vpc.vpc_cidr_block
@@ -760,6 +765,30 @@ resource "aws_secretsmanager_secret_version" "hosted_events_token" {
 resource "aws_route53_zone_association" "hosted_discovery" {
   zone_id = module.mcp.discovery_zone_id
   vpc_id  = module.hosted.vpc_id
+}
+
+# Hosted agents reach THIS region's proxy at the customer's own URL, over the
+# peering: only the compute VPC resolves the apex to the internal NLB.
+resource "aws_route53_zone" "hosted_mcp" {
+  name = local.proxy_apex
+
+  vpc {
+    vpc_id = module.hosted.vpc_id
+  }
+
+  tags = local.tags
+}
+
+resource "aws_route53_record" "hosted_mcp_wildcard" {
+  zone_id = aws_route53_zone.hosted_mcp.zone_id
+  name    = "*.${local.proxy_apex}"
+  type    = "A"
+
+  alias {
+    name                   = module.mcp.nlb_dns_name
+    zone_id                = module.mcp.nlb_zone_id
+    evaluate_target_health = true
+  }
 }
 
 # --- Discourse ------------------------------------------------------------

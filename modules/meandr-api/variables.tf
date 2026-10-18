@@ -315,6 +315,7 @@ variable "puma" {
     target_cpu_utilization = number
     concurrency            = number
     threads                = number
+    holdover_slots         = number
   })
   default = {
     cpu                    = 256
@@ -325,6 +326,7 @@ variable "puma" {
     target_cpu_utilization = 70
     concurrency            = 2
     threads                = 5
+    holdover_slots         = 25
   }
 }
 
@@ -371,6 +373,15 @@ variable "migrate" {
   default = {
     cpu    = 512
     memory = 1024
+  }
+}
+
+variable "shutdown_timeout" {
+  description = "MEANDR_SHUTDOWN_TIMEOUT: seconds Puma and GoodJob give running work when stopping."
+  type        = number
+  validation {
+    condition     = var.shutdown_timeout >= 1 && var.shutdown_timeout <= 110
+    error_message = "shutdown_timeout must be 1 to 110: Puma's workers get 5 s more, and both must end inside the 120 s ECS stopTimeout."
   }
 }
 

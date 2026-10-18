@@ -140,6 +140,10 @@ locals {
     # value only fails an actual certificate order, never boot.
     MEANDR_ACME_DNS_ROLE_ARN = var.acme_dns_role_arn
 
+    # The GoodJob initializer reads it on every Rails boot, so ingest and
+    # migrate need it too, not just the services whose stop it times.
+    MEANDR_SHUTDOWN_TIMEOUT = var.shutdown_timeout
+
     # No PGSSLROOTCERT here: ecs-fargate-service injects the RDS trust
     # store into every task and sets the path itself.
   }
@@ -1079,15 +1083,16 @@ module "puma" {
   cpu    = var.puma.cpu
   memory = var.puma.memory
 
-  # Per-service DB pool sizing on top of the shared env. Puma's
-  # WEB_CONCURRENCY × RAILS_MAX_THREADS sets the upper bound on
-  # concurrent active connections from a single task; 15 covers the
-  # worst case (1 × ~10-12 threads) with headroom for one-off Rake-y
-  # work that grabs an extra connection.
+  # Fargate's cap; Puma stops within MEANDR_SHUTDOWN_TIMEOUT plus 5 s for its workers.
+  stop_timeout = 120
+
+  # MEANDR_DATABASE_POOL is per process, covering one worker's RAILS_MAX_THREADS;
+  # held responses (MEANDR_HOLDOVER_SLOTS) give their connection back while waiting.
   environment = merge(local.app_environment, {
-    MEANDR_DATABASE_POOL = "15"
-    WEB_CONCURRENCY      = var.puma.concurrency
-    RAILS_MAX_THREADS    = var.puma.threads
+    MEANDR_DATABASE_POOL  = "15"
+    WEB_CONCURRENCY       = var.puma.concurrency
+    RAILS_MAX_THREADS     = var.puma.threads
+    MEANDR_HOLDOVER_SLOTS = var.puma.holdover_slots
   })
   secrets = local.app_secrets
 
@@ -1148,6 +1153,9 @@ module "jobs" {
 
   cpu    = var.jobs.cpu
   memory = var.jobs.memory
+
+  # Fargate's cap; GoodJob stops within MEANDR_SHUTDOWN_TIMEOUT.
+  stop_timeout = 120
 
   # Jobs runs GOOD_JOB_MAX_THREADS workers in one process, each holding
   # an AR connection for the duration of its job. 30 = headroom for the

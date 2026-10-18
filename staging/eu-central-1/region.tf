@@ -28,7 +28,7 @@ locals {
   # reads at handshake time, so it cannot disagree with DNS.
   proxy_apex = "meandr.live"
 
-  # Written by account-staging/ into every region. Same path everywhere.
+  # Written by account-<env>/ into every region. Same path everywhere.
   self_ips_param = "/meandr/staging/self-ips"
 
   # Upgrade order is replicas first, master last: a replica newer than its
@@ -49,9 +49,11 @@ locals {
   # fleet's VPC, and the CIDR the proxy admits it from.
   hosted_block = "10.11"
 
-  # One NAT per listed AZ; a zone without its own egresses through the
-  # first. Against ~$33-38/month per managed gateway address.
-  nat_instance_azs = ["${local.region}a"]
+  # One NAT per listed AZ; an unlisted zone egresses through the first and pays
+  # the cross-AZ meter (AZ-c's arbiters egress too: SSM, CloudWatch, source
+  # builds). Against ~$33-38/month per managed gateway address.
+  nat_instance_azs  = ["${local.region}a"]
+  nat_instance_type = "t4g.nano"
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
   # Ordered c first, then b — AZ-c holds arbiters and no data.
@@ -67,7 +69,7 @@ locals {
   # accelerator has one, and the listener id is AWS-generated. Remote state
   # would work and is deliberately not used: it would give every region a
   # read dependency on the account stack rather than a provider alias.
-  #   terraform -chdir=../../account-staging output ga_listener_arn
+  #   terraform -chdir=../../account-<env> output ga_listener_arn
   ga_listener_arn = "arn:aws:globalaccelerator::259534890849:accelerator/3d7bdcd1-f6e6-478b-80cd-89cd8e5ce755/listener/929cbb6f"
 
   # --- Durability ------------------------------------------------------
@@ -78,7 +80,10 @@ locals {
   db_multi_az         = false
   log_retention_days  = 7
 
-  # GuardDuty findings (hosted_nodes.md §6): account-staging's list.
+  # The proxy's MEANDR_LOG_LEVEL.
+  log_level = "debug"
+
+  # GuardDuty findings (hosted_nodes.md §6): account-<env>'s list.
   alert_emails = ["aws-stg@meandr.com"]
 
   # --- Public names ----------------------------------------------------
@@ -89,25 +94,27 @@ locals {
 
   # --- Sizing ----------------------------------------------------------
   #
-  # Staging runs the smallest thing that exercises the topology. Production
-  # uses m7g for the data nodes — see its region.tf for why the shape
-  # matters more than the size.
+  # One type covers every fleet's data nodes, api included: reservations are
+  # per-AZ with a count, so mixed types would need grouping. Two vCPUs, not
+  # one, keep AOF fsync, rewrite forks and the agents off the event loop's core.
   valkey_instance_type = "t4g.nano"
   valkey_arbiter_type  = "t4g.nano"
 
   db_instance_class = "db.t4g.small"
-  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6 }
+  puma              = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70, concurrency : 0, threads : 6, holdover_slots : 25 }
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
+  # BE's MEANDR_SHUTDOWN_TIMEOUT, in seconds.
+  api_shutdown_timeout = 30
+
   # --- Postgres tuning -------------------------------------------------
   #
-  # max_connections is a CEILING sized to memory, not to the pool sum (75 at
-  # desired_count): a refused connection is a Rails exception, an OOM is
-  # crash recovery (2026-08-31). ~12 MiB each on the micro; 100 fits 2 GiB
-  # and covers steady state (~41) plus a deploy's second set of pools.
+  # Empty takes RDS's defaults. A max_connections set here is a CEILING that
+  # memory holds (~12 MiB each), above steady state plus a deploy's second set
+  # of pools: a refused connection is a Rails exception, an OOM crash recovery.
   db_parameters = {
     autovacuum_max_workers = "1"
     autovacuum_work_mem    = "32768" # KB

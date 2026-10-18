@@ -28,7 +28,7 @@ locals {
   # reads at handshake time, so it cannot disagree with DNS.
   proxy_apex = "meandr.io"
 
-  # Written by account-production/ into every region. Same path everywhere.
+  # Written by account-<env>/ into every region. Same path everywhere.
   self_ips_param = "/meandr/production/self-ips"
 
   # Upgrade order is replicas first, master last: a replica newer than its
@@ -41,17 +41,19 @@ locals {
   # --- Network ---------------------------------------------------------
   #
   # CIDR is a property of the REGION, not the environment: environments are
-  # separate accounts and never share a network, so this matches staging's
-  # us-east-1.
+  # separate accounts and never share a network, so staging and production
+  # in the same region use the same block.
   vpc_cidr = "10.20.0.0/16"
 
   # The region's FIRST compute block (network_allocation.md §2): the hosted
   # fleet's VPC, and the CIDR the proxy admits it from.
   hosted_block = "10.21"
 
-  # One NAT per listed AZ; a zone without its own egresses through the
-  # first. Against ~$33-38/month per managed gateway address.
-  nat_instance_azs = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  # One NAT per listed AZ; an unlisted zone egresses through the first and pays
+  # the cross-AZ meter (AZ-c's arbiters egress too: SSM, CloudWatch, source
+  # builds). Against ~$33-38/month per managed gateway address.
+  nat_instance_azs  = ["${local.region}a", "${local.region}b", "${local.region}c"]
+  nat_instance_type = "t4g.micro"
 
   # AZ-a keeps the shared table and never moves; b and c take their own.
   # Ordered c first, then b — AZ-c holds arbiters and no data.
@@ -67,7 +69,7 @@ locals {
   # accelerator has one, and the listener id is AWS-generated. Remote state
   # would work and is deliberately not used: it would give every region a
   # read dependency on the account stack rather than a provider alias.
-  #   terraform -chdir=../../account-production output ga_listener_arn
+  #   terraform -chdir=../../account-<env> output ga_listener_arn
   ga_listener_arn = "arn:aws:globalaccelerator::393686273464:accelerator/ccbf8f26-3a26-4193-97c9-95d5f47017cf/listener/5f307d6b"
 
   # --- Durability ------------------------------------------------------
@@ -78,7 +80,10 @@ locals {
   db_multi_az         = true
   log_retention_days  = 30
 
-  # GuardDuty findings (hosted_nodes.md §6): account-production's list.
+  # The proxy's MEANDR_LOG_LEVEL.
+  log_level = "info"
+
+  # GuardDuty findings (hosted_nodes.md §6): account-<env>'s list.
   alert_emails = ["aws-prd@meandr.com"]
 
   # --- Public names ----------------------------------------------------
@@ -89,30 +94,27 @@ locals {
 
   # --- Sizing ----------------------------------------------------------
   #
-  # Two vCPUs, not one: command execution is single-threaded, but the AOF
-  # fsync thread, rewrite forks, and the CloudWatch and SSM agents all want
-  # CPU, and a second core keeps them off the event loop's. 1 GiB is ample
-  # at current volume.
-  #
-  # Covers every fleet's data nodes, api included. Sizing api down to nano
-  # would save ~$12/mo and cost a per-fleet instance type in the module —
-  # the reservations are per-AZ with a count, so mixed types need grouping.
-  # Revisit with real usage rather than guessing now.
+  # One type covers every fleet's data nodes, api included: reservations are
+  # per-AZ with a count, so mixed types would need grouping. Two vCPUs, not
+  # one, keep AOF fsync, rewrite forks and the agents off the event loop's core.
   valkey_instance_type = "t4g.micro"
   valkey_arbiter_type  = "t4g.nano"
 
   db_instance_class = "db.t4g.small"
-  puma              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 8, target_cpu_utilization = 70, concurrency : 2, threads : 6 }
+  puma              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 8, target_cpu_utilization = 70, concurrency : 2, threads : 10, holdover_slots : 25 }
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 6, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
   proxy             = { cpu = 256, memory = 512, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
 
+  # BE's MEANDR_SHUTDOWN_TIMEOUT, in seconds.
+  api_shutdown_timeout = 100
+
   # --- Postgres tuning -------------------------------------------------
   #
-  # Empty on purpose: db.t4g.small has 2 GiB, so the autovacuum floor is 9%
-  # of RAM rather than staging's 19%, and Multi-AZ gives a standby. Revisit
-  # with real load rather than by copying staging.
+  # Empty takes RDS's defaults. A max_connections set here is a CEILING that
+  # memory holds (~12 MiB each), above steady state plus a deploy's second set
+  # of pools: a refused connection is a Rails exception, an OOM crash recovery.
   db_parameters = {}
 
   # --- What this region knows about the others -------------------------
