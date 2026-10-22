@@ -16,6 +16,14 @@ provider "aws" {
   profile = "meandr-production"
 }
 
+# CloudFront takes certificates ONLY from us-east-1, whatever region the
+# rest of the account lives in.
+provider "aws" {
+  alias   = "cloudfront"
+  region  = "us-east-1"
+  profile = "meandr-production"
+}
+
 # The public zones live in the Shared account.
 provider "aws" {
   alias   = "shared"
@@ -29,6 +37,9 @@ locals {
 
   # Public apex this environment's proxies serve.
   proxy_apex = "meandr.io"
+
+  # Where the bare apex itself redirects; the proxies never serve it.
+  apex_redirect = "https://meandr.com/"
 
   # Every region running a proxy. Each also needs a provider alias and a
   # self_ips block below, so this file is where the list has to live;

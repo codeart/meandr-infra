@@ -85,6 +85,26 @@ resource "aws_ssm_parameter" "regions" {
   tags  = local.account_tags
 }
 
+# --- Bare apex ----------------------------------------------------------
+#
+# The proxies answer <slug>.<apex> only; a browser opening the apex itself
+# gets a 301 from CloudFront to local.apex_redirect.
+
+module "apex_redirect" {
+  source = "../modules/apex-redirect"
+
+  providers = {
+    aws     = aws.cloudfront
+    aws.dns = aws.shared
+  }
+
+  name   = "meandr-${local.env}"
+  apex   = local.proxy_apex
+  target = local.apex_redirect
+
+  tags = local.account_tags
+}
+
 # --- Accelerator alerting -----------------------------------------------
 #
 # In us-west-2 because GA publishes its metrics there with its control
