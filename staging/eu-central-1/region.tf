@@ -123,7 +123,7 @@ locals {
 
   # --- What this region knows about the others -------------------------
   #
-  # Three lists, all environment configuration rather than dependencies:
+  # Four lists, all environment configuration rather than dependencies:
   # nothing here reads another region's state, and each edge still declares
   # its own peering, replicas and routes.
 
@@ -138,6 +138,10 @@ locals {
   # client_cidrs never reaches user_data, so an entry adds rules and
   # replaces no node.
   edge_cidrs = ["10.20.0.0/16"]
+
+  # Every edge's hosted fleet, admitted to this region's agent port for home
+  # copies (hosted_agent_homes.md §8). Literal for the same reason.
+  edge_hosted_cidrs = { "us-east-1" = "10.21.0.0/16" }
 
   # Every OTHER region: name -> node-name prefix. Drives the CONFIG Sentinel
   # list (one set spanning regions, so a proxy here can discover through a

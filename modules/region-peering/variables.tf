@@ -14,8 +14,9 @@ variable "cidr_block" {
 }
 
 variable "route_table_id" {
-  description = "This side's private route table. Private, because the fleets and tasks that need the link live there."
+  description = "This side's shared private route table, if it has one. Private, because the fleets and tasks that need the link live there. A compute VPC has per-AZ tables only."
   type        = string
+  default     = null
 }
 
 variable "peer_vpc_id" {
@@ -31,8 +32,9 @@ variable "peer_cidr_block" {
 }
 
 variable "peer_route_table_id" {
-  description = "The peer's private route table. Edited through the aws.peer provider, so adding a region touches no resource the peer's state owns."
+  description = "The peer's shared private route table, if it has one. Edited through the aws.peer provider, so adding a region touches no resource the peer's state owns."
   type        = string
+  default     = null
 }
 
 variable "az_route_table_ids" {

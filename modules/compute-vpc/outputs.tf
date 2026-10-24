@@ -5,6 +5,9 @@ output "vpc_cidr" { value = aws_vpc.main.cidr_block }
 # overrides are built from (hosted_nodes.md §4).
 output "private_subnet_ids" { value = { for az, s in aws_subnet.private : az => s.id } }
 
+# az letter -> private route table, for an edge's cross-region peerings.
+output "private_route_table_ids" { value = { for az, t in aws_route_table.private : az => t.id } }
+
 output "node_security_group_id" { value = aws_security_group.node.id }
 # arch -> launch template, the pair the BE's Fleet call picks from.
 output "launch_template_ids" { value = { for a, lt in aws_launch_template.node : a => lt.id } }

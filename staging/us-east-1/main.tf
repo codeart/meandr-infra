@@ -80,6 +80,52 @@ module "peering" {
   tags = local.tags
 }
 
+# Home copies (hosted_agent_homes.md §8): the fleets dial each other, and
+# BE's jobs dial this one. The peers' tables are found by tag, so the
+# primary's apply has to have tagged them first.
+module "fleet_peering" {
+  source = "../../modules/region-peering"
+
+  providers = {
+    aws      = aws
+    aws.peer = aws.primary_region
+  }
+
+  name = "${local.region} fleet to ${local.peer.region} fleet"
+
+  vpc_id             = module.hosted.vpc_id
+  cidr_block         = module.hosted.vpc_cidr
+  az_route_table_ids = module.hosted.private_route_table_ids
+
+  peer_vpc_id     = local.peer.hosted_vpc_id
+  peer_region     = local.peer.region
+  peer_cidr_block = local.peer.hosted_cidr_block
+
+  tags = local.tags
+}
+
+module "fleet_api_peering" {
+  source = "../../modules/region-peering"
+
+  providers = {
+    aws      = aws
+    aws.peer = aws.primary_region
+  }
+
+  name = "${local.region} fleet to ${local.peer.region}"
+
+  vpc_id             = module.hosted.vpc_id
+  cidr_block         = module.hosted.vpc_cidr
+  az_route_table_ids = module.hosted.private_route_table_ids
+
+  peer_vpc_id         = local.peer.vpc_id
+  peer_region         = local.peer.region
+  peer_cidr_block     = local.peer.cidr_block
+  peer_route_table_id = local.peer.private_route_table
+
+  tags = local.tags
+}
+
 # --- Credential store ---------------------------------------------------
 #
 # The primary CREATES the table; an edge attaches a replica. The table
@@ -501,6 +547,13 @@ module "hosted" {
   # Control-plane event log (contracts/hosted_platform_events.md).
   api_base_url = "https://${local.api_hostname}"
   events_token = data.aws_secretsmanager_secret_version.hosted_events_token.secret_string
+
+  # Who else reaches the agent port (hosted_agent_homes.md §8): BE's VPC and
+  # the primary's fleet. This fleet's own machines always do.
+  agent_port_sources = {
+    BE                             = local.peer.cidr_block
+    ("${local.peer.region} fleet") = local.peer.hosted_cidr_block
+  }
 
   tags = local.tags
 }

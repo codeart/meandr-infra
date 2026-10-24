@@ -10,6 +10,11 @@
 locals {
   hosted_regions      = [for f in var.hosted_fleets : f.region]
   hosted_cluster_arns = [for f in var.hosted_fleets : f.cluster_arn]
+
+  # BE's agent client key (hosted_agent_homes.md §8): the private key for
+  # jobs alone, the public keys for the reports puma answers.
+  agent_client_key_env         = var.agent_client_key_secret_arn == "" ? {} : { MEANDR_AGENT_CLIENT_KEY = var.agent_client_key_secret_arn }
+  agent_client_public_keys_env = var.agent_client_public_keys == "" ? {} : { MEANDR_AGENT_CLIENT_PUBLIC_KEYS = var.agent_client_public_keys }
 }
 
 resource "aws_iam_role_policy" "jobs_hosted" {
@@ -162,8 +167,9 @@ resource "aws_iam_role_policy" "jobs_hosted" {
   })
 }
 
-# Puma validates the agent/events bearers on /api/hosted/v1/* at request
-# time; both env tokens live in the API region only.
+# Puma validates the events bearer on /api/hosted/v1/events at request time.
+# That secret alone: BE's agent client key sits beside it under
+# meandr/hosted/<env>/, and it stays out of the internet-facing process.
 resource "aws_iam_role_policy" "task_hosted_tokens" {
   count = length(var.hosted_fleets) == 0 ? 0 : 1
 
@@ -176,7 +182,7 @@ resource "aws_iam_role_policy" "task_hosted_tokens" {
       Sid      = "HostedTokens"
       Effect   = "Allow"
       Action   = "secretsmanager:GetSecretValue"
-      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/hosted/${var.env}/*"
+      Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/hosted/${var.env}/events-token-*"
     }]
   })
 }

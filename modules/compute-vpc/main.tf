@@ -1,6 +1,6 @@
-# The hosted-node fleet substrate (hosted_nodes.md §2-4,
-# network_allocation.md §3): one compute VPC on the region's first block,
-# private-only instances, own NAT egress, peered ONLY to the main VPC.
+# The hosted-node fleet substrate (hosted_nodes.md §2-4, network_allocation.md
+# §3): a compute VPC on the region's first block, private-only instances, own
+# NAT egress, peered to its main VPC here and by an edge root across regions.
 
 locals {
   az_index = { for i, az in var.azs : az => i }
@@ -67,12 +67,13 @@ resource "aws_route_table_association" "public" {
 }
 
 # Per-AZ private tables from day one — the split a NAT-per-AZ future needs,
-# learned the hard way on the main VPC (nat-instance module docs).
+# learned the hard way on the main VPC (nat-instance module docs). The scope
+# tag is how another region's peering finds them (modules/region-peering).
 resource "aws_route_table" "private" {
   for_each = local.az_index
 
   vpc_id = aws_vpc.main.id
-  tags   = merge(local.base_tags, { Name = "hosted-private-${each.key}" })
+  tags   = merge(local.base_tags, { Name = "hosted-private-${each.key}", "meandr:scope" = "per-az-private" })
 }
 
 resource "aws_route_table_association" "private" {
@@ -107,7 +108,7 @@ resource "aws_route" "private_nat" {
   network_interface_id   = module.nat.network_interface_id
 }
 
-# --- Peering: main VPC only, no edge routing (network_allocation §5) ----
+# --- Peering: this region's main VPC (network_allocation §5) -----------
 
 resource "aws_vpc_peering_connection" "main" {
   vpc_id      = aws_vpc.main.id
@@ -133,7 +134,10 @@ resource "aws_route" "main_to_fleet" {
   vpc_peering_connection_id = aws_vpc_peering_connection.main.id
 }
 
-# --- The workload SG: deny-all inbound, no per-mode exception (§8) ------
+# --- The workload SG: inbound on the agent port alone (§8) --------------
+#
+# The description predates the agent port and stays: changing it replaces
+# the group, which can't happen under running machines.
 
 resource "aws_security_group" "node" {
   name        = "hosted-node"
@@ -148,6 +152,22 @@ resource "aws_security_group" "node" {
   }
 
   tags = merge(local.base_tags, { Name = "Hosted node" })
+}
+
+# meandr-agent's port (contracts/hosted_agent_homes.md §5): this fleet's own
+# machines and the caller's sources, by CIDR since group references don't
+# cross regions. Pinned mutual TLS decides who of them gets in.
+resource "aws_vpc_security_group_ingress_rule" "agent_port" {
+  for_each = merge({ "${var.region} fleet" = "${var.block}.0.0/16" }, var.agent_port_sources)
+
+  security_group_id = aws_security_group.node.id
+  description       = "Agent port from ${each.key}"
+  cidr_ipv4         = each.value
+  ip_protocol       = "tcp"
+  from_port         = 8444
+  to_port           = 8444
+
+  tags = merge(local.base_tags, { Name = "agent port from ${each.key}" })
 }
 
 # --- ECS: the agent we did not write (hosted_nodes.md §6) ---------------
@@ -174,8 +194,8 @@ data "aws_iam_role" "task_execution" {
 
 # --- Launch templates: one per arch -------------------------------------
 
-# Stock ECS-optimized AL2023, resolved per arch. The data source pins the
-# id in state — a bump is a deliberate apply, never a silent drift.
+# Stock ECS-optimized AL2023, resolved per arch at every plan: an apply takes
+# AWS's current release, and only machines launched after it get it.
 data "aws_ssm_parameter" "ecs_ami" {
   for_each = { arm64 = "arm64", amd64 = "x86_64" }
 

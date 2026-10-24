@@ -36,3 +36,5 @@ output "payloads_bucket" {
 # --- Cross-region -------------------------------------------------------
 
 output "peering_connection_id" { value = module.peering.connection_id }
+output "fleet_peering_connection_id" { value = module.fleet_peering.connection_id }
+output "fleet_api_peering_connection_id" { value = module.fleet_api_peering.connection_id }

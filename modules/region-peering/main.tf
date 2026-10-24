@@ -26,6 +26,13 @@ resource "aws_vpc_peering_connection" "this" {
   auto_accept = false
 
   tags = merge(var.tags, { Name = "${var.name} requester" })
+
+  lifecycle {
+    precondition {
+      condition     = var.route_table_id != null || length(var.az_route_table_ids) > 0
+      error_message = "This side names no route table, so nothing here would route to the peer."
+    }
+  }
 }
 
 resource "aws_vpc_peering_connection_accepter" "this" {
@@ -58,9 +65,16 @@ resource "aws_vpc_peering_connection_options" "accepter" {
 }
 
 resource "aws_route" "to_peer" {
+  count = var.route_table_id == null ? 0 : 1
+
   route_table_id            = var.route_table_id
   destination_cidr_block    = var.peer_cidr_block
   vpc_peering_connection_id = aws_vpc_peering_connection.this.id
+}
+
+moved {
+  from = aws_route.to_peer
+  to   = aws_route.to_peer[0]
 }
 
 # The peer's table is edited from HERE, and it is additive: the vpc module
@@ -68,10 +82,16 @@ resource "aws_route" "to_peer" {
 # cannot clobber this one.
 resource "aws_route" "from_peer" {
   provider = aws.peer
+  count    = var.peer_route_table_id == null ? 0 : 1
 
   route_table_id            = var.peer_route_table_id
   destination_cidr_block    = var.cidr_block
   vpc_peering_connection_id = aws_vpc_peering_connection_accepter.this.id
+}
+
+moved {
+  from = aws_route.from_peer
+  to   = aws_route.from_peer[0]
 }
 
 # The per-AZ tables, as SEPARATE resources rather than folding the shared
@@ -107,6 +127,13 @@ data "aws_route_tables" "peer_per_az" {
   filter {
     name   = "tag:meandr:scope"
     values = ["per-az-private"]
+  }
+
+  lifecycle {
+    postcondition {
+      condition     = var.peer_route_table_id != null || length(self.ids) > 0
+      error_message = "The peer has no shared table and none tagged meandr:scope = per-az-private, so nothing would route back. Apply the peer's tags first."
+    }
   }
 }
 

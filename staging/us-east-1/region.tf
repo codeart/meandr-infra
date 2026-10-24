@@ -106,6 +106,11 @@ locals {
     private_route_table = "rtb-0e0e83bd1a54564d5"
     region              = "eu-central-1"
 
+    # The primary's hosted fleet, which this one peers with for home copies
+    # (hosted_agent_homes.md §8). `output hosted_vpc_id` there.
+    hosted_vpc_id     = "vpc-08cf1ef641a7b32b1"
+    hosted_cidr_block = "10.11.0.0/16"
+
     # No per-AZ table list: the peering module finds them by their
     # `meandr:scope = per-az-private` tag, so a zone the peer splits later
     # gets its route on our next apply.
@@ -116,11 +121,12 @@ locals {
     internal_dns_zone_id = "Z05780018F0P6ONCICNQ"
   }
 
-  # An edge replicates no secrets outward and admits no other region's
-  # nodes; the primary holds both lists. Present so the two region files
-  # stay comparable.
-  edge_regions = []
-  edge_cidrs   = []
+  # An edge replicates no secrets outward, and what it admits from the
+  # primary comes from `peer`; the primary holds these lists. Present so the
+  # two region files stay comparable.
+  edge_regions      = []
+  edge_cidrs        = []
+  edge_hosted_cidrs = {}
 
   # Node-name prefixes for every OTHER region, used to build the CONFIG
   # Sentinel list — one set spanning regions, so a proxy here can discover

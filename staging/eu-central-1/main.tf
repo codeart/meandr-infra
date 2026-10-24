@@ -439,15 +439,19 @@ module "api" {
   envelope_encryption_key_arn = module.action_encryption_key.key_arn
 
   # BE orchestrates every region's hosted fleet (hosted.tf grants:
-  # tag-fenced terminate, cluster-fenced ECS, both hosted tokens). Each edge
-  # hosts one, and must be an edge_region anyway to get the agent token.
-  # The identities are account-global, so one set serves them all.
+  # tag-fenced terminate, cluster-fenced ECS, the events token). Each edge
+  # hosts one; the identities are account-global, so one set serves them all.
   hosted_fleets = [for r in concat([local.region], local.edge_regions) : {
     region                  = r
     cluster_arn             = "arn:aws:ecs:${r}:${local.account_id}:cluster/${module.hosted.cluster_name}"
     node_role_arn           = module.hosted.node_role_arn
     task_execution_role_arn = module.hosted.task_execution_role_arn
   }]
+
+  # BE's key for the machines' agent port (contracts/hosted_agent_homes.md
+  # §8): jobs gets the private key, puma the public keys for pins.
+  agent_client_key_secret_arn = aws_secretsmanager_secret_version.agent_client_key.arn
+  agent_client_public_keys    = tls_private_key.agent_client.public_key_pem
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -715,6 +719,13 @@ module "hosted" {
   api_base_url = "https://${local.api_hostname}"
   events_token = random_password.hosted_events_token.result
 
+  # Who else reaches the agent port (hosted_agent_homes.md §8): BE's VPC and
+  # every edge's fleet. This fleet's own machines always do.
+  agent_port_sources = merge(
+    { BE = module.vpc.vpc_cidr_block },
+    { for region, cidr in local.edge_hosted_cidrs : "${region} fleet" => cidr },
+  )
+
   tags = local.tags
 }
 
@@ -759,6 +770,25 @@ resource "aws_secretsmanager_secret" "hosted_events_token" {
 resource "aws_secretsmanager_secret_version" "hosted_events_token" {
   secret_id     = aws_secretsmanager_secret.hosted_events_token.id
   secret_string = random_password.hosted_events_token.result
+}
+
+# BE's TLS client key for the machines' agent port (hosted_agent_homes.md
+# §8), env-wide like the events token. Only the primary's jobs read it, so
+# no replicas; puma gets the public key.
+resource "tls_private_key" "agent_client" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "aws_secretsmanager_secret" "agent_client_key" {
+  name        = "meandr/hosted/${local.env}/agent-client-key"
+  description = "TLS client key the BE jobs present on the hosted machines agent port."
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "agent_client_key" {
+  secret_id     = aws_secretsmanager_secret.agent_client_key.id
+  secret_string = tls_private_key.agent_client.private_key_pem
 }
 
 # Hosted nodes resolve proxy.svc.<zone> from inside the compute VPC.

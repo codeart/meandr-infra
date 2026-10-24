@@ -31,7 +31,7 @@ variable "region_code" {
   type = string
 }
 
-# The main VPC this compute VPC peers with — its ONLY peering (§5).
+# This region's main VPC, which the compute VPC peers with (§5).
 variable "main_vpc_id" {
   type = string
 }
@@ -44,6 +44,13 @@ variable "main_vpc_cidr" {
 # private tables carrying the proxy tasks.
 variable "main_route_table_ids" {
   type = list(string)
+}
+
+# label -> CIDR reaching the agent port beside this fleet's own machines:
+# BE's VPC and the other regions' fleets (hosted_agent_homes.md §8).
+variable "agent_port_sources" {
+  type    = map(string)
+  default = {}
 }
 
 variable "nat_instance_type" {

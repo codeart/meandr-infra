@@ -472,3 +472,15 @@ variable "hosted_fleets" {
   }))
   default = []
 }
+
+variable "agent_client_key_secret_arn" {
+  description = "BE's TLS client key for the hosted machines' agent port (contracts/hosted_agent_homes.md §8), injected into jobs alone as MEANDR_AGENT_CLIENT_KEY. Empty = none."
+  type        = string
+  default     = ""
+}
+
+variable "agent_client_public_keys" {
+  description = "PEM public keys of every agent client key in use, two while one is replaced; puma makes the report answer's pins from them (MEANDR_AGENT_CLIENT_PUBLIC_KEYS). Empty = none."
+  type        = string
+  default     = ""
+}

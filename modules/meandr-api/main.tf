@@ -358,6 +358,8 @@ resource "aws_iam_role_policy" "execution_secrets" {
         # a secret-fetch error, before any application log — which reads
         # nothing like the TLS problem it gets mistaken for.
         var.valkey_client_secret_arn,
+        # BE's agent client key, injected into jobs alone (hosted.tf).
+        var.agent_client_key_secret_arn,
       ])
       }], var.self_ips_parameter_arn == "" ? [] : [{
       Effect   = "Allow"
@@ -1093,7 +1095,7 @@ module "puma" {
     WEB_CONCURRENCY       = var.puma.concurrency
     RAILS_MAX_THREADS     = var.puma.threads
     MEANDR_HOLDOVER_SLOTS = var.puma.holdover_slots
-  })
+  }, local.agent_client_public_keys_env)
   secrets = local.app_secrets
 
   # Container-level health check is distinct from the ALB target-group
@@ -1164,7 +1166,7 @@ module "jobs" {
   environment = merge(local.app_environment, {
     MEANDR_DATABASE_POOL = "30"
   })
-  secrets = local.app_secrets
+  secrets = merge(local.app_secrets, local.agent_client_key_env)
 
   container_health_check = {
     command     = ["CMD-SHELL", "pgrep -f good_job || exit 1"]
