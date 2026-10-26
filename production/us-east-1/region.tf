@@ -105,7 +105,7 @@ locals {
   jobs              = { cpu = 512, memory = 1024, desired_count = 1, min_replicas = 1, max_replicas = 6, target_cpu_utilization = 70 }
   ingest            = { cpu = 256, memory = 512, desired_count = 1 }
   migrate           = { cpu = 512, memory = 1024 }
-  proxy             = { cpu = 256, memory = 512, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
+  proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 10, target_cpu_utilization = 60 }
 
   # BE's MEANDR_SHUTDOWN_TIMEOUT, in seconds.
   api_shutdown_timeout = 100

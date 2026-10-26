@@ -71,7 +71,7 @@ locals {
   image_tag         = "main"
   api_hostname      = "api.meandr.com"
   oauth_issuer_host = "mcp.meandr.com"
-  proxy             = { cpu = 256, memory = 512, desired_count = 2, min_replicas = 2, max_replicas = 10, target_cpu_utilization = 60 }
+  proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 10, target_cpu_utilization = 60 }
 
   log_retention_days = 30
 
