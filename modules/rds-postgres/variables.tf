@@ -15,6 +15,12 @@ variable "instance_class" {
   default     = "db.t4g.micro"
 }
 
+variable "tuned_for" {
+  description = "The class the parameters were tuned for, when the instance runs another for a while (parked). Empty is instance_class. It names the parameter group, so changing it replaces the group."
+  type        = string
+  default     = ""
+}
+
 variable "allocated_storage_gb" {
   description = "Initial storage size in GB. gp3 is used (better baseline IOPS than gp2 for the same price). Storage autoscaling extends this up to `max_allocated_storage_gb`."
   type        = number

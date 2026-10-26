@@ -18,6 +18,11 @@ locals {
   # is no provider to inherit credentials from.
   aws_profile = "meandr-production"
 
+  # Parked: no tasks, load balancers, accelerator endpoint or public addresses,
+  # instances stopped without reservations. False restores the region, after
+  # account-<env>'s accelerator, whose new listener arn goes in ga_listener_arn.
+  parked = false
+
   # An EDGE. No archive bucket, no Glue database, no meandr-api, and no
   # `api` Valkey fleet — all of those are one-per-environment and live in
   # the primary. See infra_inventory.md §10.

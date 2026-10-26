@@ -4,8 +4,8 @@ output "network_interface_id" {
 }
 
 output "public_ip" {
-  description = "This AZ's egress address. Fixed for the life of the EIP, so it is safe in a customer's allow-list."
-  value       = aws_eip.main.public_ip
+  description = "This AZ's egress address. Fixed for the life of the EIP, so it is safe in a customer's allow-list. Null while parked."
+  value       = one(aws_eip.main[*].public_ip)
 }
 
 output "instance_id" {
@@ -13,8 +13,8 @@ output "instance_id" {
 }
 
 output "capacity_reservation_id" {
-  description = "The held slot. Targeted, so only this instance can use it — and only this instance's launch fails if it is gone."
-  value       = aws_ec2_capacity_reservation.main.id
+  description = "The held slot. Targeted, so only this instance can use it — and only this instance's launch fails if it is gone. Null while parked."
+  value       = one(aws_ec2_capacity_reservation.main[*].id)
 }
 
 output "security_group_id" {

@@ -153,6 +153,12 @@ variable "db_deletion_protection" {
   default     = false
 }
 
+variable "parked" {
+  description = "The env's `parked`: no load balancer or autoscaling, and Postgres on db.t4g.micro. The root sets the services' tasks to 0."
+  type        = bool
+  default     = false
+}
+
 # --- Redis AUTH (shared token across all three fleets) -----------------
 #
 # One token per env. Network isolation and mTLS are the primary controls;

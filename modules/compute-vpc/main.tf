@@ -97,6 +97,7 @@ module "nat" {
 
   instance_type    = var.nat_instance_type
   alarm_topic_arns = var.alarm_topic_arns
+  parked           = var.parked
   tags             = local.base_tags
 }
 

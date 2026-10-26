@@ -201,7 +201,8 @@ module "rds" {
   db_name        = local.db_name
   engine_version = "18.6"
 
-  instance_class           = var.db_instance_class
+  instance_class           = var.parked ? "db.t4g.micro" : var.db_instance_class
+  tuned_for                = var.db_instance_class
   allocated_storage_gb     = var.db_allocated_storage_gb
   max_allocated_storage_gb = var.db_max_allocated_storage_gb
 
@@ -279,6 +280,8 @@ resource "aws_security_group_rule" "alb_egress_all" {
 }
 
 resource "aws_lb" "main" {
+  count = var.parked ? 0 : 1
+
   name               = "meandr-alb"
   internal           = false
   load_balancer_type = "application"
@@ -291,8 +294,15 @@ resource "aws_lb" "main" {
   tags = merge(local.base_tags, { Name = "Main ALB - ${var.env}" })
 }
 
+moved {
+  from = aws_lb.main
+  to   = aws_lb.main[0]
+}
+
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.main.arn
+  count = var.parked ? 0 : 1
+
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -310,8 +320,15 @@ resource "aws_lb_listener" "https" {
   tags = merge(local.base_tags, { Name = "HTTPS Listener" })
 }
 
+moved {
+  from = aws_lb_listener.https
+  to   = aws_lb_listener.https[0]
+}
+
 resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.main.arn
+  count = var.parked ? 0 : 1
+
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 80
   protocol          = "HTTP"
 
@@ -325,6 +342,11 @@ resource "aws_lb_listener" "http" {
   }
 
   tags = merge(local.base_tags, { Name = "HTTP redirect listener" })
+}
+
+moved {
+  from = aws_lb_listener.http
+  to   = aws_lb_listener.http[0]
 }
 
 # --- ECS cluster + shared IAM -------------------------------------------
@@ -1022,6 +1044,8 @@ resource "aws_security_group_rule" "worker_egress_all" {
 # --- Puma target group + listener rule ----------------------------------
 
 resource "aws_lb_target_group" "puma" {
+  count = var.parked ? 0 : 1
+
   name        = "meandr-api-puma"
   port        = 3000
   protocol    = "HTTP"
@@ -1048,8 +1072,15 @@ resource "aws_lb_target_group" "puma" {
   }
 }
 
+moved {
+  from = aws_lb_target_group.puma
+  to   = aws_lb_target_group.puma[0]
+}
+
 resource "aws_lb_listener_rule" "puma" {
-  listener_arn = aws_lb_listener.https.arn
+  count = var.parked ? 0 : 1
+
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = 100
 
   condition {
@@ -1060,10 +1091,15 @@ resource "aws_lb_listener_rule" "puma" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.puma.arn
+    target_group_arn = aws_lb_target_group.puma[0].arn
   }
 
   tags = merge(local.base_tags, { Name = "meandr-api-puma listener rule" })
+}
+
+moved {
+  from = aws_lb_listener_rule.puma
+  to   = aws_lb_listener_rule.puma[0]
 }
 
 # --- Puma service (Rails web) ------------------------------------------
@@ -1119,9 +1155,10 @@ module "puma" {
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.puma.id]
 
-  target_group_arn = aws_lb_target_group.puma.arn
+  target_group_arn = one(aws_lb_target_group.puma[*].arn)
 
   desired_count          = var.puma.desired_count
+  enable_autoscaling     = !var.parked
   min_replicas           = var.puma.min_replicas
   max_replicas           = var.puma.max_replicas
   target_cpu_utilization = var.puma.target_cpu_utilization
@@ -1182,6 +1219,7 @@ module "jobs" {
   target_group_arn = null
 
   desired_count          = var.jobs.desired_count
+  enable_autoscaling     = !var.parked
   min_replicas           = var.jobs.min_replicas
   max_replicas           = var.jobs.max_replicas
   target_cpu_utilization = var.jobs.target_cpu_utilization
@@ -1284,6 +1322,7 @@ module "migrate" {
 # --- Public DNS record --------------------------------------------------
 
 resource "aws_route53_record" "public" {
+  count    = var.parked ? 0 : 1
   provider = aws.dns
 
   zone_id = data.aws_route53_zone.public.zone_id
@@ -1291,10 +1330,15 @@ resource "aws_route53_record" "public" {
   type    = "A"
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = aws_lb.main[0].dns_name
+    zone_id                = aws_lb.main[0].zone_id
     evaluate_target_health = true
   }
+}
+
+moved {
+  from = aws_route53_record.public
+  to   = aws_route53_record.public[0]
 }
 
 # Additional names on the same front — today the OAuth issuer host, which
@@ -1302,7 +1346,7 @@ resource "aws_route53_record" "public" {
 # target group; the wildcard cert already covers *.meandr.com, so a name
 # here needs a record and a listener condition, nothing more.
 resource "aws_route53_record" "extra" {
-  for_each = toset(var.extra_hostnames)
+  for_each = var.parked ? toset([]) : toset(var.extra_hostnames)
   provider = aws.dns
 
   zone_id = data.aws_route53_zone.public.zone_id
@@ -1310,8 +1354,8 @@ resource "aws_route53_record" "extra" {
   type    = "A"
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = aws_lb.main[0].dns_name
+    zone_id                = aws_lb.main[0].zone_id
     evaluate_target_health = true
   }
 }

@@ -70,14 +70,28 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 # The EIP outlives the instance, so the egress address survives a
 # replacement even though the interface underneath does not.
 resource "aws_eip" "main" {
+  count = var.parked ? 0 : 1
+
   domain = "vpc"
 
   tags = merge(var.tags, { Name = "NAT EIP ${var.az}" })
 }
 
+moved {
+  from = aws_eip.main
+  to   = aws_eip.main[0]
+}
+
 resource "aws_eip_association" "main" {
-  allocation_id = aws_eip.main.id
+  count = var.parked ? 0 : 1
+
+  allocation_id = aws_eip.main[0].id
   instance_id   = aws_instance.main.id
+}
+
+moved {
+  from = aws_eip_association.main
+  to   = aws_eip_association.main[0]
 }
 
 # --- Instance -----------------------------------------------------------
@@ -136,6 +150,8 @@ resource "aws_iam_instance_profile" "main" {
 # instance below references it, so Terraform orders the two without a
 # depends_on — see the note on that resource.
 resource "aws_ec2_capacity_reservation" "main" {
+  count = var.parked ? 0 : 1
+
   instance_type           = var.instance_type
   instance_platform       = "Linux/UNIX"
   availability_zone       = var.az
@@ -144,6 +160,11 @@ resource "aws_ec2_capacity_reservation" "main" {
   instance_match_criteria = "targeted"
 
   tags = merge(var.tags, { Name = local.name })
+}
+
+moved {
+  from = aws_ec2_capacity_reservation.main
+  to   = aws_ec2_capacity_reservation.main[0]
 }
 
 resource "aws_instance" "main" {
@@ -156,9 +177,15 @@ resource "aws_instance" "main" {
   # data source resolvable at plan time. depends_on would defer it,
   # local.user_data would go unknown, and user_data_replace_on_change
   # would stop firing without saying so. Same trap as valkey-region.
+  # Parked, it targets none: a stopped box needs no slot.
   capacity_reservation_specification {
-    capacity_reservation_target {
-      capacity_reservation_id = aws_ec2_capacity_reservation.main.id
+    capacity_reservation_preference = var.parked ? "none" : null
+
+    dynamic "capacity_reservation_target" {
+      for_each = aws_ec2_capacity_reservation.main
+      content {
+        capacity_reservation_id = capacity_reservation_target.value.id
+      }
     }
   }
 

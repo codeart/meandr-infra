@@ -130,7 +130,7 @@ locals {
 resource "aws_db_parameter_group" "main" {
   name_prefix = "${var.name}-"
   family      = "postgres${split(".", var.engine_version)[0]}"
-  description = "Tuned for ${var.instance_class}. ASCII only: RDS rejects non-printable and non-ASCII characters here, mid-apply."
+  description = "Tuned for ${coalesce(var.tuned_for, var.instance_class)}. ASCII only: RDS rejects non-printable and non-ASCII characters here, mid-apply."
 
   dynamic "parameter" {
     for_each = var.db_parameters

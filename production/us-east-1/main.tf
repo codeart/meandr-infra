@@ -37,7 +37,8 @@ module "vpc" {
 
   internal_dns_zone = "${local.env}.meandr.internal"
 
-  tags = local.tags
+  parked = local.parked
+  tags   = local.tags
 }
 
 # --- Credential store ---------------------------------------------------
@@ -283,7 +284,8 @@ module "valkey" {
   dns_zone_id   = module.vpc.internal_dns_zone_id
   dns_zone_name = module.vpc.internal_dns_zone_name
 
-  tags = local.tags
+  parked = local.parked
+  tags   = local.tags
 }
 
 
@@ -452,6 +454,8 @@ module "api" {
   # §8): jobs gets the private key, puma the public keys for pins.
   agent_client_key_secret_arn = aws_secretsmanager_secret_version.agent_client_key.arn
   agent_client_public_keys    = tls_private_key.agent_client.public_key_pem
+
+  parked = local.parked
 }
 
 # --- meandr-mcp --------------------------------------------------------
@@ -620,6 +624,8 @@ module "mcp" {
   # pair. Derived, not copied: the same line works in every region, and the
   # value changes without a Terraform change here.
   self_ips_parameter_arn = "arn:aws:ssm:${local.region}:${local.account_id}:parameter${local.self_ips_param}"
+
+  parked = local.parked
 }
 
 # --- Global Accelerator endpoint ---------------------------------------
@@ -638,6 +644,7 @@ locals {
 }
 
 resource "aws_globalaccelerator_endpoint_group" "local_region" {
+  count    = local.parked ? 0 : 1
   provider = aws.usw2
 
   listener_arn          = local.ga_listener_arn
@@ -661,9 +668,15 @@ resource "aws_globalaccelerator_endpoint_group" "local_region" {
   }
 }
 
+moved {
+  from = aws_globalaccelerator_endpoint_group.local_region
+  to   = aws_globalaccelerator_endpoint_group.local_region[0]
+}
+
 # This region withdrawn from the anycast pair. Traffic still serves from the
 # others, which is why nothing else reports it.
 resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
+  count    = local.parked ? 0 : 1
   provider = aws.usw2
 
   alarm_name        = "meandr-${local.env}-ga-unhealthy-${local.region}"
@@ -690,6 +703,11 @@ resource "aws_cloudwatch_metric_alarm" "ga_endpoint_unhealthy" {
   alarm_actions = [local.ga_alerts_topic_arn]
   ok_actions    = [local.ga_alerts_topic_arn]
   tags          = local.tags
+}
+
+moved {
+  from = aws_cloudwatch_metric_alarm.ga_endpoint_unhealthy
+  to   = aws_cloudwatch_metric_alarm.ga_endpoint_unhealthy[0]
 }
 
 # --- Hosted fleet (hosted_nodes.md, network_allocation.md §2-3) ---------
@@ -726,7 +744,8 @@ module "hosted" {
     { for region, cidr in local.edge_hosted_cidrs : "${region} fleet" => cidr },
   )
 
-  tags = local.tags
+  parked = local.parked
+  tags   = local.tags
 }
 
 # The fleet's abuse detection (hosted_nodes.md §6). GuardDuty is one
@@ -810,6 +829,8 @@ resource "aws_route53_zone" "hosted_mcp" {
 }
 
 resource "aws_route53_record" "hosted_mcp_wildcard" {
+  count = local.parked ? 0 : 1
+
   zone_id = aws_route53_zone.hosted_mcp.zone_id
   name    = "*.${local.proxy_apex}"
   type    = "A"
@@ -818,6 +839,60 @@ resource "aws_route53_record" "hosted_mcp_wildcard" {
     name                   = module.mcp.nlb_dns_name
     zone_id                = module.mcp.nlb_zone_id
     evaluate_target_health = true
+  }
+}
+
+moved {
+  from = aws_route53_record.hosted_mcp_wildcard
+  to   = aws_route53_record.hosted_mcp_wildcard[0]
+}
+
+# --- Parked (region.tf) -------------------------------------------------
+#
+# Task counts and instance power are outside Terraform's model, so the
+# operator's CLI sets them: these exist only while parked, and their destroy
+# (parked = false) starts the instances and puts each count back.
+
+locals {
+  parked_services = local.parked ? {
+    puma   = { cluster = module.api.cluster_name, service = module.api.puma_service_name, restore = local.puma.desired_count }
+    jobs   = { cluster = module.api.cluster_name, service = module.api.jobs_service_name, restore = local.jobs.desired_count }
+    ingest = { cluster = module.api.cluster_name, service = module.api.ingest_service_name, restore = local.ingest.desired_count }
+    proxy  = { cluster = module.mcp.cluster_name, service = module.mcp.proxy_service_name, restore = local.proxy.desired_count }
+  } : {}
+}
+
+resource "terraform_data" "parked_service" {
+  for_each = local.parked_services
+
+  input = merge(each.value, { region = local.region, profile = local.aws_profile })
+
+  provisioner "local-exec" {
+    command = "aws ecs update-service --cluster ${self.input.cluster} --service ${self.input.service} --desired-count 0 --region ${self.input.region} --profile ${self.input.profile} --query service.desiredCount --output text"
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "aws ecs update-service --cluster ${self.input.cluster} --service ${self.input.service} --desired-count ${self.input.restore} --region ${self.input.region} --profile ${self.input.profile} --query service.desiredCount --output text"
+  }
+}
+
+resource "terraform_data" "parked_instances" {
+  count = local.parked ? 1 : 0
+
+  input = {
+    ids     = join(" ", sort(concat(module.valkey.instance_ids, module.vpc.nat_instance_ids, [module.hosted.nat_instance_id])))
+    region  = local.region
+    profile = local.aws_profile
+  }
+
+  provisioner "local-exec" {
+    command = "aws ec2 stop-instances --instance-ids ${self.input.ids} --region ${self.input.region} --profile ${self.input.profile} --output text --query 'StoppingInstances[].CurrentState.Name' && aws ec2 wait instance-stopped --instance-ids ${self.input.ids} --region ${self.input.region} --profile ${self.input.profile}"
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "aws ec2 start-instances --instance-ids ${self.input.ids} --region ${self.input.region} --profile ${self.input.profile} --output text --query 'StartingInstances[].CurrentState.Name' && aws ec2 wait instance-running --instance-ids ${self.input.ids} --region ${self.input.region} --profile ${self.input.profile}"
   }
 }
 

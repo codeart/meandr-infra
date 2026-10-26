@@ -15,7 +15,11 @@ locals {
 
   # The accelerator id is the CloudWatch dimension value, and it is the
   # listener arn's first path segment.
-  ga_accelerator_id = split("/", module.global_accelerator.listener_arn)[1]
+  ga_accelerator_id = local.parked ? "" : split("/", module.global_accelerator[0].listener_arn)[1]
+
+  # The anycast pair. Parked, a documentation address (TEST-NET-1): the
+  # parameters cannot be empty, and nothing that reads them is running.
+  self_ips = local.parked ? "192.0.2.1" : join(",", module.global_accelerator[0].static_ips)
 
   account_tags = {
     "meandr:env"        = local.env
@@ -59,6 +63,7 @@ module "account_bootstrap" {
 # immutable, so that migration is a replacement.
 module "global_accelerator" {
   source = "../modules/global-accelerator"
+  count  = local.parked ? 0 : 1
 
   providers = {
     aws      = aws
@@ -70,6 +75,11 @@ module "global_accelerator" {
   dns_zone_name = local.proxy_apex
 
   tags = local.account_tags
+}
+
+moved {
+  from = module.global_accelerator
+  to   = module.global_accelerator[0]
 }
 
 # Read by CI to fan a deploy across every region. Written only here, in the
@@ -133,6 +143,7 @@ resource "aws_sns_topic_subscription" "ga_alerts" {
 # region dropping: with nothing healthy, GA stops withdrawing and routes to
 # every endpoint instead, so traffic keeps arriving at dead regions.
 resource "aws_cloudwatch_metric_alarm" "ga_no_healthy_endpoints" {
+  count    = local.parked ? 0 : 1
   provider = aws.usw2
 
   alarm_name        = "meandr-${local.env}-ga-no-healthy-endpoints"
@@ -155,6 +166,11 @@ resource "aws_cloudwatch_metric_alarm" "ga_no_healthy_endpoints" {
   alarm_actions = [aws_sns_topic.ga_alerts.arn]
   ok_actions    = [aws_sns_topic.ga_alerts.arn]
   tags          = local.account_tags
+}
+
+moved {
+  from = aws_cloudwatch_metric_alarm.ga_no_healthy_endpoints
+  to   = aws_cloudwatch_metric_alarm.ga_no_healthy_endpoints[0]
 }
 
 # --- Cost-control guards (budget + anomaly detection) --------------------
@@ -209,8 +225,8 @@ module "compute_identities" {
 #   terraform -chdir=account-<env> output ga_listener_arn
 
 output "ga_listener_arn" {
-  description = "What a region attaches its endpoint group to."
-  value       = module.global_accelerator.listener_arn
+  description = "What a region attaches its endpoint group to. Null while parked; a new arn after."
+  value       = one(module.global_accelerator[*].listener_arn)
 }
 
 output "ga_alerts_topic_arn" {
@@ -220,7 +236,7 @@ output "ga_alerts_topic_arn" {
 
 output "ga_static_ips" {
   description = "Anycast pair. Stable for the accelerator's lifetime — safe for a customer allow-list, and what the proxy's SSRF dial guard must load as its self IPs."
-  value       = module.global_accelerator.static_ips
+  value       = local.parked ? [] : module.global_accelerator[0].static_ips
 }
 
 output "github_oidc_provider_arn" {

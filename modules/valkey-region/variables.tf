@@ -86,6 +86,12 @@ variable "sentinel_quorum" {
   default     = 2
 }
 
+variable "parked" {
+  description = "The env's `parked`: no capacity reservations while the nodes are stopped."
+  type        = bool
+  default     = false
+}
+
 variable "auth_secret_arn" {
   type = string
 }

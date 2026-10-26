@@ -113,6 +113,12 @@ variable "alarm_topic_arns" {
   default     = []
 }
 
+variable "parked" {
+  description = "The env's `parked`: no reservation and no address while the instance is stopped. False brings both back; the address is a NEW one."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

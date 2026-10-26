@@ -58,6 +58,12 @@ variable "nat_instance_type" {
   default = "t4g.nano"
 }
 
+variable "parked" {
+  description = "The env's `parked`: the NAT holds no reservation and no address (modules/nat-instance)."
+  type        = bool
+  default     = false
+}
+
 variable "alarm_topic_arns" {
   description = "SNS topics for the module's alarms (NAT health, events DLQ)."
   type        = list(string)

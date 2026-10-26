@@ -320,6 +320,7 @@ module "nat_instance" {
 
   instance_type    = var.nat_instance_type
   alarm_topic_arns = var.nat_alarm_topic_arns
+  parked           = var.parked
   tags             = var.tags
 }
 

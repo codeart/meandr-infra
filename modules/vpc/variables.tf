@@ -69,6 +69,12 @@ variable "nat_instance_type" {
   default     = "t4g.nano"
 }
 
+variable "parked" {
+  description = "The env's `parked`: NAT instances hold no reservation and no address (modules/nat-instance)."
+  type        = bool
+  default     = false
+}
+
 variable "per_az_route_tables" {
   description = <<-EOT
     AZs that get their own private route table instead of sharing one.

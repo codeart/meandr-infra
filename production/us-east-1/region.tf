@@ -18,6 +18,11 @@ locals {
   # is no provider to inherit credentials from.
   aws_profile = "meandr-production"
 
+  # Parked: no tasks, load balancers, accelerator endpoint or public addresses,
+  # instances stopped without reservations. False restores the region, after
+  # account-<env>'s accelerator, whose new listener arn goes in ga_listener_arn.
+  parked = false
+
   # Holds the one-per-environment resources: the archive bucket and its
   # Glue database. Not derived from the api module — production reserves
   # the archive name before its workload lands, and dev writes an archive

@@ -62,6 +62,10 @@ locals {
   budget_usd        = 100
   budget_thresholds = [50, 75, 95, 100]
   anomaly_usd       = 20
+
+  # Parked: no accelerator. Park the regions first (their endpoint groups hold
+  # its listener); restore this first, then give the regions its new listener arn.
+  parked = false
 }
 
 # --- Per-region SSM ------------------------------------------------------
@@ -79,7 +83,7 @@ provider "aws" {
 resource "aws_ssm_parameter" "self_ips_use1" {
   name  = local.self_ips_param
   type  = "StringList"
-  value = join(",", module.global_accelerator.static_ips)
+  value = local.self_ips
   tags  = local.account_tags
 }
 
@@ -88,7 +92,7 @@ resource "aws_ssm_parameter" "self_ips_euc1" {
 
   name  = local.self_ips_param
   type  = "StringList"
-  value = join(",", module.global_accelerator.static_ips)
+  value = local.self_ips
   tags  = local.account_tags
 }
 

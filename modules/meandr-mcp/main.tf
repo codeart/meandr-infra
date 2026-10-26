@@ -251,6 +251,8 @@ locals {
 # and clientguard's per-client limits collapse onto a handful of sources —
 # meaningless at best, and at worst tenants throttling each other.
 resource "aws_lb" "main" {
+  count = var.parked ? 0 : 1
+
   name               = "meandr-mcp-nlb"
   internal           = var.internal_nlb
   load_balancer_type = "network"
@@ -261,6 +263,11 @@ resource "aws_lb" "main" {
   enable_cross_zone_load_balancing = true
 
   tags = merge(local.base_tags, { Name = "MCP NLB" })
+}
+
+moved {
+  from = aws_lb.main
+  to   = aws_lb.main[0]
 }
 
 # World-open on the proxy's two ports, and correct either way: the proxy
@@ -303,6 +310,8 @@ resource "aws_vpc_security_group_egress_rule" "nlb_all" {
 # into a TG that no listener references, so it went with the :80 listener
 # (learned from a rolled-back deploy, 2026-09-19).
 resource "aws_lb_target_group" "proxy_tls" {
+  count = var.parked ? 0 : 1
+
   name        = "meandr-mcp-proxy-tls"
   port        = var.proxy_tls_port
   protocol    = "TCP"
@@ -338,20 +347,32 @@ resource "aws_lb_target_group" "proxy_tls" {
   }
 }
 
+moved {
+  from = aws_lb_target_group.proxy_tls
+  to   = aws_lb_target_group.proxy_tls[0]
+}
+
 # No :80 listener. It forwarded the full mux — bearer auth included —
 # over plaintext, and its stated reason ("until the cert pipeline lands")
 # expired when ACME went live (audit 2026-09-18 A2).
 resource "aws_lb_listener" "http_443" {
-  load_balancer_arn = aws_lb.main.arn
+  count = var.parked ? 0 : 1
+
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 443
   protocol          = "TCP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.proxy_tls.arn
+    target_group_arn = aws_lb_target_group.proxy_tls[0].arn
   }
 
   tags = merge(local.base_tags, { Name = "MCP NLB TCP:443 listener" })
+}
+
+moved {
+  from = aws_lb_listener.http_443
+  to   = aws_lb_listener.http_443[0]
 }
 
 # --- ECS cluster + IAM --------------------------------------------------
@@ -805,7 +826,7 @@ module "proxy" {
   # TLS TG only. ECS refuses to deploy a service registered into a TG no
   # listener references, so with :80 gone the plain TG cannot stay on
   # the service — its health role moves to the TLS TG + container check.
-  target_group_arn = aws_lb_target_group.proxy_tls.arn
+  target_group_arn = one(aws_lb_target_group.proxy_tls[*].arn)
 
   service_registry_arn = var.hosted_fleet_cidr == "" ? "" : aws_service_discovery_service.proxy[0].arn
 
@@ -846,7 +867,7 @@ module "proxy" {
   stop_timeout = 120
 
   desired_count          = var.proxy.desired_count
-  enable_autoscaling     = var.proxy.desired_count > 0
+  enable_autoscaling     = var.proxy.desired_count > 0 && !var.parked
   min_replicas           = var.proxy.min_replicas
   max_replicas           = var.proxy.max_replicas
   target_cpu_utilization = var.proxy.target_cpu_utilization
@@ -869,7 +890,7 @@ module "proxy" {
 # region stands up its NLB without claiming DNS — which is what lets an
 # edge exist before it serves traffic.
 resource "aws_route53_record" "wildcard" {
-  count    = var.create_wildcard_record ? 1 : 0
+  count    = var.create_wildcard_record && !var.parked ? 1 : 0
   provider = aws.dns
 
   zone_id = data.aws_route53_zone.public.zone_id
@@ -877,8 +898,8 @@ resource "aws_route53_record" "wildcard" {
   type    = "A"
 
   alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
+    name                   = aws_lb.main[0].dns_name
+    zone_id                = aws_lb.main[0].zone_id
     evaluate_target_health = true
   }
 }

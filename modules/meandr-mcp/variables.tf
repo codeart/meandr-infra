@@ -290,6 +290,12 @@ variable "proxy" {
   }
 }
 
+variable "parked" {
+  description = "The env's `parked`: no NLB and no autoscaling. The root sets the proxy's tasks to 0."
+  type        = bool
+  default     = false
+}
+
 variable "proxy_port" {
   description = "Plain-HTTP TCP port the proxy listens on. NLB :80 forwards here."
   type        = number

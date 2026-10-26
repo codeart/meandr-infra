@@ -60,7 +60,7 @@ resource "aws_s3_object" "valkey_source" {
 # local.user_data goes unknown at plan time, and user_data_replace_on_change
 # silently stops firing.
 resource "aws_ec2_capacity_reservation" "nodes" {
-  for_each = toset(local.azs)
+  for_each = var.parked ? toset([]) : toset(local.azs)
 
   # AZ-c holds the arbiters and only the arbiters, so it reserves their
   # type. A reservation matches on instance type exactly — one sized for
