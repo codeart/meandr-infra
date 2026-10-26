@@ -262,6 +262,18 @@ resource "aws_launch_template" "node" {
 
   user_data = local.user_data
 
+  # The AMI's root, whose snapshot is unencrypted. No size: it follows the
+  # snapshot, which a root can't be smaller than.
+  block_device_mappings {
+    device_name = "/dev/xvda"
+
+    ebs {
+      volume_type           = "gp3"
+      encrypted             = true
+      delete_on_termination = true
+    }
+  }
+
   # Standard credits hard-cap a shared rung's cost at its instance price;
   # T4g/T3a default to unlimited (§5). Harmless on c/m/r.
   credit_specification { cpu_credits = "standard" }
