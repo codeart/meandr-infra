@@ -27,6 +27,12 @@ variable "image_release_tag_repos" {
   default     = ["meandr-agent", "meandr-runner"]
 }
 
+variable "app_image_pusher_repos" {
+  description = "GitHub repos (within github_org) that build Meandr's apps/* images. Trusted to assume only the apps push role, from develop pushes and v* release tags."
+  type        = list(string)
+  default     = ["meandr-rag"]
+}
+
 variable "agent_image_pusher_repos" {
   description = "GitHub repos (within github_org) that build the hosted agents' agents/* images. Trusted to assume only the agents push role, from develop pushes and v* release tags."
   type        = list(string)
@@ -42,13 +48,13 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli", "apps/meandr-rag"]
 }
 
 variable "ecr_keep_all_builds" {
   description = "ECR repos whose tagged builds never expire: a hosted node pins the digest it deployed with, for as long as it lives."
   type        = list(string)
-  default     = ["meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli"]
+  default     = ["meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli", "apps/meandr-rag"]
 }
 
 variable "ecr_pullers" {
@@ -67,6 +73,7 @@ variable "ecr_pullers" {
     "agents/copilot-cli" = ["hosted-node", "hosted-task-execution"]
     "agents/grok-build"  = ["hosted-node", "hosted-task-execution"]
     "agents/cursor-cli"  = ["hosted-node", "hosted-task-execution"]
+    "apps/meandr-rag"    = ["hosted-node", "hosted-task-execution", "meandr-api-acme-*"]
   }
 }
 

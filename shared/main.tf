@@ -48,6 +48,7 @@ locals {
     "agents/copilot-cli" = "GitHub Copilot CLI Agent Image"
     "agents/grok-build"  = "Grok Build Agent Image"
     "agents/cursor-cli"  = "Cursor CLI Agent Image"
+    "apps/meandr-rag"    = "Meandr RAG App Image"
   }
 }
 

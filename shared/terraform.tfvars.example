@@ -20,4 +20,5 @@ image_pusher_immutable_subs = {
   "meandr-agent"   = "repo:codeart@5684282/meandr-agent@1378600639"
   "meandr-runner"  = "repo:codeart@5684282/meandr-runner@1402962163"
   "meandr-harness" = "repo:codeart@5684282/meandr-harness@1420959606"
+  "meandr-rag"     = "repo:codeart@5684282/meandr-rag@1433364804"
 }

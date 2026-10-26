@@ -151,6 +151,14 @@ resource "aws_iam_role_policy" "jobs_hosted" {
         ]
         Resource = [for r in local.hosted_regions : "arn:aws:ecr:${r}:${var.account_id}:repository/hosted/*"]
       },
+      # Meandr's app images (product/apps.md §2, §3): their versions and the
+      # manifest label, in the shared account's apps/* repositories.
+      {
+        Sid      = "AppImages"
+        Effect   = "Allow"
+        Action   = ["ecr:DescribeImages", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        Resource = [for r in local.hosted_regions : "arn:aws:ecr:${r}:${split(".", var.ecr_registry)[0]}:repository/apps/*"]
+      },
       {
         Sid      = "ImageBuilds"
         Effect   = "Allow"

@@ -42,13 +42,20 @@ locals {
     ]
   ])
 
-  # agents/* belong to the agents push role alone; the service role never reaches them.
+  # agents/* and apps/* belong to their own push roles; the service role never reaches them.
   agent_ecr_repos   = [for r in var.ecr_repos : r if startswith(r, "agents/")]
-  service_ecr_repos = [for r in var.ecr_repos : r if !startswith(r, "agents/")]
+  app_ecr_repos     = [for r in var.ecr_repos : r if startswith(r, "apps/")]
+  service_ecr_repos = [for r in var.ecr_repos : r if !startswith(r, "agents/") && !startswith(r, "apps/")]
 
   # Only builds that push: develop, and v* release tags.
   agent_image_pusher_subs = flatten([
     for repo in var.agent_image_pusher_repos : [
+      for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] :
+      ["${prefix}:ref:refs/heads/develop", "${prefix}:ref:refs/tags/v*"]
+    ]
+  ])
+  app_image_pusher_subs = flatten([
+    for repo in var.app_image_pusher_repos : [
       for prefix in [lookup(var.image_pusher_immutable_subs, repo, "repo:${var.github_org}/${repo}")] :
       ["${prefix}:ref:refs/heads/develop", "${prefix}:ref:refs/tags/v*"]
     ]
@@ -206,4 +213,75 @@ resource "aws_iam_policy" "ecr_push_agents" {
 resource "aws_iam_role_policy_attachment" "ecr_push_agents" {
   role       = aws_iam_role.gh_actions_ecr_push_agents.name
   policy_arn = aws_iam_policy.ecr_push_agents.arn
+}
+
+# --- Role: ECR push for Meandr's apps (meandr-rag) ---------------------------
+#
+# BE trusts an app image's manifest label, so its repo pushes apps/* and nothing else.
+
+resource "aws_iam_role" "gh_actions_ecr_push_apps" {
+  name = "gh-actions-ecr-push-apps"
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push Apps"
+  })
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = local.app_image_pusher_subs
+          }
+        }
+      }
+    ]
+  })
+}
+
+data "aws_iam_policy_document" "ecr_push_apps" {
+  statement {
+    sid       = "AuthorizeToECR"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "PushAppImages"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:CompleteLayerUpload",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [for r in local.app_ecr_repos : "arn:aws:ecr:${var.region}:${local.shared_account_id}:repository/${r}"]
+  }
+}
+
+resource "aws_iam_policy" "ecr_push_apps" {
+  name        = "gh-actions-ecr-push-apps"
+  description = "Push Meandr's app images, apps/* only"
+  policy      = data.aws_iam_policy_document.ecr_push_apps.json
+  tags = merge(var.tags, {
+    Name = "GitHub Actions ECR Push Apps Policy"
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_push_apps" {
+  role       = aws_iam_role.gh_actions_ecr_push_apps.name
+  policy_arn = aws_iam_policy.ecr_push_apps.arn
 }
