@@ -10,7 +10,7 @@ output "task_role_arn" { value = aws_iam_role.task.arn }
 output "nlb_arn" { value = one(aws_lb.main[*].arn) }
 output "nlb_dns_name" { value = one(aws_lb.main[*].dns_name) }
 output "nlb_zone_id" { value = one(aws_lb.main[*].zone_id) }
-output "target_group_arn" { value = one(aws_lb_target_group.proxy_tls[*].arn) }
+output "target_group_arn" { value = aws_lb_target_group.proxy_tls.arn }
 
 # --- Event fleet --------------------------------------------------------
 #

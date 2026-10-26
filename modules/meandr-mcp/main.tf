@@ -306,12 +306,10 @@ resource "aws_vpc_security_group_egress_rule" "nlb_all" {
   description       = "To proxy tasks"
 }
 
-# No plain-port target group: ECS refuses to deploy a service registered
-# into a TG that no listener references, so it went with the :80 listener
-# (learned from a rolled-back deploy, 2026-09-19).
+# TLS only: ECS refuses to deploy a service registered into a TG that no
+# listener references (rolled-back deploy, 2026-09-19). Kept while parked:
+# ECS never stops a task whose TG was deleted before it drained.
 resource "aws_lb_target_group" "proxy_tls" {
-  count = var.parked ? 0 : 1
-
   name        = "meandr-mcp-proxy-tls"
   port        = var.proxy_tls_port
   protocol    = "TCP"
@@ -348,8 +346,8 @@ resource "aws_lb_target_group" "proxy_tls" {
 }
 
 moved {
-  from = aws_lb_target_group.proxy_tls
-  to   = aws_lb_target_group.proxy_tls[0]
+  from = aws_lb_target_group.proxy_tls[0]
+  to   = aws_lb_target_group.proxy_tls
 }
 
 # No :80 listener. It forwarded the full mux — bearer auth included —
@@ -364,7 +362,7 @@ resource "aws_lb_listener" "http_443" {
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.proxy_tls[0].arn
+    target_group_arn = aws_lb_target_group.proxy_tls.arn
   }
 
   tags = merge(local.base_tags, { Name = "MCP NLB TCP:443 listener" })
@@ -826,7 +824,7 @@ module "proxy" {
   # TLS TG only. ECS refuses to deploy a service registered into a TG no
   # listener references, so with :80 gone the plain TG cannot stay on
   # the service — its health role moves to the TLS TG + container check.
-  target_group_arn = one(aws_lb_target_group.proxy_tls[*].arn)
+  target_group_arn = var.parked ? null : aws_lb_target_group.proxy_tls.arn
 
   service_registry_arn = var.hosted_fleet_cidr == "" ? "" : aws_service_discovery_service.proxy[0].arn
 
@@ -877,6 +875,8 @@ module "proxy" {
   region             = local.region
 
   tags = merge(local.base_tags, { "meandr:role" = "proxy" })
+
+  depends_on = [aws_lb_listener.http_443]
 }
 
 # --- Wildcard DNS *.<dns_zone_name> → NLB ------------------------------

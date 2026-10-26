@@ -1043,9 +1043,9 @@ resource "aws_security_group_rule" "worker_egress_all" {
 
 # --- Puma target group + listener rule ----------------------------------
 
+# Kept while parked: ECS never stops a task whose TG was deleted before it
+# drained.
 resource "aws_lb_target_group" "puma" {
-  count = var.parked ? 0 : 1
-
   name        = "meandr-api-puma"
   port        = 3000
   protocol    = "HTTP"
@@ -1073,8 +1073,8 @@ resource "aws_lb_target_group" "puma" {
 }
 
 moved {
-  from = aws_lb_target_group.puma
-  to   = aws_lb_target_group.puma[0]
+  from = aws_lb_target_group.puma[0]
+  to   = aws_lb_target_group.puma
 }
 
 resource "aws_lb_listener_rule" "puma" {
@@ -1091,7 +1091,7 @@ resource "aws_lb_listener_rule" "puma" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.puma[0].arn
+    target_group_arn = aws_lb_target_group.puma.arn
   }
 
   tags = merge(local.base_tags, { Name = "meandr-api-puma listener rule" })
@@ -1155,7 +1155,7 @@ module "puma" {
   subnets            = var.private_subnet_ids
   security_group_ids = [aws_security_group.puma.id]
 
-  target_group_arn = one(aws_lb_target_group.puma[*].arn)
+  target_group_arn = var.parked ? null : aws_lb_target_group.puma.arn
 
   desired_count          = var.puma.desired_count
   enable_autoscaling     = !var.parked
