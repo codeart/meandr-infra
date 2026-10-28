@@ -624,6 +624,7 @@ module "embed_models" {
   peer_regions   = [local.peer.region]
   region_code    = local.region_code
   mirror_source  = { region = local.peer.region }
+  metrics_region = local.peer.region
 
   gateway = {
     image              = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-embed-gw:${local.image_tag}"

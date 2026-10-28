@@ -1,6 +1,6 @@
 # Meandr's embedding model (product/hosted_models.md): a spot T4G node always
-# on, replaced on AWS's rebalance hint; a T4 or L4 on demand while it has none;
-# and the CPU node, until the T4G has proven itself.
+# on, replaced on AWS's rebalance hint, more while the queues are slow; an L4
+# or T4 on demand while the region has none; a CPU node where the root asks.
 
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
@@ -47,6 +47,26 @@ locals {
 
   group_arns = [for g in [local.cpu_name, local.primary_name, local.fallback_name] :
   "arn:aws:autoscaling:${local.region}:${local.account}:autoScalingGroup:*:autoScalingGroupName/${g}"]
+
+  # Every gateway publishes its lanes to the primary under its region; the
+  # alarms take each region's searches and reranks, and its indexing, in GPU seconds.
+  scaling       = var.models.primary_max > 1
+  queue_regions = { for r in concat([local.region], var.peer_regions) : replace(r, "-", "_") => r }
+  queue_metrics = merge([for id, r in local.queue_regions : {
+    "search_${id}" = { name = "SearchQueueSeconds", region = r }
+    "rerank_${id}" = { name = "RerankQueueSeconds", region = r }
+    "index_${id}"  = { name = "IndexQueueSeconds", region = r }
+  }]...)
+  queue_sums = merge([for id, r in local.queue_regions : {
+    "answers_${id}"  = "FILL(search_${id}, 0) + FILL(rerank_${id}, 0)"
+    "indexing_${id}" = "FILL(index_${id}, 0)"
+  }]...)
+  answers  = "MAX([${join(", ", [for id, _ in local.queue_regions : "answers_${id}"])}])"
+  indexing = "MAX([${join(", ", [for id, _ in local.queue_regions : "indexing_${id}"])}])"
+
+  # Slow: some region holds 5 s of searches or 10 minutes of indexing; quiet: every one under 1 s and a minute.
+  queue_slow  = "(${local.answers} > 5) OR (${local.indexing} > 600)"
+  queue_quiet = "(${local.answers} < 1) AND (${local.indexing} < 60)"
 }
 
 # --- Image and model -----------------------------------------------------
@@ -131,7 +151,8 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 # --- Identity ------------------------------------------------------------
 
 # Session Manager for an operator; pulls of the mirror and the model; the
-# lifecycle call that puts a node in service.
+# lifecycle call that puts a node in service; where the fallback runs, its
+# start by the region's last T4G as it leaves (files/gpu.sh.tftpl).
 resource "aws_iam_role" "node" {
   name = "meandr-embed-model-${var.env}-${local.region}"
 
@@ -158,7 +179,7 @@ resource "aws_iam_role_policy" "ready" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = "autoscaling:CompleteLifecycleAction"
@@ -184,7 +205,18 @@ resource "aws_iam_role_policy" "ready" {
         Action   = "s3:GetObject"
         Resource = "${aws_s3_bucket.models.arn}/*"
       },
-    ]
+      ], local.fallback ? [
+      {
+        Effect   = "Allow"
+        Action   = "autoscaling:DescribeAutoScalingGroups"
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "autoscaling:SetDesiredCapacity"
+        Resource = "arn:aws:autoscaling:${local.region}:${local.account}:autoScalingGroup:*:autoScalingGroupName/${local.fallback_name}"
+      },
+    ] : [])
   })
 }
 
@@ -274,6 +306,7 @@ resource "aws_launch_template" "gpu" {
     max_tokens  = local.max_tokens
     region      = local.region
     group       = each.key
+    fallback    = local.fallback && each.key == local.primary_name ? local.fallback_name : ""
   }))
 
   # CUDA images are large: the AMIs' roots would fill.
@@ -378,13 +411,13 @@ resource "aws_autoscaling_group" "cpu" {
   }
 }
 
-# One spot T4G, always wanted, from its types in the order listed. On a
-# rebalance hint the group launches the replacement, waits for it to answer
-# (the ready hook), then terminates the node at risk.
+# One spot T4G always wanted, from its types in order, up to primary_max while
+# the queues are slow (below). On a rebalance hint the replacement launches and
+# answers (the ready hook) before the node at risk is terminated.
 resource "aws_autoscaling_group" "primary" {
   name                = local.primary_name
   min_size            = var.parked ? 0 : 1
-  max_size            = var.parked ? 0 : 2
+  max_size            = var.parked ? 0 : var.models.primary_max + 1
   desired_capacity    = var.parked ? 0 : 1
   capacity_rebalance  = true
   vpc_zone_identifier = local.gpu_subnets[local.primary_name]
@@ -437,10 +470,85 @@ resource "aws_autoscaling_group" "primary" {
       propagate_at_launch = false
     }
   }
+
+  lifecycle {
+    ignore_changes = [desired_capacity]
+  }
 }
 
-# On demand, 0 or 1 node, in the order the root lists: the alarm below runs it
-# while no region has a T4G in service. One region has it, and every gateway uses it.
+# Holds a T4G the group lets go, at AWS's notice or its own, so it serves until
+# AWS takes it or the hold runs out; the gateways queue again what it held.
+resource "aws_autoscaling_lifecycle_hook" "hold" {
+  name                   = "hold"
+  autoscaling_group_name = aws_autoscaling_group.primary.name
+  lifecycle_transition   = "autoscaling:EC2_INSTANCE_TERMINATING"
+  default_result         = "CONTINUE"
+  heartbeat_timeout      = 150
+}
+
+# The queues scale the T4G group: two minutes slow in some region take it to
+# primary_max, fifteen quiet in every one back to one.
+resource "aws_autoscaling_policy" "primary" {
+  for_each = local.scaling ? { slow = var.models.primary_max, quiet = 1 } : {}
+
+  name                   = "queue-${each.key}"
+  autoscaling_group_name = aws_autoscaling_group.primary.name
+  policy_type            = "StepScaling"
+  adjustment_type        = "ExactCapacity"
+
+  step_adjustment {
+    scaling_adjustment          = each.value
+    metric_interval_lower_bound = 0
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "queue" {
+  for_each = local.scaling ? {
+    slow  = { expression = local.queue_slow, minutes = 2, description = "Some region's queue slow: the T4G group grows to its most" }
+    quiet = { expression = local.queue_quiet, minutes = 15, description = "Every region's queue quiet: the T4G group is back to one" }
+  } : {}
+
+  alarm_name          = "meandr-embed-queue-${each.key}"
+  alarm_description   = each.value.description
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = each.value.minutes
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_autoscaling_policy.primary[each.key].arn]
+
+  dynamic "metric_query" {
+    for_each = local.queue_metrics
+    content {
+      id = metric_query.key
+      metric {
+        namespace   = "Meandr/Embed"
+        metric_name = metric_query.value.name
+        dimensions  = { Region = metric_query.value.region }
+        period      = 60
+        stat        = "Maximum"
+      }
+    }
+  }
+
+  dynamic "metric_query" {
+    for_each = local.queue_sums
+    content {
+      id         = metric_query.key
+      expression = metric_query.value
+    }
+  }
+
+  metric_query {
+    id          = each.key
+    expression  = each.value.expression
+    return_data = true
+  }
+
+  tags = merge(local.tags, { Name = "meandr-embed-queue-${each.key}" })
+}
+
+# On demand, 0 or 1 node, in the order the root lists, run while this region
+# has no T4G in service. One region has it, and every gateway uses it.
 resource "aws_autoscaling_group" "fallback" {
   count = local.fallback ? 1 : 0
 
@@ -449,6 +557,7 @@ resource "aws_autoscaling_group" "fallback" {
   max_size            = var.parked ? 0 : 1
   desired_capacity    = 0
   vpc_zone_identifier = local.gpu_subnets[local.fallback_name]
+  enabled_metrics     = ["GroupDesiredCapacity"]
 
   mixed_instances_policy {
     instances_distribution {
@@ -493,8 +602,9 @@ resource "aws_autoscaling_group" "fallback" {
   }
 }
 
-# The gateway reports the T4G nodes in service in every region: two minutes
-# with none start the fallback, and one back stops it. Missing data changes nothing.
+# The last T4G's node starts the fallback at AWS's notice, and two minutes the
+# gateway reports none start it too, for a node lost without one. It stops once
+# a T4G is back and every region's queue has been quiet fifteen.
 resource "aws_autoscaling_policy" "fallback" {
   for_each = local.fallback ? { start = 1, stop = 0 } : {}
 
@@ -514,9 +624,10 @@ resource "aws_cloudwatch_metric_alarm" "primary_missing" {
   count = local.fallback ? 1 : 0
 
   alarm_name          = "${local.primary_name}-missing"
-  alarm_description   = "No T4G in service in any region: the fallback runs until one is back"
+  alarm_description   = "No T4G in service in this region, as for one lost without a notice: the fallback starts"
   namespace           = "Meandr/Embed"
   metric_name         = "PrimaryNodes"
+  dimensions          = { Region = local.region }
   statistic           = "Maximum"
   period              = 60
   evaluation_periods  = 2
@@ -524,9 +635,73 @@ resource "aws_cloudwatch_metric_alarm" "primary_missing" {
   comparison_operator = "LessThanThreshold"
   treat_missing_data  = "ignore"
   alarm_actions       = [aws_autoscaling_policy.fallback["start"].arn]
-  ok_actions          = [aws_autoscaling_policy.fallback["stop"].arn]
 
   tags = merge(local.tags, { Name = "${local.primary_name}-missing" })
+}
+
+resource "aws_cloudwatch_metric_alarm" "fallback_idle" {
+  count = local.fallback ? 1 : 0
+
+  alarm_name          = "${local.fallback_name}-idle"
+  alarm_description   = "The fallback wanted, a T4G in service in this region and every region's queue quiet: the fallback stops"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 15
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_autoscaling_policy.fallback["stop"].arn]
+
+  # Out of alarm while the fallback is off, so its every-minute stop never undoes a node's start.
+  metric_query {
+    id = "fallback"
+    metric {
+      namespace   = "AWS/AutoScaling"
+      metric_name = "GroupDesiredCapacity"
+      dimensions  = { AutoScalingGroupName = local.fallback_name }
+      period      = 60
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id = "primary"
+    metric {
+      namespace   = "Meandr/Embed"
+      metric_name = "PrimaryNodes"
+      dimensions  = { Region = local.region }
+      period      = 60
+      stat        = "Maximum"
+    }
+  }
+
+  dynamic "metric_query" {
+    for_each = local.queue_metrics
+    content {
+      id = metric_query.key
+      metric {
+        namespace   = "Meandr/Embed"
+        metric_name = metric_query.value.name
+        dimensions  = { Region = metric_query.value.region }
+        period      = 60
+        stat        = "Maximum"
+      }
+    }
+  }
+
+  dynamic "metric_query" {
+    for_each = local.queue_sums
+    content {
+      id         = metric_query.key
+      expression = metric_query.value
+    }
+  }
+
+  metric_query {
+    id          = "idle"
+    expression  = "(fallback >= 1) AND (primary >= 1) AND ${local.queue_quiet}"
+    return_data = true
+  }
+
+  tags = merge(local.tags, { Name = "${local.fallback_name}-idle" })
 }
 
 # --- Interruption drills -------------------------------------------------

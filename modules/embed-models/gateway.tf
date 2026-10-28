@@ -218,6 +218,7 @@ module "gateway" {
     MEANDR_EMBED_PRIMARY_GROUP                = local.primary_name
     MEANDR_EMBED_FALLBACK_GROUP               = local.fallback_name
     MEANDR_EMBED_PEER_REGIONS                 = join(",", var.peer_regions)
+    MEANDR_EMBED_METRICS_REGION               = coalesce(var.metrics_region, local.region)
     MEANDR_REDIS_QUEUE_ADDR                   = "${module.queue.hostname}:6379"
     MEANDR_REDIS_QUEUE_USE_TLS                = "true"
     MEANDR_REDIS_CONFIG_READER_USE_TLS        = "true"

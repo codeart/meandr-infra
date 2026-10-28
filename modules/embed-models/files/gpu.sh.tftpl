@@ -38,29 +38,41 @@ docker run -d --restart always --ulimit core=0 --name tei-rerank $gpus -p 8083:8
 # In service only once the models answer: until then the node it replaces keeps working.
 until curl -sf http://127.0.0.1:8080/health >/dev/null%{ if reranker != "" } && curl -sf http://127.0.0.1:8083/health >/dev/null%{ endif }; do sleep 5; done
 
-# On AWS's 2-minute notice the server stops, so the gateways drop the node at once.
-cat >/usr/local/bin/spot-notice <<'SH'
+%{ if fallback != "" ~}
+# Every T4G serves until it's killed (the group's hold hook). The region's last
+# starts the fallback as it's told to leave, at AWS's notice or the group's own;
+# another staying in service keeps it off, and one leaving too checks at its own.
+cat >/usr/local/bin/leaving <<'SH'
 #!/bin/bash
+md() { curl -sf -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/meta-data/$1"; }
 while sleep 5; do
   token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || continue
-  if curl -sf -o /dev/null -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/spot/instance-action; then
-    docker stop tei tei-rerank
-    exit 0
-  fi
+  [ -n "$(md spot/instance-action)" ] || [ "$(md autoscaling/target-lifecycle-state)" = Terminated ] || continue
+  id=$(md instance-id)
+  for _ in $(seq 20); do
+    others=$(aws autoscaling describe-auto-scaling-groups --region ${region} --auto-scaling-group-names ${group} --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService' && InstanceId!='$id'] | length(@)" --output text)
+    if [ "$others" = 0 ]; then
+      aws autoscaling set-desired-capacity --region ${region} --auto-scaling-group-name ${fallback} --desired-capacity 1
+      break
+    fi
+    sleep 5
+  done
+  exit 0
 done
 SH
-chmod +x /usr/local/bin/spot-notice
-cat >/etc/systemd/system/spot-notice.service <<'UNIT'
+chmod +x /usr/local/bin/leaving
+cat >/etc/systemd/system/leaving.service <<'UNIT'
 [Unit]
 After=docker.service
 [Service]
-ExecStart=/usr/local/bin/spot-notice
+ExecStart=/usr/local/bin/leaving
 [Install]
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now spot-notice
+systemctl enable --now leaving
 
+%{ endif ~}
 token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
 id=$(curl -sf -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 aws autoscaling complete-lifecycle-action --region ${region} --auto-scaling-group-name ${group} \
