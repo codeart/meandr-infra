@@ -34,8 +34,8 @@ module "account_bootstrap" {
   account_id = local.account_id
   github_org = var.github_org
 
-  # meandr-agent rolls out its own daemon (hosted fleet) after each push,
-  # and meandr-embed-gw its gateway.
+  # meandr-agent rolls out its own daemon (hosted fleet) after each push, and
+  # meandr-embed-gw its gateway in an env that runs one (staging runs none).
   github_repos = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-embed-gw"]
   github_immutable_subs = {
     "meandr-agent"    = "repo:codeart@5684282/meandr-agent@1378600639"
