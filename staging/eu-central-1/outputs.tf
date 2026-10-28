@@ -15,6 +15,7 @@ output "private_az_route_table_ids" { value = module.vpc.private_az_route_table_
 output "internal_dns_zone_id" { value = module.vpc.internal_dns_zone_id }
 output "hosted_vpc_id" { value = module.hosted.vpc_id }
 output "hosted_cidr_block" { value = module.hosted.vpc_cidr }
+output "embed_gateway_cidr" { value = one(module.embed_models[*].gateway_cidr) }
 
 # The environment's internal root, for consumers with no Valkey bundle to
 # take ca_crt from.

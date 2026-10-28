@@ -40,6 +40,7 @@ locals {
     "meandr-api"         = "API Image"
     "meandr-agent"       = "Hosted Agent Image"
     "meandr-runner"      = "Hosted Runner Image"
+    "meandr-embed-gw"    = "Embedding Gateway Image"
     "agents/claude-code" = "Claude Code Agent Image"
     "agents/codex"       = "Codex Agent Image"
     "agents/gemini-cli"  = "Gemini CLI Agent Image"

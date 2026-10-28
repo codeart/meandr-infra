@@ -1,0 +1,57 @@
+#!/bin/bash
+# Not an ECS host: Docker alone runs the model server, on the GPU.
+systemctl disable --now ecs 2>/dev/null
+command -v aws >/dev/null || dnf -y -q install awscli-2
+
+# TEI's build for this host and GPU: ours for the T4G's ARM host, TEI's own
+# for a T4 or an L4. Another GPU never completes the ready hook.
+until nvidia-smi >/dev/null 2>&1; do sleep 2; done
+case "$(uname -m)/$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader)" in
+  aarch64/7.5) image=${mirror}:turing-arm64-${tei_version} ;;
+  x86_64/7.5) image=${mirror}:turing-${tei_version} ;;
+  x86_64/8.9) image=${mirror}:89-${tei_version} ;;
+  *) exit 1 ;;
+esac
+
+# CDI, not --gpus: NVIDIA's legacy hook segfaults under Docker on the T4G's AMI.
+nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+nvidia-ctk runtime configure --runtime=docker --cdi.enabled
+systemctl restart docker
+
+# The image from our mirror and the model from our bucket, both over the S3 endpoint.
+aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}
+aws s3 sync s3://${bucket}/${model} /var/lib/tei/model --only-show-errors
+echo '{"max_seq_length": ${max_tokens}}' >/var/lib/tei/model/sentence_bert_config.json
+# As on the CPU node: the same input limit, one text per pass, and 32-bit,
+# since TEI has no bfloat16 and Qwen3 can overflow 16-bit floats.
+docker run -d --restart always --ulimit core=0 --name tei --device nvidia.com/gpu=all -p 8080:80 -v /var/lib/tei:/data "$image" --model-id /data/model --port 80 --max-client-batch-size 128 --dtype float32 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
+# In service only once the model answers: until then the node it replaces keeps working.
+until curl -sf http://127.0.0.1:8080/health >/dev/null; do sleep 5; done
+
+# On AWS's 2-minute notice the server stops, so the gateways drop the node at once.
+cat >/usr/local/bin/spot-notice <<'SH'
+#!/bin/bash
+while sleep 5; do
+  token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || continue
+  if curl -sf -o /dev/null -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/spot/instance-action; then
+    docker stop tei
+    exit 0
+  fi
+done
+SH
+chmod +x /usr/local/bin/spot-notice
+cat >/etc/systemd/system/spot-notice.service <<'UNIT'
+[Unit]
+After=docker.service
+[Service]
+ExecStart=/usr/local/bin/spot-notice
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now spot-notice
+
+token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+id=$(curl -sf -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+aws autoscaling complete-lifecycle-action --region ${region} --auto-scaling-group-name ${group} \
+  --lifecycle-hook-name ready --lifecycle-action-result CONTINUE --instance-id "$id"

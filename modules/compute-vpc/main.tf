@@ -337,9 +337,13 @@ resource "aws_ecs_task_definition" "agent" {
       containerPath = "/var/run/docker.sock"
       readOnly      = true
     }]
-    environment = [
+    environment = concat([
       { name = "MEANDR_REPORT_URL", value = var.agent_report_url },
-    ]
+      ], var.agent_embed == null ? [] : [
+      { name = "MEANDR_EMBED_URL", value = var.agent_embed.url },
+      { name = "MEANDR_EMBED_NAME", value = var.agent_embed.name },
+      { name = "MEANDR_EMBED_CA", value = var.agent_embed.ca },
+    ])
   }])
 
   tags = local.base_tags

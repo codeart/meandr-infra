@@ -78,6 +78,11 @@ locals {
   oauth_issuer_host = "staging-mcp.meandr.com"
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
+  # Meandr's embedding model and its gateway (hosted_models.md): the T4G
+  # group's types, the model and TEI's version; null for none. The last
+  # resort is the primary's, so its apply comes first.
+  embed_models = null
+
   log_retention_days = 7
 
   # The proxy's MEANDR_LOG_LEVEL.
@@ -124,6 +129,10 @@ locals {
     # This region ASSOCIATES with it and must never create its own of the
     # same name — see modules/vpc/variables.tf existing_zone_id.
     internal_dns_zone_id = "Z05780018F0P6ONCICNQ"
+
+    # The subnet the primary's embedding gateway runs in, which this region's
+    # model nodes admit. `output embed_gateway_cidr` there.
+    embed_gateway_cidr = "10.10.16.0/20"
   }
 
   # An edge replicates no secrets outward, and what it admits from the

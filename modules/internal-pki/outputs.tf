@@ -23,6 +23,16 @@ output "mesh_secret_arn" {
   value       = aws_secretsmanager_secret.mesh.arn
 }
 
+output "embed_secret_arn" {
+  description = "The embedding gateway's TLS material: ca_crt, embed_crt, embed_key. Contains a private key — gateway tasks only."
+  value       = aws_secretsmanager_secret.embed.arn
+}
+
+output "embed_server_name" {
+  description = "The name agents pin as TLS ServerName when dialing the embedding gateway, and the audience of their proofs."
+  value       = local.embed_name
+}
+
 output "mesh_server_name" {
   description = "The single name every proxy pins as TLS ServerName when dialing a peer. Not resolvable and not meant to be — peers are dialed by the address they publish in their heartbeat."
   value       = local.mesh_name

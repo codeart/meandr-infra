@@ -225,6 +225,17 @@ data "aws_secretsmanager_secret" "mesh" {
   name = "meandr/pki/${local.env}/mesh"
 }
 
+# This region's embedding gateway: its keypair, and the CA agents check it against.
+data "aws_secretsmanager_secret" "pki_embed" {
+  count = local.embed_models == null ? 0 : 1
+  name  = "meandr/pki/${local.env}/embed"
+}
+
+data "aws_secretsmanager_secret_version" "pki_ca" {
+  count     = local.embed_models == null ? 0 : 1
+  secret_id = "meandr/pki/${local.env}/ca"
+}
+
 # --- Valkey ------------------------------------------------------------
 #
 # No `api` fleet: that one is BE-local, and BE lives in the primary.
@@ -360,6 +371,21 @@ module "payloads_bucket" {
 
 # --- Proxy --------------------------------------------------------------
 
+# OWN REGION FIRST, then every other region's. Discovery walks the list in
+# order and is not latency-aware; which replica gets READ is chosen by
+# measured RTT in the client (rdb.New).
+locals {
+  config_sentinel_addrs = concat(
+    module.valkey.fleets["config"].sentinel_addrs,
+    flatten([
+      for code in local.peer_node_codes : [
+        for az in ["a", "b", "c"] :
+        "config-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
+      ]
+    ]),
+  )
+}
+
 module "mcp" {
   source = "../../modules/meandr-mcp"
 
@@ -388,19 +414,8 @@ module "mcp" {
   internal_dns_zone_id   = module.vpc.internal_dns_zone_id
   internal_dns_zone_name = module.vpc.internal_dns_zone_name
 
-  # OWN REGION FIRST, then every other region's. Discovery walks the list
-  # in order and is not latency-aware; which replica gets READ is chosen by
-  # measured RTT in the client (rdb.New).
   config_reader_endpoint = module.valkey.fleets["config"].master_hostname
-  config_sentinel_addrs = concat(
-    module.valkey.fleets["config"].sentinel_addrs,
-    flatten([
-      for code in local.peer_node_codes : [
-        for az in ["a", "b", "c"] :
-        "config-${code}${az}.valkey.${module.vpc.internal_dns_zone_name}:26379"
-      ]
-    ]),
-  )
+  config_sentinel_addrs  = local.config_sentinel_addrs
   config_sentinel_master = "config"
 
   # Events is standalone per region — local Sentinels only, since a remote
@@ -571,8 +586,108 @@ module "hosted" {
     ("${local.peer.region} fleet") = local.peer.hosted_cidr_block
   }
 
+  # This region's embedding gateway, checked against the internal CA alone.
+  agent_embed = local.embed_models == null ? null : {
+    url  = module.embed_models[0].gateway.url
+    name = module.embed_models[0].gateway.name
+    ca   = nonsensitive(one(data.aws_secretsmanager_secret_version.pki_ca[*].secret_string)) # a certificate, public
+  }
+
   parked = local.parked
   tags   = local.tags
+}
+
+# The fleet resolves this region's gateway in its zone, a name no region's
+# own zones carry.
+resource "aws_route53_zone_association" "hosted_models" {
+  count = local.embed_models == null ? 0 : 1
+
+  zone_id = module.embed_models[0].gateway.zone_id
+  vpc_id  = module.hosted.vpc_id
+}
+
+# --- Embedding model --------------------------------------------------------
+#
+# Meandr's own model for its apps (hosted_models.md): the region's T4G and
+# gateway. The primary's stand in for them and they for the primary's; the
+# last resort and the CPU node are the primary's.
+
+module "embed_models" {
+  count  = local.embed_models == null ? 0 : 1
+  source = "../../modules/embed-models"
+
+  env            = local.env
+  vpc_id         = module.vpc.vpc_id
+  subnet_ids     = local.app_private_subnet_ids
+  gpu_subnet_ids = module.vpc.private_subnet_ids
+  models         = local.embed_models
+  peer_regions   = [local.peer.region]
+  region_code    = local.region_code
+  mirror_source  = { region = local.peer.region }
+
+  gateway = {
+    image              = "303529433558.dkr.ecr.${local.region}.amazonaws.com/meandr-embed-gw:${local.image_tag}"
+    log_level          = local.log_level
+    log_retention_days = local.log_retention_days
+  }
+  machines = {
+    cidrs   = ["${local.hosted_block}.0.0/16", local.peer.hosted_cidr_block]
+    regions = [local.region, local.peer.region]
+  }
+  internal_dns_zone = { id = module.vpc.internal_dns_zone_id, name = module.vpc.internal_dns_zone_name }
+  tls_secret_arn    = data.aws_secretsmanager_secret.pki_embed[0].arn
+
+  # The proxy's planes.
+  redis = {
+    auth_secret_arn   = data.aws_secretsmanager_secret.redis_auth.arn
+    client_secret_arn = data.aws_secretsmanager_secret.valkey_client.arn
+    node_secret_arn   = data.aws_secretsmanager_secret.valkey_node.arn
+    config            = { sentinel_addrs = local.config_sentinel_addrs, master = "config" }
+    events            = { sentinel_addrs = module.valkey.fleets["events"].sentinel_addrs, master = "events" }
+  }
+
+  # By name, as Discourse's node takes it.
+  valkey = {
+    version       = local.valkey_version
+    source_path   = local.valkey_source_path
+    source_bucket = "meandr-artifacts-${local.env}-${local.region}"
+  }
+
+  parked = local.parked
+  tags   = local.tags
+}
+
+# Each region's model nodes admit the other's gateway, whose GPUs stand in
+# while its own are gone; both ends are declared here, as for every link.
+data "aws_security_group" "primary_embed_models" {
+  count    = local.embed_models == null ? 0 : 1
+  provider = aws.primary_region
+
+  vpc_id = local.peer.vpc_id
+  tags   = { Name = "meandr-embed-model" }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "embed_from_primary" {
+  count = local.embed_models == null ? 0 : 1
+
+  security_group_id = module.embed_models[0].security_group_id
+  cidr_ipv4         = local.peer.embed_gateway_cidr
+  ip_protocol       = "tcp"
+  from_port         = 8080
+  to_port           = 8083
+  description       = "The ${local.peer.region} gateway"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "embed_to_primary" {
+  count    = local.embed_models == null ? 0 : 1
+  provider = aws.primary_region
+
+  security_group_id = data.aws_security_group.primary_embed_models[0].id
+  cidr_ipv4         = module.embed_models[0].gateway_cidr
+  ip_protocol       = "tcp"
+  from_port         = 8080
+  to_port           = 8083
+  description       = "The ${local.region} gateway"
 }
 
 # The fleet's abuse detection (hosted_nodes.md §6). GuardDuty is one
@@ -649,9 +764,11 @@ moved {
 # (parked = false) starts the instances and puts each count back.
 
 locals {
-  parked_services = local.parked ? {
+  parked_services = local.parked ? merge({
     proxy = { cluster = module.mcp.cluster_name, service = module.mcp.proxy_service_name, restore = local.proxy.desired_count }
-  } : {}
+    }, local.embed_models == null ? {} : {
+    embed = { cluster = module.embed_models[0].cluster_name, service = module.embed_models[0].gateway_service_name, restore = 1 }
+  }) : {}
 }
 
 resource "terraform_data" "parked_service" {
@@ -673,7 +790,7 @@ resource "terraform_data" "parked_instances" {
   count = local.parked ? 1 : 0
 
   input = {
-    ids     = join(" ", sort(concat(module.valkey.instance_ids, module.vpc.nat_instance_ids, [module.hosted.nat_instance_id])))
+    ids     = join(" ", sort(concat(module.valkey.instance_ids, module.vpc.nat_instance_ids, [module.hosted.nat_instance_id], module.embed_models[*].queue_instance_id)))
     region  = local.region
     profile = local.aws_profile
   }

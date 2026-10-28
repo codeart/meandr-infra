@@ -47,6 +47,10 @@ locals {
   # certificate.
   mesh_name = "mesh.${var.dns_zone_name}"
 
+  # The embedding gateway's name, which agents pin as ServerName while
+  # dialing its Cloud Map address (hosted_models.md §4).
+  embed_name = "embed.${var.dns_zone_name}"
+
   subject = {
     organization = "Meandr, Inc."
     street       = ["169 Madison Ave, STE 66267"]
@@ -332,5 +336,68 @@ resource "aws_secretsmanager_secret_version" "mesh" {
     ca_crt   = tls_self_signed_cert.ca.cert_pem
     mesh_crt = tls_locally_signed_cert.mesh.cert_pem
     mesh_key = tls_private_key.mesh.private_key_pem
+  })
+}
+
+# --- Embedding gateway keypair ------------------------------------------
+#
+# Server auth only: agents dial the gateway, which identifies them by the
+# machine's proof, not a certificate (hosted_models.md §4, §5).
+
+resource "tls_private_key" "embed" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "tls_cert_request" "embed" {
+  private_key_pem = tls_private_key.embed.private_key_pem
+
+  dns_names = [local.embed_name]
+
+  subject {
+    common_name    = local.embed_name
+    organization   = local.subject.organization
+    street_address = local.subject.street
+    locality       = local.subject.locality
+    province       = local.subject.province
+    postal_code    = local.subject.postal_code
+    country        = local.subject.country
+  }
+}
+
+resource "tls_locally_signed_cert" "embed" {
+  cert_request_pem   = tls_cert_request.embed.cert_request_pem
+  ca_private_key_pem = tls_private_key.ca.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.ca.cert_pem
+
+  validity_period_hours = local.validity_hours
+
+  allowed_uses = [
+    "digital_signature",
+    "key_encipherment",
+    "server_auth",
+  ]
+}
+
+resource "aws_secretsmanager_secret" "embed" {
+  name        = "meandr/pki/${var.env}/embed"
+  description = "Embedding gateway TLS material (ca_crt, embed_crt, embed_key). Read by the gateway's tasks only."
+
+  dynamic "replica" {
+    for_each = var.replica_regions
+    content {
+      region = replica.value
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "embed" {
+  secret_id = aws_secretsmanager_secret.embed.id
+  secret_string = jsonencode({
+    ca_crt    = tls_self_signed_cert.ca.cert_pem
+    embed_crt = tls_locally_signed_cert.embed.cert_pem
+    embed_key = tls_private_key.embed.private_key_pem
   })
 }

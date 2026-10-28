@@ -18,7 +18,7 @@ variable "github_org" {
 variable "image_pusher_repos" {
   description = "List of GitHub repo names (within github_org) that build + push container images via CI. Trusted to assume the ECR push role."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "meandr-embed-gw"]
 }
 
 variable "image_release_tag_repos" {
@@ -48,7 +48,7 @@ variable "image_pusher_immutable_subs" {
 variable "ecr_repos" {
   description = "ECR repo names to provision. One per service that ships a container image."
   type        = list(string)
-  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli", "apps/meandr-rag"]
+  default     = ["meandr-mcp", "meandr-api", "meandr-agent", "meandr-runner", "meandr-embed-gw", "agents/claude-code", "agents/codex", "agents/gemini-cli", "agents/goose", "agents/opencode", "agents/copilot-cli", "agents/grok-build", "agents/cursor-cli", "apps/meandr-rag"]
 }
 
 variable "ecr_keep_all_builds" {
@@ -63,6 +63,7 @@ variable "ecr_pullers" {
   default = {
     "meandr-mcp"         = ["meandr-mcp-execution-*"]
     "meandr-api"         = ["meandr-api-execution-*"]
+    "meandr-embed-gw"    = ["meandr-embed-execution-*"]
     "meandr-agent"       = ["hosted-node", "hosted-task-execution"]
     "meandr-runner"      = ["hosted-node", "hosted-task-execution"]
     "agents/claude-code" = ["hosted-node", "hosted-task-execution"]

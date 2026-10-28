@@ -93,6 +93,16 @@ variable "agent_report_url" {
   default     = ""
 }
 
+variable "agent_embed" {
+  description = "The region's embedding gateway as agents dial it (hosted_models.md §4): its URL, certificate name, and the internal CA's PEM. null: none."
+  type = object({
+    url  = string
+    name = string
+    ca   = string
+  })
+  default = null
+}
+
 variable "api_base_url" {
   description = "BE API origin (https://…, no trailing slash); event destinations POST under /api/hosted/v1/events/ (contracts/hosted_platform_events.md)."
   type        = string

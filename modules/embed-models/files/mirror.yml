@@ -1,0 +1,44 @@
+version: 0.2
+
+# Fills this region's TEI mirror and model bucket, skipping what is there. With
+# SOURCE_MIRROR set it copies another region's, so every region runs the same
+# bytes; else it builds TEI for the T4G and copies TEI's own images.
+env:
+  shell: bash
+
+phases:
+  build:
+    commands:
+      - |
+        set -euo pipefail
+        login() { aws ecr get-login-password --region "$1" | docker login --username AWS --password-stdin "$2"; }
+        have() { aws ecr describe-images --repository-name "${MIRROR#*/}" --image-ids imageTag="$1" >/dev/null 2>&1; }
+        copy() { docker pull --platform "$2" "$1" && docker tag "$1" "$3" && docker push "$3"; }
+        # TEI's own T4 flags, nvcc jobs that fit in 16 GB, and CUDA's images from
+        # NGC when it has them, since Docker Hub limits CodeBuild's shared addresses.
+        build() {
+          git clone --depth 1 --branch "v$TEI_RELEASE" https://github.com/huggingface/text-embeddings-inference.git tei
+          for base in $(sed -n 's/^FROM \(nvidia\/cuda:[^ ]*\).*/\1/p' tei/Dockerfile-cuda); do
+            docker pull "nvcr.io/$base" && docker tag "nvcr.io/$base" "$base" || true
+          done
+          docker build -f tei/Dockerfile-cuda --build-arg CUDA_COMPUTE_CAP=75 --build-arg DEFAULT_USE_FLASH_ATTENTION=False \
+            --build-arg RAYON_NUM_THREADS=4 -t "$1" tei
+          docker push "$1"
+        }
+        login "$AWS_REGION" "${MIRROR%%/*}"
+        [ -z "${SOURCE_MIRROR:-}" ] || login "$SOURCE_REGION" "${SOURCE_MIRROR%%/*}"
+        for spec in turing:linux/amd64 89:linux/amd64 cpu-arm64:linux/arm64 turing-arm64:linux/arm64; do
+          name="${spec%%:*}" platform="${spec#*:}"
+          tag="$name-$TEI_VERSION"
+          have "$tag" && continue
+          if [ -n "${SOURCE_MIRROR:-}" ]; then
+            copy "$SOURCE_MIRROR:$tag" "$platform" "$MIRROR:$tag"
+          elif [ "$name" = turing-arm64 ]; then
+            build "$MIRROR:$tag"
+          else
+            copy "ghcr.io/huggingface/text-embeddings-inference:$tag" "$platform" "$MIRROR:$tag"
+          fi
+        done
+        if [ -n "${SOURCE_BUCKET:-}" ]; then
+          aws s3 sync "s3://$SOURCE_BUCKET/$MODEL" "s3://$BUCKET/$MODEL" --source-region "$SOURCE_REGION" --only-show-errors
+        fi

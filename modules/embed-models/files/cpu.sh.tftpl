@@ -1,0 +1,28 @@
+#!/bin/bash
+# Not an ECS host: Docker alone runs the two model servers.
+systemctl disable --now ecs
+command -v aws >/dev/null || dnf -y -q install awscli-2
+
+# Indexing runs in a slice that gets only the CPU searches leave idle.
+cat >/etc/systemd/system/embed-index.slice <<'UNIT'
+[Slice]
+CPUWeight=idle
+UNIT
+systemctl daemon-reload
+
+# The image from our mirror and the model from our bucket, both over the S3 endpoint.
+aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}
+aws s3 sync s3://${bucket}/${model} /var/lib/tei/model --only-show-errors
+# TEI's input limit: a longer text is refused, not cut. Qwen3 ships none, and its own
+# 32,768 tokens is far past what memory holds.
+echo '{"max_seq_length": ${max_tokens}}' >/var/lib/tei/model/sentence_bert_config.json
+# One text per pass: TEI 1.9 drops Qwen3's causal mask on a batch of equal-length
+# texts. No core dumps: one of TEI takes minutes at full CPU.
+docker run -d --restart always --ulimit core=0 --name tei-search -p 8081:80 -v /var/lib/tei:/data ${image} --model-id /data/model --port 80 --max-client-batch-size 128 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
+docker run -d --restart always --ulimit core=0 --name tei-index --cgroup-parent embed-index.slice -p 8082:80 -v /var/lib/tei:/data ${image} --model-id /data/model --port 80 --max-client-batch-size 128 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
+until curl -sf http://127.0.0.1:8081/health >/dev/null && curl -sf http://127.0.0.1:8082/health >/dev/null; do sleep 5; done
+
+token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+id=$(curl -sf -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+aws autoscaling complete-lifecycle-action --region ${region} --auto-scaling-group-name ${group} \
+  --lifecycle-hook-name ready --lifecycle-action-result CONTINUE --instance-id "$id"

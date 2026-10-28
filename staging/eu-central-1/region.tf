@@ -112,6 +112,11 @@ locals {
   migrate           = { cpu = 512, memory = 1024 }
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
+  # Meandr's embedding model and its gateway (hosted_models.md): the T4G
+  # group's types, the last resort's, the model and TEI's version; null
+  # for none.
+  embed_models = null
+
   # BE's MEANDR_SHUTDOWN_TIMEOUT, in seconds.
   api_shutdown_timeout = 30
 
