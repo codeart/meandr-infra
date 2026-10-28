@@ -2,7 +2,7 @@ version: 0.2
 
 # Fills this region's TEI mirror and model bucket, skipping what is there. With
 # SOURCE_MIRROR set it copies another region's, so every region runs the same
-# bytes; else it builds TEI for the T4G and copies TEI's own images.
+# bytes; else it builds TEI for the T4G and fetches TEI's images and the models.
 env:
   shell: bash
 
@@ -39,6 +39,16 @@ phases:
             copy "ghcr.io/huggingface/text-embeddings-inference:$tag" "$platform" "$MIRROR:$tag"
           fi
         done
-        if [ -n "${SOURCE_BUCKET:-}" ]; then
-          aws s3 sync "s3://$SOURCE_BUCKET/$MODEL" "s3://$BUCKET/$MODEL" --source-region "$SOURCE_REGION" --only-show-errors
-        fi
+        # Each model the bucket lacks, through this disk, since S3 copies nothing across
+        # regions from CodeBuild: an edge's from the source bucket, the primary's from Hugging Face.
+        for m in $MODELS; do
+          aws s3api head-object --bucket "$BUCKET" --key "$m/config.json" >/dev/null 2>&1 && continue
+          rm -rf model
+          if [ -n "${SOURCE_BUCKET:-}" ]; then
+            aws s3 sync "s3://$SOURCE_BUCKET/$m" model --region "$SOURCE_REGION" --only-show-errors
+          else
+            pip3 install -q huggingface_hub
+            python3 -c 'import sys; from huggingface_hub import snapshot_download as d; d(sys.argv[1], local_dir="model", allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model"])' "$m"
+          fi
+          aws s3 sync model "s3://$BUCKET/$m" --exclude '.cache/*' --only-show-errors
+        done

@@ -24,7 +24,7 @@ variable "image_pusher_repos" {
 variable "image_release_tag_repos" {
   description = "Image-pushing repos whose production build is a gitflow release tag (v*), not a main push; their tag pushes may assume the ECR push role."
   type        = list(string)
-  default     = ["meandr-agent", "meandr-runner"]
+  default     = ["meandr-agent", "meandr-runner", "meandr-embed-gw"]
 }
 
 variable "app_image_pusher_repos" {

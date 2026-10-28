@@ -113,12 +113,13 @@ locals {
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 10, target_cpu_utilization = 60 }
 
   # Meandr's embedding model and its gateway (hosted_models.md): the T4G
-  # group's types, the last resort's, the model and TEI's version; null
+  # group's types, the last resort's, the models and TEI's version; null
   # for none.
   embed_models = {
     primary_types  = ["g5g.xlarge", "g5g.2xlarge"]
     fallback_types = ["g4dn.xlarge", "g6.xlarge"]
     model          = "Qwen/Qwen3-Embedding-0.6B"
+    reranker       = "BAAI/bge-reranker-v2-m3"
     tei_version    = "1.9"
     tei_release    = "1.9.4"
   }

@@ -17,12 +17,13 @@ variable "gpu_subnet_ids" {
 }
 
 variable "models" {
-  description = "The CPU node's type (none without), the T4G group's types in order of preference, the fallback's (none without; one region has it), the model, TEI's version as the mirror tags it, and the release our T4G build compiles (the primary's only)."
+  description = "The CPU node's type (none without), the T4G group's types in order of preference, the fallback's (none without; one region has it), the embedding model and the reranker (Hugging Face ids; none without), TEI's version as the mirror tags it, and the release our T4G build compiles (the primary's only)."
   type = object({
     cpu_type       = optional(string)
     primary_types  = list(string)
     fallback_types = optional(list(string), [])
     model          = string
+    reranker       = optional(string)
     tei_version    = string
     tei_release    = optional(string)
   })

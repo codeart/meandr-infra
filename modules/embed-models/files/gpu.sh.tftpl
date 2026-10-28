@@ -25,8 +25,13 @@ echo '{"max_seq_length": ${max_tokens}}' >/var/lib/tei/model/sentence_bert_confi
 # As on the CPU node: the same input limit, one text per pass, and 32-bit,
 # since TEI has no bfloat16 and Qwen3 can overflow 16-bit floats.
 docker run -d --restart always --ulimit core=0 --name tei --device nvidia.com/gpu=all -p 8080:80 -v /var/lib/tei:/data "$image" --model-id /data/model --port 80 --max-client-batch-size 128 --dtype float32 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
-# In service only once the model answers: until then the node it replaces keeps working.
-until curl -sf http://127.0.0.1:8080/health >/dev/null; do sleep 5; done
+%{ if reranker != "" ~}
+# The reranker beside it, in 16-bit, which its encoder takes; a pair past its window is cut.
+aws s3 sync s3://${bucket}/${reranker} /var/lib/tei/rerank --only-show-errors
+docker run -d --restart always --ulimit core=0 --name tei-rerank --device nvidia.com/gpu=all -p 8083:80 -v /var/lib/tei:/data "$image" --model-id /data/rerank --port 80 --max-client-batch-size 128 --dtype float16
+%{ endif ~}
+# In service only once the models answer: until then the node it replaces keeps working.
+until curl -sf http://127.0.0.1:8080/health >/dev/null%{ if reranker != "" } && curl -sf http://127.0.0.1:8083/health >/dev/null%{ endif }; do sleep 5; done
 
 # On AWS's 2-minute notice the server stops, so the gateways drop the node at once.
 cat >/usr/local/bin/spot-notice <<'SH'
@@ -34,7 +39,7 @@ cat >/usr/local/bin/spot-notice <<'SH'
 while sleep 5; do
   token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') || continue
   if curl -sf -o /dev/null -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/spot/instance-action; then
-    docker stop tei
+    docker stop tei tei-rerank
     exit 0
   fi
 done

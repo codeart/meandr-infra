@@ -270,6 +270,7 @@ resource "aws_launch_template" "gpu" {
     tei_version = var.models.tei_version
     bucket      = aws_s3_bucket.models.id
     model       = var.models.model
+    reranker    = coalesce(var.models.reranker, "")
     max_tokens  = local.max_tokens
     region      = local.region
     group       = each.key

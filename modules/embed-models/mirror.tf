@@ -9,7 +9,7 @@ locals {
       TEI_VERSION = var.models.tei_version
       TEI_RELEASE = coalesce(var.models.tei_release, "none")
       BUCKET      = aws_s3_bucket.models.id
-      MODEL       = var.models.model
+      MODELS      = join(" ", compact([var.models.model, var.models.reranker]))
     },
     var.mirror_source == null ? {} : {
       SOURCE_REGION = var.mirror_source.region
