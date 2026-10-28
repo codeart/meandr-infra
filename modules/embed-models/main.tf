@@ -439,8 +439,8 @@ resource "aws_autoscaling_group" "primary" {
   }
 }
 
-# On demand, 0 or 1 node, a T4 before an L4: the alarm below runs it while no
-# region has a T4G in service. One region has it, and every gateway uses it.
+# On demand, 0 or 1 node, in the order the root lists: the alarm below runs it
+# while no region has a T4G in service. One region has it, and every gateway uses it.
 resource "aws_autoscaling_group" "fallback" {
   count = local.fallback ? 1 : 0
 

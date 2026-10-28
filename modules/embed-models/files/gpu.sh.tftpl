@@ -13,10 +13,15 @@ case "$(uname -m)/$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader)" i
   *) exit 1 ;;
 esac
 
-# CDI, not --gpus: NVIDIA's legacy hook segfaults under Docker on the T4G's AMI.
-nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-nvidia-ctk runtime configure --runtime=docker --cdi.enabled
-systemctl restart docker
+# CDI on the T4G's ARM AMI, whose legacy hook (--gpus) segfaults under Docker;
+# --gpus on the x86 ECS image, where a CDI spec doesn't resolve.
+gpus="--gpus all"
+if [ "$(uname -m)" = aarch64 ]; then
+  nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+  nvidia-ctk runtime configure --runtime=docker --cdi.enabled
+  systemctl restart docker
+  gpus="--device nvidia.com/gpu=all"
+fi
 
 # The image from our mirror and the model from our bucket, both over the S3 endpoint.
 aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}
@@ -24,11 +29,11 @@ aws s3 sync s3://${bucket}/${model} /var/lib/tei/model --only-show-errors
 echo '{"max_seq_length": ${max_tokens}}' >/var/lib/tei/model/sentence_bert_config.json
 # As on the CPU node: the same input limit, one text per pass, and 32-bit,
 # since TEI has no bfloat16 and Qwen3 can overflow 16-bit floats.
-docker run -d --restart always --ulimit core=0 --name tei --device nvidia.com/gpu=all -p 8080:80 -v /var/lib/tei:/data "$image" --model-id /data/model --port 80 --max-client-batch-size 128 --dtype float32 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
+docker run -d --restart always --ulimit core=0 --name tei $gpus -p 8080:80 -v /var/lib/tei:/data "$image" --model-id /data/model --port 80 --max-client-batch-size 128 --dtype float32 --auto-truncate false --max-batch-tokens ${max_tokens} --max-batch-requests 1
 %{ if reranker != "" ~}
 # The reranker beside it, in 16-bit, which its encoder takes; a pair past its window is cut.
 aws s3 sync s3://${bucket}/${reranker} /var/lib/tei/rerank --only-show-errors
-docker run -d --restart always --ulimit core=0 --name tei-rerank --device nvidia.com/gpu=all -p 8083:80 -v /var/lib/tei:/data "$image" --model-id /data/rerank --port 80 --max-client-batch-size 128 --dtype float16
+docker run -d --restart always --ulimit core=0 --name tei-rerank $gpus -p 8083:80 -v /var/lib/tei:/data "$image" --model-id /data/rerank --port 80 --max-client-batch-size 128 --dtype float16
 %{ endif ~}
 # In service only once the models answer: until then the node it replaces keeps working.
 until curl -sf http://127.0.0.1:8080/health >/dev/null%{ if reranker != "" } && curl -sf http://127.0.0.1:8083/health >/dev/null%{ endif }; do sleep 5; done

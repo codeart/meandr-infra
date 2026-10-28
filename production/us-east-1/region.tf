@@ -117,7 +117,7 @@ locals {
   # for none.
   embed_models = {
     primary_types  = ["g5g.xlarge", "g5g.2xlarge"]
-    fallback_types = ["g4dn.xlarge", "g6.xlarge"]
+    fallback_types = ["g6.xlarge", "g4dn.xlarge"]
     model          = "Qwen/Qwen3-Embedding-0.6B"
     reranker       = "BAAI/bge-reranker-v2-m3"
     tei_version    = "1.9"
