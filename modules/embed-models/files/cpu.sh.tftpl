@@ -26,3 +26,11 @@ token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-me
 id=$(curl -sf -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
 aws autoscaling complete-lifecycle-action --region ${region} --auto-scaling-group-name ${group} \
   --lifecycle-hook-name ready --lifecycle-action-result CONTINUE --instance-id "$id"
+
+# Operator tools once the node serves, as on our other nodes: a convenience
+# package must never cost us one. htop's system-wide settings, as theirs.
+dnf -y -q install htop mc || true
+cat >/etc/htoprc <<'HTOPRC'
+${htoprc}
+HTOPRC
+chmod 0644 /etc/htoprc

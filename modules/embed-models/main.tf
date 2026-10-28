@@ -64,9 +64,17 @@ locals {
   answers  = "MAX([${join(", ", [for id, _ in local.queue_regions : "answers_${id}"])}])"
   indexing = "MAX([${join(", ", [for id, _ in local.queue_regions : "indexing_${id}"])}])"
 
-  # Slow: some region holds 5 s of searches or 10 minutes of indexing; quiet: every one under 1 s and a minute.
-  queue_slow  = "(${local.answers} > 5) OR (${local.indexing} > 600)"
-  queue_quiet = "(${local.answers} < 1) AND (${local.indexing} < 60)"
+  # An app keeps only a window of its texts queued here, so indexing counts by
+  # how long it lasts, not how deep it is: queued at every minute's peak.
+  queue_slow     = "${local.answers} > 5"
+  queue_indexing = "${local.indexing} > 5"
+  queue_quiet    = "(${local.answers} < 1) AND (${local.indexing} < 1)"
+
+  # Each other region's T4Gs in service, as its gateway counts them; a gateway
+  # that publishes nothing counts as served.
+  peer_nodes    = { for id, r in local.queue_regions : "nodes_${id}" => r if r != local.region }
+  peer_missing  = join(" OR ", [for id in keys(local.peer_nodes) : "(FILL(${id}, 1) < 1)"])
+  primary_quiet = join(" AND ", concat([local.queue_quiet], [for id in keys(local.peer_nodes) : "(FILL(${id}, 1) >= 1)"]))
 }
 
 # --- Image and model -----------------------------------------------------
@@ -247,6 +255,7 @@ resource "aws_launch_template" "cpu" {
     max_tokens = local.max_tokens
     region     = local.region
     group      = local.cpu_name
+    htoprc     = file("${path.module}/files/htoprc")
   }))
 
   block_device_mappings {
@@ -307,6 +316,7 @@ resource "aws_launch_template" "gpu" {
     region      = local.region
     group       = each.key
     fallback    = local.fallback && each.key == local.primary_name ? local.fallback_name : ""
+    htoprc      = file("${path.module}/files/htoprc")
   }))
 
   # CUDA images are large: the AMIs' roots would fill.
@@ -486,8 +496,9 @@ resource "aws_autoscaling_lifecycle_hook" "hold" {
   heartbeat_timeout      = 150
 }
 
-# The queues scale the T4G group: two minutes slow in some region take it to
-# primary_max, fifteen quiet in every one back to one.
+# Two minutes of searches waiting or ten of indexing in some region, or five
+# without another region's T4G, take the T4G group to primary_max; fifteen
+# quiet with every region's T4G serving bring it back to one.
 resource "aws_autoscaling_policy" "primary" {
   for_each = local.scaling ? { slow = var.models.primary_max, quiet = 1 } : {}
 
@@ -504,8 +515,9 @@ resource "aws_autoscaling_policy" "primary" {
 
 resource "aws_cloudwatch_metric_alarm" "queue" {
   for_each = local.scaling ? {
-    slow  = { expression = local.queue_slow, minutes = 2, description = "Some region's queue slow: the T4G group grows to its most" }
-    quiet = { expression = local.queue_quiet, minutes = 15, description = "Every region's queue quiet: the T4G group is back to one" }
+    slow     = { expression = local.queue_slow, minutes = 2, policy = "slow", description = "Some region's searches and reranks waiting: the T4G group grows to its most" }
+    indexing = { expression = local.queue_indexing, minutes = 10, policy = "slow", description = "Some region indexing without a pause: the T4G group grows to its most" }
+    quiet    = { expression = local.primary_quiet, minutes = 15, policy = "quiet", description = "Every region's queue quiet and its T4G serving: the T4G group is back to one" }
   } : {}
 
   alarm_name          = "meandr-embed-queue-${each.key}"
@@ -514,7 +526,7 @@ resource "aws_cloudwatch_metric_alarm" "queue" {
   threshold           = 1
   evaluation_periods  = each.value.minutes
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_autoscaling_policy.primary[each.key].arn]
+  alarm_actions       = [aws_autoscaling_policy.primary[each.value.policy].arn]
 
   dynamic "metric_query" {
     for_each = local.queue_metrics
@@ -538,6 +550,20 @@ resource "aws_cloudwatch_metric_alarm" "queue" {
     }
   }
 
+  dynamic "metric_query" {
+    for_each = local.peer_nodes
+    content {
+      id = metric_query.key
+      metric {
+        namespace   = "Meandr/Embed"
+        metric_name = "PrimaryNodes"
+        dimensions  = { Region = metric_query.value }
+        period      = 60
+        stat        = "Maximum"
+      }
+    }
+  }
+
   metric_query {
     id          = each.key
     expression  = each.value.expression
@@ -545,6 +571,42 @@ resource "aws_cloudwatch_metric_alarm" "queue" {
   }
 
   tags = merge(local.tags, { Name = "meandr-embed-queue-${each.key}" })
+}
+
+# Another region's apps run on our T4Gs while it has none, as when AWS took its
+# T4G and none could replace it.
+resource "aws_cloudwatch_metric_alarm" "peer_missing" {
+  count = local.scaling && length(local.peer_nodes) > 0 ? 1 : 0
+
+  alarm_name          = "meandr-embed-peer-missing"
+  alarm_description   = "Another region without a T4G in service: the T4G group grows to its most"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  threshold           = 1
+  evaluation_periods  = 5
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_autoscaling_policy.primary["slow"].arn]
+
+  dynamic "metric_query" {
+    for_each = local.peer_nodes
+    content {
+      id = metric_query.key
+      metric {
+        namespace   = "Meandr/Embed"
+        metric_name = "PrimaryNodes"
+        dimensions  = { Region = metric_query.value }
+        period      = 60
+        stat        = "Maximum"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "missing"
+    expression  = local.peer_missing
+    return_data = true
+  }
+
+  tags = merge(local.tags, { Name = "meandr-embed-peer-missing" })
 }
 
 # On demand, 0 or 1 node, in the order the root lists, run while this region
