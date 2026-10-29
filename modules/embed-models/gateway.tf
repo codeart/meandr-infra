@@ -149,16 +149,16 @@ resource "aws_iam_role" "gateway" {
   tags = merge(local.gateway_tags, { Name = "meandr-embed-gateway" })
 }
 
-# The nodes from their groups, and the lanes' time for the GPU's alarms. No
-# model outside our own nodes: apps' text goes to no third party. Proofs need
-# no grant: STS answers the URL the machine signed.
+# The nodes from their groups, the lanes' time published and, where it sizes its
+# T4G group, that group's count and every region's lanes read back. No model
+# outside our own nodes; proofs need no grant: STS answers the URL the machine signed.
 resource "aws_iam_role_policy" "gateway" {
   name = "embed-gateway"
   role = aws_iam_role.gateway.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       {
         Effect   = "Allow"
         Action   = ["autoscaling:DescribeAutoScalingGroups", "ec2:DescribeInstances"]
@@ -170,7 +170,19 @@ resource "aws_iam_role_policy" "gateway" {
         Resource  = "*"
         Condition = { StringEquals = { "cloudwatch:namespace" = "Meandr/Embed" } }
       },
-    ]
+      ], local.scaling || local.parks ? [
+      {
+        Effect   = "Allow"
+        Action   = "autoscaling:SetDesiredCapacity"
+        Resource = "arn:aws:autoscaling:${local.region}:${local.account}:autoScalingGroup:*:autoScalingGroupName/${local.primary_name}"
+      },
+      ] : [], local.scaling ? [
+      {
+        Effect   = "Allow"
+        Action   = "cloudwatch:GetMetricData"
+        Resource = "*"
+      },
+    ] : [])
   })
 }
 
@@ -219,6 +231,8 @@ module "gateway" {
     MEANDR_EMBED_FALLBACK_GROUP               = local.fallback_name
     MEANDR_EMBED_PEER_REGIONS                 = join(",", var.peer_regions)
     MEANDR_EMBED_METRICS_REGION               = coalesce(var.metrics_region, local.region)
+    MEANDR_EMBED_PRIMARY_MAX                  = tostring(var.models.primary_max)
+    MEANDR_EMBED_PRIMARY_IDLE                 = local.parks ? "${var.models.primary_idle}m" : ""
     MEANDR_REDIS_QUEUE_ADDR                   = "${module.queue.hostname}:6379"
     MEANDR_REDIS_QUEUE_USE_TLS                = "true"
     MEANDR_REDIS_CONFIG_READER_USE_TLS        = "true"
