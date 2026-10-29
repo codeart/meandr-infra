@@ -17,11 +17,12 @@ variable "gpu_subnet_ids" {
 }
 
 variable "models" {
-  description = "The CPU node's type (none without), the T4G group's types in order of preference and the most nodes the queues scale it to (scaling only past one), the fallback's (none without; one region has it), the embedding model and the reranker (Hugging Face ids; none without), TEI's version as the mirror tags it, and the release our T4G build compiles (the primary's only)."
+  description = "The CPU node's type (none without), the T4G group's types in order of preference and the most nodes the queues scale it to (scaling only past one), the minutes without work in any region it parks after (always on without), the fallback's (none without; one region has it), the embedding model and the reranker (Hugging Face ids; none without), TEI's version as the mirror tags it, and the release our T4G build compiles (the primary's only)."
   type = object({
     cpu_type       = optional(string)
     primary_types  = list(string)
     primary_max    = optional(number, 1)
+    primary_idle   = optional(number)
     fallback_types = optional(list(string), [])
     model          = string
     reranker       = optional(string)
@@ -31,7 +32,13 @@ variable "models" {
 
   validation {
     condition     = try(var.models.primary_max >= 1, true)
-    error_message = "primary_max is at least the one T4G always wanted."
+    error_message = "primary_max is at least the one T4G wanted."
+  }
+
+  # Scaling's quiet alarm wants one T4G and parking's idle alarm none: they'd fight.
+  validation {
+    condition     = try(var.models.primary_idle == null || (var.models.primary_idle >= 1 && var.models.primary_max == 1), true)
+    error_message = "primary_idle is at least a minute, and a group that parks doesn't scale (primary_max 1)."
   }
 }
 

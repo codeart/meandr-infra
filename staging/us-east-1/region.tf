@@ -79,8 +79,8 @@ locals {
   proxy             = { cpu = 256, memory = 512, desired_count = 1, min_replicas = 1, max_replicas = 4, target_cpu_utilization = 60 }
 
   # Meandr's embedding model and its gateway (hosted_models.md): the T4G
-  # group's types, the models and TEI's version; null for none. The last
-  # resort is the primary's, so its apply comes first.
+  # group's types and the idle minutes it parks after, the models and TEI's
+  # version; null for none. The primary's apply comes first.
   embed_models = null
 
   log_retention_days = 7
