@@ -84,12 +84,8 @@ resource "aws_iam_policy" "dev_secretsmanager" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # CRUD on the two SM namespaces the local BE writes to:
-      #   - meandr/tenants/* — mirrors the prod ECS task role (see
-      #     modules/meandr-api/main.tf). Behavior verified against
-      #     the dev key carries over to prod task identity.
-      #   - meandr/certs/*  — local cert installs via the
-      #     `certs:install` rake task (lib/tasks/certs.rake).
+      # CRUD on meandr/certs/*: local cert installs via the
+      # `certs:install` rake task (lib/tasks/certs.rake).
       {
         Effect = "Allow"
         Action = [
@@ -102,16 +98,8 @@ resource "aws_iam_policy" "dev_secretsmanager" {
           "secretsmanager:DescribeSecret",
         ]
         Resource = [
-          "arn:aws:secretsmanager:*:${local.account_id}:secret:meandr/tenants/*",
           "arn:aws:secretsmanager:*:${local.account_id}:secret:meandr/certs/*",
         ]
-      },
-      # ListSecrets doesn't support resource-level scoping in IAM; the
-      # task role grants it on * for the same reason.
-      {
-        Effect   = "Allow"
-        Action   = "secretsmanager:ListSecrets"
-        Resource = "*"
       },
       # READ-ONLY on the Let's Encrypt account at
       # meandr/acme/development/account — provisioned by hand, never by

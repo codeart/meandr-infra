@@ -109,7 +109,7 @@ locals {
     # Self-hosted fleets, via Sentinel. Present ⇒ BE uses discovery and
     # mTLS; absent ⇒ it falls back to the *_URL shapes above, which is
     # what keeps dev and test working and what kept staging on
-    # ElastiCache until these were set. See docs/valkey_fleets.md §5.
+    # ElastiCache until these were set. See docs/contracts/valkey_fleets.md §5.
     #
     # INGRESS is `;`-separated groups, positional with MEANDR_MCP_REGIONS
     # exactly like MEANDR_REDIS_INGRESS_URLS — one convention for one
@@ -131,7 +131,7 @@ locals {
 
     # Cred-store wiring. Empty values are harmless — Rails treats them
     # as "cred-store not configured here" and skips the encrypt path.
-    # See docs/credential_store.md for the BE-side responsibilities.
+    # See docs/contracts/credential_store.md for the BE-side responsibilities.
     MEANDR_CRED_TABLE_NAME    = var.creds_table_name
     MEANDR_CRED_KMS_KEY_ALIAS = var.cred_encryption_key_alias
 
@@ -435,44 +435,6 @@ resource "aws_iam_role" "task_acme" {
   })
 
   tags = merge(local.base_tags, { Name = "meandr-api ACME task role" })
-}
-
-resource "aws_iam_policy" "tenant_secrets" {
-  name = "meandr-api-tenant-secrets-${var.env}"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:CreateSecret",
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecret",
-          "secretsmanager:DeleteSecret",
-          "secretsmanager:TagResource",
-          "secretsmanager:DescribeSecret",
-        ]
-        Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/tenants/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = "secretsmanager:ListSecrets"
-        Resource = "*"
-      },
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "task_tenant_secrets" {
-  role       = aws_iam_role.task.name
-  policy_arn = aws_iam_policy.tenant_secrets.arn
-}
-
-resource "aws_iam_role_policy_attachment" "acme_tenant_secrets" {
-  role       = aws_iam_role.task_acme.name
-  policy_arn = aws_iam_policy.tenant_secrets.arn
 }
 
 # --- Certificate issuance — JOBS ROLE ONLY ------------------------------
