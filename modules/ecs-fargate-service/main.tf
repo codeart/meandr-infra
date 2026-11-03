@@ -7,7 +7,7 @@
 # Task definitions are owned by Terraform end-to-end. CI/CD does NOT register
 # new task def revisions — it just builds an image, pushes to the same mutable
 # tag (`:develop`/`:main`), and calls `aws ecs update-service --force-new-deployment`.
-# ECS re-pulls the tag and rolls tasks. See `docs/meandr_api_first_deploy.md`
+# ECS re-pulls the tag and rolls tasks. See `docs/runbooks/backend_deploy.md` §2
 # for the design rationale.
 
 # --- Log group ----------------------------------------------------------

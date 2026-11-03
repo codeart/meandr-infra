@@ -7,8 +7,7 @@
 #
 # Replaces ElastiCache for the CONFIG tier. Global Datastore caps at three
 # regions, excludes t-family entirely, and costs several times this; see
-# events/flows/client-capability-floor.md's sibling note in
-# meandr-vision-v1.md §9.1.
+# valkey_fleets.md.
 
 data "aws_ssm_parameter" "al2023_arm" {
   count = var.ami_id == "" ? 1 : 0

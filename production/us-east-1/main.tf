@@ -45,7 +45,7 @@ module "vpc" {
 #
 # The primary CREATES the table; an edge attaches a replica. The table
 # carries a stream and no replica list, so regions are added without
-# editing it. See docs/credential_store.md.
+# editing it. See docs/contracts/credential_store.md.
 
 module "creds_table" {
   source = "../../modules/dynamodb-creds-table"

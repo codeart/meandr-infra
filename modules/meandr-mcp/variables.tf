@@ -244,7 +244,7 @@ variable "cred_store_enabled" {
 # Proxy side of the cred-store architecture. Reads AES-256-GCM blobs
 # from the cred Dynamo table on cred-version-change events, decrypts
 # locally with a data key it fetches from the dated SM secret + unwraps
-# via KMS. See docs/credential_store.md for the full architecture.
+# via KMS. See docs/contracts/credential_store.md for the full architecture.
 #
 # IAM is strictly narrower than the BE side: GetItem on Dynamo (no
 # writes), GetSecretValue on the SM path (no creates), Decrypt on the

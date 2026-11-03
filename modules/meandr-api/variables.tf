@@ -187,7 +187,7 @@ variable "cred_store_enabled" {
 #
 # BE side of the cred-store architecture. Rails writes AES-256-GCM blobs
 # to the cred Dynamo table and manages the dated SM secrets that hold
-# KMS-wrapped data keys. See docs/credential_store.md for the full
+# KMS-wrapped data keys. See docs/contracts/credential_store.md for the full
 # Ruby↔Go wire contract.
 #
 # Caller creates the table (modules/dynamodb-creds-table) + the KMS CMK
@@ -244,7 +244,7 @@ variable "acme_dns_role_arn" {
 #
 # How BE reaches the three Valkey fleets. Sentinel only — a plain URL
 # cannot carry a client certificate, and the fleets refuse a connection
-# without one. See docs/valkey_fleets.md §5.
+# without one. See docs/contracts/valkey_fleets.md §5.
 
 variable "config_sentinel_addrs" {
   description = "Sentinel endpoints for the config fleet, `host:26379`. Singular — one config master globally, which is the point of that fleet."

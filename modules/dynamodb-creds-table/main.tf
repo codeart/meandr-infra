@@ -1,6 +1,6 @@
 # One table per env holding AEAD-encrypted per-server credential blobs.
 # BE writes, proxy reads. Item shape and the Ruby<->Go wire format are in
-# docs/credential_store.md.
+# docs/contracts/credential_store.md.
 #
 # No GSIs: the only access pattern is GetItem by server_uuid.
 

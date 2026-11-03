@@ -220,7 +220,7 @@ resource "aws_iam_policy" "dev_s3_capture" {
         # (set on CreateMultipartUpload, but a re-tag needs its own
         # permission). GetObject is the approval REPLAY read — an offline
         # approval is decided later, possibly elsewhere, so the body comes
-        # back from here (policies.md §9.2.1). ListBucket is what the
+        # back from here (approval-required.md §5.2). ListBucket is what the
         # monthly untagged-object sweep enumerates with.
         Sid    = "S3PayloadsReadWrite"
         Effect = "Allow"

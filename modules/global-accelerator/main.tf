@@ -57,7 +57,7 @@ resource "aws_globalaccelerator_accelerator" "main" {
 # events Valkey, which does not replicate. See docs/cross_node_delivery.md.
 #
 # TCP, not TLS: the proxy terminates TLS itself and owns SNI-based cert
-# selection (cert_store.md §2). Terminating at the accelerator would take
+# selection (cert_store.md §3). Terminating at the accelerator would take
 # that away and require the wildcard to live in ACM instead.
 resource "aws_globalaccelerator_listener" "main" {
   provider = aws.usw2

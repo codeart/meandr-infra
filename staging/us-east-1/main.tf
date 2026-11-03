@@ -131,7 +131,7 @@ module "fleet_api_peering" {
 #
 # The primary CREATES the table; an edge attaches a replica. The table
 # there carries a stream and no replica list, so regions are added without
-# editing it. See docs/credential_store.md.
+# editing it. See docs/contracts/credential_store.md.
 
 resource "aws_dynamodb_table_replica" "creds" {
   global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-creds-${local.env}"

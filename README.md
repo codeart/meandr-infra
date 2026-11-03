@@ -1,6 +1,6 @@
 # meandr-infra
 
-Terraform configuration for meandr's AWS infrastructure. Five AWS accounts under one Organization (see [`deployment_strategy.md`](docs/deployment_strategy.md) for the topology).
+Terraform configuration for meandr's AWS infrastructure. Five AWS accounts under one Organization (see [`infra_inventory.md`](docs/infra/infra_inventory.md) for the topology).
 
 ## Directory layout
 
@@ -81,5 +81,5 @@ After `aws sso login --profile <name>`, Terraform picks up credentials automatic
 
 ## See also
 
-- `docs/deployment_strategy.md` — overall topology, phasing, and decisions.
-- `docs/redis_schema.md` — wire-format contract between meandr-mcp and meandr-api.
+- `docs/infra/infra_inventory.md` — accounts, regions, state, DNS, keys and tags.
+- `docs/contracts/redis_schema.md` — wire-format contract between meandr-mcp and meandr-api.

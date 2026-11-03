@@ -1,6 +1,6 @@
 # CMK for server credentials. BE encrypts each blob directly with
 # KMS.Encrypt(KeyId=alias); there is no data-key layer and nothing to
-# bootstrap. Contract: docs/credential_store.md.
+# bootstrap. Contract: docs/contracts/credential_store.md.
 
 data "aws_caller_identity" "current" {}
 

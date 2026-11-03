@@ -132,7 +132,7 @@ locals {
     # Cred-store wiring. Empty value = "no cred-store" — proxy's
     # cred-resolution falls back to the legacy per-server SM path
     # (via Server.cred_ref) until BE bumps cred_version. See
-    # docs/credential_store.md §9 for the discriminator.
+    # docs/contracts/credential_store.md §9 for the discriminator.
     MEANDR_CRED_TABLE_NAME = var.creds_table_name
 
     # Payload capture. Empty = capture disabled; the proxy stores
@@ -222,7 +222,7 @@ locals {
 # across every metric type, not merely zero connections, which never
 # reaches zero while ElastiCache health-checks itself.
 #
-# See docs/valkey_fleets.md.
+# See docs/contracts/valkey_fleets.md.
 
 # --- NLB (network load balancer) ---------------------------------------
 #
@@ -424,7 +424,7 @@ resource "aws_iam_role_policy" "task_cloudwatch_metrics" {
 }
 
 # Upstream creds moved to the cred-store (DynamoDB + KMS direct) —
-# see task_cred_store below + docs/credential_store.md. The proxy no
+# see task_cred_store below + docs/contracts/credential_store.md. The proxy no
 # longer reads any SM secret under meandr/tenants/* (the old
 # task_tenant_secrets policy was removed). The only remaining SM grant
 # on the task role is task_cert_secrets below, scoped to
@@ -490,7 +490,7 @@ resource "aws_iam_role_policy" "task_cred_store" {
 
 # Payload capture: the proxy writes request/response bodies into the
 # regional payloads bucket as multipart segments, and reads one back on
-# an offline approval replay (policies.md §9.2.1).
+# an offline approval replay (approval-required.md §5.2).
 #
 # AbortMultipartUpload is separate from PutObject and is NOT optional —
 # the bucket's lifecycle rule cleans up what we abandon, but the proxy
