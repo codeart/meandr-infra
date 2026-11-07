@@ -1064,6 +1064,130 @@ moved {
   to   = aws_lb_listener_rule.puma[0]
 }
 
+# --- Ops sign-in (Cognito at the ALB) ------------------------------------
+#
+# /ops needs TOTP before it reaches Puma; only an admin creates accounts.
+
+resource "aws_cognito_user_pool" "ops" {
+  name                     = "meandr-ops-${var.env}"
+  mfa_configuration        = "ON"
+  deletion_protection      = "ACTIVE"
+  username_attributes      = ["email"]
+  auto_verified_attributes = ["email"]
+
+  software_token_mfa_configuration {
+    enabled = true
+  }
+
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+  }
+
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "admin_only"
+      priority = 1
+    }
+  }
+
+  password_policy {
+    minimum_length                   = 14
+    require_lowercase                = true
+    require_uppercase                = true
+    require_numbers                  = true
+    require_symbols                  = true
+    temporary_password_validity_days = 2
+  }
+
+  tags = merge(local.base_tags, { Name = "meandr-ops" })
+}
+
+resource "aws_cognito_user_pool_domain" "ops" {
+  domain       = "meandr-ops-${var.env}"
+  user_pool_id = aws_cognito_user_pool.ops.id
+}
+
+resource "aws_cognito_user_pool_client" "ops" {
+  name                                 = "alb"
+  user_pool_id                         = aws_cognito_user_pool.ops.id
+  generate_secret                      = true
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email"]
+  supported_identity_providers         = ["COGNITO"]
+  callback_urls                        = ["https://${lower(var.hostname)}/oauth2/idpresponse"]
+}
+
+resource "aws_lb_listener_rule" "ops" {
+  count = var.parked ? 0 : 1
+
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 50
+
+  condition {
+    host_header {
+      values = [var.hostname]
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/ops", "/ops/*"]
+    }
+  }
+
+  action {
+    type  = "authenticate-cognito"
+    order = 1
+
+    authenticate_cognito {
+      user_pool_arn              = aws_cognito_user_pool.ops.arn
+      user_pool_client_id        = aws_cognito_user_pool_client.ops.id
+      user_pool_domain           = aws_cognito_user_pool_domain.ops.domain
+      session_cookie_name        = "AWSELBAuthOps"
+      session_timeout            = 28800 # 8 hours; the default is 7 days
+      on_unauthenticated_request = "authenticate"
+      scope                      = "openid email"
+    }
+  }
+
+  action {
+    type             = "forward"
+    order            = 2
+    target_group_arn = aws_lb_target_group.puma.arn
+  }
+
+  tags = merge(local.base_tags, { Name = "meandr-api-ops listener rule" })
+}
+
+# extra_hostnames reach the same app (mcp.meandr.com), so /ops stops there.
+# Rails merges leading slashes, so //ops/jobs routes as /ops/jobs; the third
+# pattern stops any such path the rule above doesn't match.
+resource "aws_lb_listener_rule" "ops_elsewhere" {
+  count = var.parked ? 0 : 1
+
+  listener_arn = aws_lb_listener.https[0].arn
+  priority     = 51
+
+  condition {
+    path_pattern {
+      values = ["/ops", "/ops/*", "//*ops*"]
+    }
+  }
+
+  action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Not found"
+      status_code  = "404"
+    }
+  }
+
+  tags = merge(local.base_tags, { Name = "meandr-api-ops-elsewhere listener rule" })
+}
+
 # --- Puma service (Rails web) ------------------------------------------
 
 module "puma" {
