@@ -1066,7 +1066,7 @@ moved {
 
 # --- Ops sign-in (Cognito at the ALB) ------------------------------------
 #
-# /ops needs TOTP before it reaches Puma; only an admin creates accounts.
+# /ops needs TOTP or a passkey before it reaches Puma; only an admin creates accounts.
 
 resource "aws_cognito_user_pool" "ops" {
   name                     = "meandr-ops-${var.env}"
@@ -1077,6 +1077,17 @@ resource "aws_cognito_user_pool" "ops" {
 
   software_token_mfa_configuration {
     enabled = true
+  }
+
+  # A passkey passes required MFA only under FactorConfiguration MULTI_FACTOR_WITH_USER_VERIFICATION:
+  # provider 6.62 can't set it, so it's set by CLI, and the provider's own MFA update leaves it out.
+  web_authn_configuration {
+    relying_party_id  = "meandr-ops-${var.env}.auth.${data.aws_region.current.region}.amazoncognito.com"
+    user_verification = "required"
+  }
+
+  sign_in_policy {
+    allowed_first_auth_factors = ["PASSWORD", "WEB_AUTHN"]
   }
 
   admin_create_user_config {
@@ -1103,8 +1114,15 @@ resource "aws_cognito_user_pool" "ops" {
 }
 
 resource "aws_cognito_user_pool_domain" "ops" {
-  domain       = "meandr-ops-${var.env}"
-  user_pool_id = aws_cognito_user_pool.ops.id
+  domain                = "meandr-ops-${var.env}"
+  user_pool_id          = aws_cognito_user_pool.ops.id
+  managed_login_version = 2 # passkeys need managed login; the classic hosted UI has none
+}
+
+resource "aws_cognito_managed_login_branding" "ops" {
+  user_pool_id                = aws_cognito_user_pool.ops.id
+  client_id                   = aws_cognito_user_pool_client.ops.id
+  use_cognito_provided_values = true
 }
 
 resource "aws_cognito_user_pool_client" "ops" {
@@ -1114,6 +1132,7 @@ resource "aws_cognito_user_pool_client" "ops" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email"]
+  explicit_auth_flows                  = ["ALLOW_USER_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
   supported_identity_providers         = ["COGNITO"]
   callback_urls                        = ["https://${lower(var.hostname)}/oauth2/idpresponse"]
 }
