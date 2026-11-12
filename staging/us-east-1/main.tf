@@ -225,6 +225,10 @@ data "aws_secretsmanager_secret" "mesh" {
   name = "meandr/pki/${local.env}/mesh"
 }
 
+data "aws_secretsmanager_secret" "identity" {
+  name = "meandr/pki/${local.env}/identity"
+}
+
 # This region's embedding gateway: its keypair, and the CA agents check it against.
 data "aws_secretsmanager_secret" "pki_embed" {
   count = local.embed_models == null ? 0 : 1
@@ -428,6 +432,8 @@ module "mcp" {
 
   mesh_secret_arn = data.aws_secretsmanager_secret.mesh.arn
   mesh_peer_cidrs = [local.peer.cidr_block]
+
+  identity_secret_arn = data.aws_secretsmanager_secret.identity.arn
 
   redis_auth_enabled    = true
   redis_auth_secret_arn = data.aws_secretsmanager_secret.redis_auth.arn

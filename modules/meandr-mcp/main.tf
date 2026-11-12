@@ -202,6 +202,10 @@ locals {
       MEANDR_MESH_CERT    = "${var.mesh_secret_arn}:mesh_crt::"
       MEANDR_MESH_KEY     = "${var.mesh_secret_arn}:mesh_key::"
     },
+    # Signs end users' identity statements; empty leaves user tokens refused.
+    var.identity_secret_arn == "" ? {} : {
+      MEANDR_IDENTITY_KEY = "${var.identity_secret_arn}:identity_key::"
+    },
     {
       MEANDR_SESSION_SIGNING_KEY = var.session_signing_key_secret_arn
     },
@@ -582,6 +586,7 @@ resource "aws_iam_role_policy" "execution_secrets" {
         # problem it would otherwise be mistaken for.
         var.valkey_client_secret_arn,
         var.mesh_secret_arn,
+        var.identity_secret_arn,
       ])
       }], var.self_ips_parameter_arn == "" ? [] : [{
       Effect   = "Allow"

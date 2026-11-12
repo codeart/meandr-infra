@@ -570,6 +570,8 @@ module "mcp" {
   mesh_secret_arn = module.internal_pki.mesh_secret_arn
   mesh_peer_cidrs = local.edge_cidrs
 
+  identity_secret_arn = module.internal_pki.identity_secret_arn
+
   redis_auth_enabled    = true
   redis_auth_secret_arn = aws_secretsmanager_secret.redis_auth.arn
 

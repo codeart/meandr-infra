@@ -23,6 +23,11 @@ output "mesh_secret_arn" {
   value       = aws_secretsmanager_secret.mesh.arn
 }
 
+output "identity_secret_arn" {
+  description = "The proxy's identity statement signing key: identity_key, PKCS#8 PEM. Contains a private key — proxy tasks only."
+  value       = aws_secretsmanager_secret.identity.arn
+}
+
 output "embed_secret_arn" {
   description = "The embedding gateway's TLS material: ca_crt, embed_crt, embed_key. Contains a private key — gateway tasks only."
   value       = aws_secretsmanager_secret.embed.arn

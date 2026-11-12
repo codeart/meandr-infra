@@ -478,6 +478,12 @@ variable "mesh_secret_arn" {
   default     = ""
 }
 
+variable "identity_secret_arn" {
+  description = "SM secret holding the identity statement signing key (identity_key) from internal-pki, injected as MEANDR_IDENTITY_KEY. Empty: the proxy refuses user tokens."
+  type        = string
+  default     = ""
+}
+
 variable "mesh_port" {
   description = "Port proxy tasks accept intercom connections on. Separate from the public listener so a mesh rule can never widen customer-facing exposure."
   type        = number

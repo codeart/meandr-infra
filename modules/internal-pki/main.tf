@@ -339,6 +339,36 @@ resource "aws_secretsmanager_secret_version" "mesh" {
   })
 }
 
+# --- Identity statement key ---------------------------------------------
+#
+# What the proxy signs end users' identity statements with; it publishes the
+# public half itself at id.<apex> (meandr-docs contracts/identity_statement.md §3).
+
+resource "tls_private_key" "identity" {
+  algorithm = "ED25519"
+}
+
+resource "aws_secretsmanager_secret" "identity" {
+  name        = "meandr/pki/${var.env}/identity"
+  description = "Identity statement signing key (identity_key, PKCS#8 PEM). Read by proxy tasks only."
+
+  dynamic "replica" {
+    for_each = var.replica_regions
+    content {
+      region = replica.value
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_secretsmanager_secret_version" "identity" {
+  secret_id = aws_secretsmanager_secret.identity.id
+  secret_string = jsonencode({
+    identity_key = tls_private_key.identity.private_key_pem_pkcs8
+  })
+}
+
 # --- Embedding gateway keypair ------------------------------------------
 #
 # Server auth only: agents dial the gateway, which identifies them by the
