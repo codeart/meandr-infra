@@ -22,4 +22,5 @@ image_pusher_immutable_subs = {
   "meandr-harness"  = "repo:codeart@5684282/meandr-harness@1420959606"
   "meandr-rag"      = "repo:codeart@5684282/meandr-rag@1433364804"
   "meandr-embed-gw" = "repo:codeart@5684282/meandr-embed-gw@1435398333"
+  "meandr-chat"     = "repo:codeart@5684282/meandr-chat@1456449013"
 }

@@ -215,7 +215,7 @@ resource "aws_iam_role_policy_attachment" "ecr_push_agents" {
   policy_arn = aws_iam_policy.ecr_push_agents.arn
 }
 
-# --- Role: ECR push for Meandr's apps (meandr-rag) ---------------------------
+# --- Role: ECR push for Meandr's apps (meandr-rag, meandr-chat) --------------
 #
 # BE trusts an app image's manifest label, so its repo pushes apps/* and nothing else.
 
