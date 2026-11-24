@@ -135,6 +135,10 @@ locals {
     MEANDR_CRED_TABLE_NAME    = var.creds_table_name
     MEANDR_CRED_KMS_KEY_ALIAS = var.cred_encryption_key_alias
 
+    # Workspace hostnames' certificates. Read on use, so an empty value fails only an order.
+    MEANDR_CERT_TABLE_NAME    = var.cert_table_enabled ? var.cert_table_name : ""
+    MEANDR_CERT_KMS_KEY_ALIAS = var.cert_table_enabled ? var.cert_encryption_key_alias : ""
+
     # Cross-account role for ACME DNS-01 challenge writes; the zones live
     # in the Shared account. Meandr::Acme reads this LAZILY, so an empty
     # value only fails an actual certificate order, never boot.
@@ -512,6 +516,33 @@ resource "aws_iam_role_policy" "acme_cert_write" {
       ]
       Resource = "arn:aws:secretsmanager:${local.region}:${var.account_id}:secret:meandr/certs/${var.env}/*"
     }]
+  })
+}
+
+# Workspace hostnames' certificates: a row written once, deleted once
+# superseded. No GetItem and no Decrypt: BE never reads a key back.
+resource "aws_iam_role_policy" "acme_cert_table" {
+  count = var.cert_table_enabled ? 1 : 0
+
+  name = "cert-table-write"
+  role = aws_iam_role.task_acme.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DynamoCertTableWrite"
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:DescribeTable"]
+        Resource = var.cert_table_arn
+      },
+      {
+        Sid      = "KMSSealCertKey"
+        Effect   = "Allow"
+        Action   = ["kms:GenerateDataKey", "kms:DescribeKey"]
+        Resource = var.cert_encryption_key_arn
+      },
+    ]
   })
 }
 

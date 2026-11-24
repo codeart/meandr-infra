@@ -219,6 +219,38 @@ variable "cred_encryption_key_alias" {
   default     = ""
 }
 
+# --- Cert table (jobs write; cert_store.md §4.1, §8) --------------------
+
+variable "cert_table_enabled" {
+  description = "Wires the cert table: MEANDR_CERT_TABLE_NAME, MEANDR_CERT_KMS_KEY_ALIAS and the jobs' write grant."
+  type        = bool
+  default     = false
+}
+
+variable "cert_table_name" {
+  description = "Goes into MEANDR_CERT_TABLE_NAME."
+  type        = string
+  default     = ""
+}
+
+variable "cert_table_arn" {
+  description = "Scopes the jobs' PutItem and DeleteItem."
+  type        = string
+  default     = ""
+}
+
+variable "cert_encryption_key_arn" {
+  description = "The cert CMK; scopes the jobs' GenerateDataKey."
+  type        = string
+  default     = ""
+}
+
+variable "cert_encryption_key_alias" {
+  description = "The cert CMK's alias, `alias/meandr-cert-<env>`; goes into MEANDR_CERT_KMS_KEY_ALIAS."
+  type        = string
+  default     = ""
+}
+
 variable "acme_dns_role_arn" {
   description = "ARN of the ACME DNS role in the Shared account (`meandr-acme-dns-<env>`, output by shared/acme.tf). Goes into MEANDR_ACME_DNS_ROLE_ARN and is the sole Resource of the task role's sts:AssumeRole grant. Empty disables both — Meandr::Acme reads it lazily, so only a real cert order notices."
   type        = string

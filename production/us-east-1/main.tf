@@ -131,6 +131,38 @@ module "action_encryption_key" {
   tags = local.tags
 }
 
+# --- Cert table -----------------------------------------------------------
+#
+# Workspace hostnames' certificates (cert_store.md §4.1). Created here and
+# replicated by each edge, as the cred table is; its key apart from the cred key.
+
+module "cert_table" {
+  source = "../../modules/dynamodb-cert-table"
+
+  name = "meandr-certs-${local.env}"
+
+  pitr_enabled                = local.pitr_enabled
+  deletion_protection_enabled = true
+
+  tags = local.tags
+}
+
+module "cert_encryption_key" {
+  source = "../../modules/payload-encryption-key"
+
+  env        = local.env
+  alias_name = "meandr-cert-${local.env}"
+  purpose    = "AEAD envelope key for workspace hostnames' certificate keys"
+
+  enable_key_rotation     = true
+  deletion_window_in_days = local.kms_deletion_window
+
+  # IMMUTABLE: a row sealed here is opened by every region's proxy.
+  multi_region = true
+
+  tags = local.tags
+}
+
 # --- Shared secrets -----------------------------------------------------
 #
 # The primary CREATES these and lists its edges as replica targets; an edge
@@ -412,6 +444,12 @@ module "api" {
   cred_encryption_key_arn   = module.cred_encryption_key.key_arn
   cred_encryption_key_alias = module.cred_encryption_key.alias_name
 
+  cert_table_enabled        = true
+  cert_table_name           = module.cert_table.table_name
+  cert_table_arn            = module.cert_table.table_arn
+  cert_encryption_key_arn   = module.cert_encryption_key.key_arn
+  cert_encryption_key_alias = module.cert_encryption_key.alias_name
+
   # Even staging holds real developer credentials and dashboard state; it
   # is not scratch. Flip false and apply before an intentional teardown.
   db_deletion_protection = true
@@ -581,6 +619,11 @@ module "mcp" {
   creds_table_name        = module.creds_table.table_name
   creds_table_arn         = module.creds_table.table_arn
   cred_encryption_key_arn = module.cred_encryption_key.key_arn
+
+  cert_table_enabled      = true
+  cert_table_name         = module.cert_table.table_name
+  cert_table_arn          = module.cert_table.table_arn
+  cert_encryption_key_arn = module.cert_encryption_key.key_arn
 
   # On ahead of the writer. The grant and the env var are inert until
   # the proxy has capture code — nothing reads MEANDR_CAPTURE_BUCKET yet

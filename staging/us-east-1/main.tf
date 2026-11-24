@@ -147,6 +147,15 @@ resource "aws_dynamodb_table_replica" "creds" {
   tags = local.tags
 }
 
+# Workspace hostnames' certificates (cert_store.md §4.1), replicated like the cred table.
+resource "aws_dynamodb_table_replica" "certs" {
+  global_table_arn = "arn:aws:dynamodb:${local.peer.region}:${local.account_id}:table/meandr-certs-${local.env}"
+
+  deletion_protection_enabled = true
+
+  tags = local.tags
+}
+
 # --- Encryption keys ----------------------------------------------------
 #
 # The primary CREATES the cred and action keys; an edge replicates them.
@@ -163,6 +172,7 @@ module "kms_replicas" {
   keys = {
     "meandr-cred-${local.env}"   = "Replica: server credentials"
     "meandr-action-${local.env}" = "Replica: elicitation + approval form envelopes"
+    "meandr-cert-${local.env}"   = "Replica: workspace hostnames' certificate keys"
   }
 
   tags = local.tags
@@ -444,6 +454,11 @@ module "mcp" {
   creds_table_name        = "meandr-creds-${local.env}"
   creds_table_arn         = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/meandr-creds-${local.env}"
   cred_encryption_key_arn = module.kms_replicas.key_arns["meandr-cred-${local.env}"]
+
+  cert_table_enabled      = true
+  cert_table_name         = "meandr-certs-${local.env}"
+  cert_table_arn          = aws_dynamodb_table_replica.certs.arn
+  cert_encryption_key_arn = module.kms_replicas.key_arns["meandr-cert-${local.env}"]
 
   capture_enabled            = true
   payloads_bucket            = module.payloads_bucket.bucket

@@ -135,6 +135,9 @@ locals {
     # docs/contracts/credential_store.md §9 for the discriminator.
     MEANDR_CRED_TABLE_NAME = var.creds_table_name
 
+    # Workspace hostnames' certificates; empty refuses them at TLS.
+    MEANDR_CERT_TABLE_NAME = var.cert_table_enabled ? var.cert_table_name : ""
+
     # Payload capture. Empty = capture disabled; the proxy stores
     # nothing and `log` policies degrade to metadata-only.
     MEANDR_CAPTURE_BUCKET = var.payloads_bucket
@@ -487,6 +490,32 @@ resource "aws_iam_role_policy" "task_cred_store" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:DescribeKey"]
         Resource = var.cred_encryption_key_arn
+      },
+    ]
+  })
+}
+
+# Workspace hostnames' certificates: read a row, open its key (cert_store.md §8).
+resource "aws_iam_role_policy" "task_cert_table" {
+  count = var.cert_table_enabled ? 1 : 0
+
+  name = "cert-table-read"
+  role = aws_iam_role.task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "DynamoCertTableRead"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:DescribeTable"]
+        Resource = var.cert_table_arn
+      },
+      {
+        Sid      = "KMSDecryptCertKey"
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource = var.cert_encryption_key_arn
       },
     ]
   })

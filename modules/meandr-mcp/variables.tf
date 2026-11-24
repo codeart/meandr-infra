@@ -268,6 +268,32 @@ variable "cred_encryption_key_arn" {
   default     = ""
 }
 
+# --- Cert table (proxy is read-only; cert_store.md §4.1, §8) ------------
+
+variable "cert_table_enabled" {
+  description = "Wires the cert table: MEANDR_CERT_TABLE_NAME and the read grant. False refuses every workspace hostname at TLS."
+  type        = bool
+  default     = false
+}
+
+variable "cert_table_name" {
+  description = "Goes into MEANDR_CERT_TABLE_NAME."
+  type        = string
+  default     = ""
+}
+
+variable "cert_table_arn" {
+  description = "This region's table or replica; scopes GetItem."
+  type        = string
+  default     = ""
+}
+
+variable "cert_encryption_key_arn" {
+  description = "This region's cert CMK or replica; scopes Decrypt."
+  type        = string
+  default     = ""
+}
+
 # --- Proxy service sizing -----------------------------------------------
 
 variable "proxy" {
