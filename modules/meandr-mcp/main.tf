@@ -1,15 +1,7 @@
-# meandr-mcp orchestrator — proxy stack for a region.
-#
-# Composes:
-#   - Event-stream Valkey (per-region standalone, TLS-on for future AUTH)
-#   - NLB in public subnets (TCP passthrough — proxy terminates TLS itself
-#     once the BE-side cert pipeline lands; see variables.tf for status)
-#   - ECS cluster + proxy service (desired_count overridable; 0 = idle)
-#   - Wildcard DNS record `*.<dns_zone_name>` → NLB (zone resolved in the
-#     Shared account; staging uses meandr.live, production uses meandr.io)
-#
-# Config-stream Valkey is NOT created here. The region-level caller creates
-# it (since meandr-api needs it too), and passes the endpoint as input.
+# meandr-mcp orchestrator: the proxy stack for a region, a TCP-passthrough NLB
+# (the proxy terminates TLS), the ECS service and, unless the accelerator owns
+# it, the `*.<dns_zone_name>` record.
+# Valkey is the region caller's (modules/valkey-region), passed in.
 
 # --- Account guard ------------------------------------------------------
 
@@ -233,20 +225,8 @@ locals {
 
 # --- NLB (network load balancer) ---------------------------------------
 #
-# TCP load balancer (not HTTP/HTTPS) — the proxy terminates TLS itself
-# (per the E2E-encryption product commitment). NLB just forwards bytes.
-#
-# Two TCP listeners:
-#   :80  → proxy plain-HTTP TG  → proxy:proxy_port     (cleartext)
-#   :443 → proxy TLS TG         → proxy:proxy_tls_port (TLS, terminated in proxy)
-#
-# The proxy serves both ports — one via NewHTTP, one via NewHTTPS with
-# the cert.Cache wired. End-to-end encryption is preserved: bytes only
-# decrypt in the proxy task, never at the NLB.
-#
-# Until the BE-side cert pipeline lands, HTTPS handshakes will fail at
-# cert lookup (cert.Cache has no live Provider data). The routing shape
-# is correct; the cert side is what's missing.
+# TCP only: the proxy terminates TLS itself (E2E encryption), so bytes
+# decrypt in the task, never here. One listener, :443 → proxy_tls_port.
 
 # Security groups are attachable ONLY AT CREATION for a network load
 # balancer — there is no way to add them later, which is why this list

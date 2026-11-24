@@ -498,10 +498,8 @@ module "api" {
 
 # --- meandr-mcp --------------------------------------------------------
 #
-# Proxy stack: writer Valkey + NLB + ECS cluster + proxy service. NLB has
-# two plain TCP listeners (80 + 443) forwarding to proxy:8080; proxy
-# terminates TLS itself once the BE-side cert pipeline lands (Phase 2).
-# Customer HTTPS traffic won't work end-to-end until then — expected v0.
+# Proxy stack: NLB + ECS cluster + proxy service. The NLB passes :443 through;
+# the proxy terminates TLS (cert_store.md).
 
 # --- Capture buckets ----------------------------------------------------
 #
