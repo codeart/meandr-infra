@@ -1166,6 +1166,13 @@ resource "aws_cognito_user_pool_client" "ops" {
   explicit_auth_flows                  = ["ALLOW_USER_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
   supported_identity_providers         = ["COGNITO"]
   callback_urls                        = ["https://${lower(var.hostname)}/oauth2/idpresponse"]
+  logout_urls                          = [local.ops_landing]
+}
+
+locals {
+  # Cognito's /logout redirects only to an exact logout_urls entry; the ALB then asks for sign-in again.
+  ops_landing = "https://${lower(var.hostname)}/ops/admin"
+  ops_logout  = "https://${aws_cognito_user_pool_domain.ops.domain}.auth.${data.aws_region.current.region}.amazoncognito.com/logout?client_id=${aws_cognito_user_pool_client.ops.id}&logout_uri=${urlencode(local.ops_landing)}"
 }
 
 resource "aws_lb_listener_rule" "ops" {
@@ -1267,6 +1274,7 @@ module "puma" {
     WEB_CONCURRENCY       = var.puma.concurrency
     RAILS_MAX_THREADS     = var.puma.threads
     MEANDR_HOLDOVER_SLOTS = var.puma.holdover_slots
+    MEANDR_OPS_LOGOUT_URL = local.ops_logout
   }, local.agent_client_public_keys_env)
   secrets = local.app_secrets
 
